@@ -42,7 +42,7 @@ def extract_json(text):
         return json.loads(cleaned)
     except: return None
 
-# --- [V25] 카테고리 명칭 수정 및 매뉴얼 리스트 복구 ---
+# --- [V26] 측정항목 필드 복구 및 UI 최종 버전 ---
 st.set_page_config(page_title="금강수계 AI 챗봇", layout="centered", initial_sidebar_state="collapsed")
 
 if 'page_mode' not in st.session_state: st.session_state.page_mode = "🔍 검색"
@@ -105,45 +105,56 @@ if mode == "🔍 검색":
             if cases:
                 if q_type == "기기수리": cases = [c for c in cases if c.get('category') != '맛집/정보']
                 if cases:
-                    context = "\n".join([f"[{c.get('category', '지식')}] {c['manufacturer']} {c['model_name']}: {c['solution'] if c['source_type']=='MANUAL' else c['content']}" for c in cases])
+                    context = "\n".join([f"[{c.get('category', '기기점검')}] {c['manufacturer']} {c['model_name']}: {c['solution'] if c['source_type']=='MANUAL' else c['content']}" for c in cases])
                     ans_p = f"데이터: {context}\n질문: {user_q}\n위 데이터를 바탕으로 답변하세요. 3줄 이내 단답형."
                     st.info(ai_model.generate_content(ans_p).text)
                     st.markdown("---")
                     for c in cases:
                         is_man = c['source_type'] == 'MANUAL'
                         tag_cls = "tag-tip" if c.get('category') == '맛집/정보' else ("tag-manual" if is_man else "tag-doc")
-                        with st.expander(f"[{c.get('category', '지식')}] {c['manufacturer']} | {c['model_name']}"):
+                        with st.expander(f"[{c.get('category', '기기점검')}] {c['manufacturer']} | {c['model_name']}"):
                             st.markdown(f'<span class="source-tag {tag_cls}">{c["registered_by"]}</span>', unsafe_allow_html=True)
                             st.write(c['solution'] if is_man else c['content'])
 
-# --- 2. 현장 노하우 등록 ---
+# --- 2. 현장 노하우 등록 (측정항목 필드 복구) ---
 elif mode == "📝 등록":
     st.subheader("📝 현장 노하우 및 팁 등록")
     with st.form("manual_reg", clear_on_submit=True):
         cat = st.selectbox("1. 분류", ["기기점검", "현장꿀팁", "맛집/정보"])
-        col1, col2 = st.columns(2)
-        with col1:
-            mfr_choice = st.selectbox("2. 제조사(지역)", options=["시마즈", "코비", "백년기술", "케이엔알", "YSI", "직접 입력"])
-            manual_mfr = st.text_input("└ (직접 입력 시 입력)")
-        with col2: model = st.text_input("3. 모델명(장소)")
         
-        reg = st.text_input("4. 등록자 성함")
-        iss = st.text_input("5. 제목(현상)")
-        sol = st.text_area("6. 상세 내용(조치)")
+        col_info1, col_info2 = st.columns(2)
+        with col_info1:
+            mfr_choice = st.selectbox("2. 제조사(지역)", options=["시마즈", "코비", "백년기술", "케이엔알", "YSI", "직접 입력"])
+            manual_mfr = st.text_input("└ ('직접 입력' 시 입력)")
+        with col_info2:
+            model = st.text_input("3. 모델명(장소)", placeholder="예: APK2950W / 옥천센터")
+            # [복구] 측정항목 입력 필드
+            m_item = st.text_input("4. 측정항목", placeholder="예: TOC, TN, TP, VOC 등")
+        
+        reg = st.text_input("5. 등록자 성함")
+        st.write("---")
+        iss = st.text_input("6. 제목(현상)", placeholder="예: 시료 도입 펌프 소음 / 영동 점심 추천")
+        sol = st.text_area("7. 상세 내용(조치)", placeholder="노하우를 상세히 적어주세요.")
         
         if st.form_submit_button("✅ 지식 저장"):
             mfr_final = manual_mfr if mfr_choice == "직접 입력" else mfr_choice
             if mfr_final and iss and sol:
-                vec = get_embedding(f"{cat} {mfr_final} {model} {iss} {sol}")
+                # 검색을 위한 텍스트 조합에 측정항목(m_item) 포함
+                vec = get_embedding(f"{cat} {mfr_final} {model} {m_item} {iss} {sol}")
                 supabase.table("knowledge_base").insert({
-                    "category": cat, "manufacturer": clean_text_for_db(mfr_final), 
-                    "model_name": clean_text_for_db(model), "issue": clean_text_for_db(iss), 
-                    "solution": clean_text_for_db(sol), "registered_by": clean_text_for_db(reg), 
-                    "source_type": "MANUAL", "embedding": vec
+                    "category": cat, 
+                    "manufacturer": clean_text_for_db(mfr_final), 
+                    "model_name": clean_text_for_db(model), 
+                    "measurement_item": clean_text_for_db(m_item), # DB 저장
+                    "issue": clean_text_for_db(iss), 
+                    "solution": clean_text_for_db(sol), 
+                    "registered_by": clean_text_for_db(reg), 
+                    "source_type": "MANUAL", 
+                    "embedding": vec
                 }).execute()
-                st.success("🎉 지식이 등록되었습니다!")
+                st.success(f"🎉 [{cat}] 지식이 성공적으로 등록되었습니다!")
 
-# --- 3. 문서(매뉴얼) 등록 (목록 표시 로직 강화) ---
+# --- 3. 문서(매뉴얼) 등록 ---
 elif mode == "📂 문서 관리":
     st.subheader("📄 문서(매뉴얼) 기반 지식 등록")
     up_file = st.file_uploader("PDF 매뉴얼 업로드", type="pdf")
@@ -173,7 +184,6 @@ elif mode == "📂 문서 관리":
                     st.rerun()
                 except Exception as e: st.error(f"오류: {e}")
 
-    # [수정] 업로드 버튼 아래에 등록된 매뉴얼 목록을 상시 표시
     st.markdown("---")
     st.markdown("### 📋 현재 등록된 매뉴얼 현황")
     doc_res = supabase.table("knowledge_base").select("registered_by").eq("source_type", "DOC").execute()
@@ -184,16 +194,16 @@ elif mode == "📂 문서 관리":
     else:
         st.info("아직 등록된 매뉴얼이 없습니다.")
 
-# --- 4. 데이터 관리 (검색 기반 노출) ---
+# --- 4. 데이터 관리 ---
 elif mode == "🛠️ 관리":
     st.subheader("🛠️ 지식 데이터 상세 관리")
-    m_search = st.text_input("🔍 관리 대상 검색", placeholder="모델명, 제조사, 카테고리 등 검색...")
+    m_search = st.text_input("🔍 관리 대상 검색", placeholder="모델명, 제조사, 카테고리, 제목 등 검색...")
     if m_search:
         res = supabase.table("knowledge_base").select("*").or_(f"manufacturer.ilike.%{m_search}%,model_name.ilike.%{m_search}%,category.ilike.%{m_search}%,issue.ilike.%{m_search}%").order("created_at", desc=True).execute()
         if res.data:
             st.caption(f"검색 결과: {len(res.data)}건")
             for row in res.data:
-                with st.expander(f"[{row.get('category', '기기점검')}] {row['manufacturer']} | {row['model_name']}"):
+                with st.expander(f"[{row.get('category', '기기점검')}] {row['manufacturer']} | {row['model_name']} ({row.get('measurement_item', '전체')})"):
                     st.write(f"**현상/제목:** {row['issue']}")
                     if row['source_type'] == 'MANUAL': st.info(row['solution'])
                     else: st.info(row['content'][:200] + "...")
