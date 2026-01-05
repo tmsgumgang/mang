@@ -31,7 +31,7 @@ def get_embedding(text):
     result = genai.embed_content(model="models/text-embedding-004", content=text, task_type="retrieval_document")
     return result['embedding']
 
-# --- [V15] 스마트 키워드 추출 및 필터링 시스템 ---
+# --- [V16] 관리 리스트 요약 정보 표출 강화 ---
 st.set_page_config(page_title="금강수계 AI 챗봇", layout="centered", initial_sidebar_state="collapsed")
 
 if 'page_mode' not in st.session_state: st.session_state.page_mode = "🔍 검색"
@@ -69,35 +69,21 @@ with st.container():
 search_threshold = st.sidebar.slider("검색 정밀도", 0.0, 1.0, 0.35, 0.05)
 mode = st.session_state.page_mode
 
-# --- 1. 통합 지식 검색 (스마트 필터링) ---
+# --- 1. 통합 지식 검색 ---
 if mode == "🔍 검색":
     user_q = st.text_input("상황 입력", label_visibility="collapsed", placeholder="상황을 입력하세요 (예: 시마즈 TOC 펌프 점검)")
     if user_q:
         with st.spinner("질문을 분석하고 관련 지식을 매칭 중..."):
-            # [추가] 질문에서 제조사와 모델명을 추출하는 사전 단계
-            extraction_prompt = f"""
-            다음 질문에서 '제조사'와 '모델명'을 추출하여 JSON으로 응답하세요. 
-            언급이 없으면 null로 표시하세요.
-            질문: {user_q}
-            형식: {{"mfr": "제조사", "model": "모델명"}}
-            """
+            extraction_prompt = f"다음 질문에서 '제조사'와 '모델명'을 추출하여 JSON으로 응답하세요. 질문: {user_q} 형식: {{\"mfr\": \"제조사\", \"model\": \"모델명\"}}"
             extraction_res = ai_model.generate_content(extraction_prompt)
             try:
                 meta = json.loads(extraction_res.text.replace("```json", "").replace("```", "").strip())
-                f_mfr = meta.get("mfr")
-                f_model = meta.get("model")
+                f_mfr, f_model = meta.get("mfr"), meta.get("model")
             except:
                 f_mfr, f_model = None, None
 
             query_vec = get_embedding(user_q)
-            # 수정된 SQL 함수 호출 (필터 적용)
-            rpc_res = supabase.rpc("match_knowledge", {
-                "query_embedding": query_vec, 
-                "match_threshold": search_threshold, 
-                "match_count": 5,
-                "filter_mfr": f_mfr,
-                "filter_model": f_model
-            }).execute()
+            rpc_res = supabase.rpc("match_knowledge", {"query_embedding": query_vec, "match_threshold": search_threshold, "match_count": 5, "filter_mfr": f_mfr, "filter_model": f_model}).execute()
             
             cases = rpc_res.data
             if cases:
@@ -106,20 +92,16 @@ if mode == "🔍 검색":
                     src = "경험" if c['source_type'] == 'MANUAL' else "이론"
                     context_text += f"[{src} - {c['manufacturer']} {c['model_name']}]: {c['solution'] if src=='경험' else c['content']}\n"
                 
-                prompt = f"""당신은 수질 전문가입니다. 데이터를 바탕으로 3줄 이내로 답변하세요.
-                데이터: {context_text}
-                질문: {user_q}"""
+                prompt = f"당신은 수질 전문가입니다. 데이터를 바탕으로 3줄 이내로 답변하세요.\n데이터: {context_text}\n질문: {user_q}"
                 st.info(ai_model.generate_content(prompt).text)
-                
                 st.markdown("---")
-                st.markdown(f"### 📚 {'전체' if not f_mfr else f_mfr} 관련 지식 근거")
                 for c in cases:
                     is_manual = c['source_type'] == 'MANUAL'
                     with st.expander(f"[{'👤경험' if is_manual else '📄이론'}] {c['manufacturer']} | {c['model_name']}"):
                         st.markdown(f'<span class="source-tag {"tag-manual" if is_manual else "tag-doc"}">{c["registered_by"]}</span>', unsafe_allow_html=True)
                         st.write(c['solution'] if is_manual else c['content'])
             else:
-                st.warning("⚠️ 일치하는 제조사나 모델의 사례가 없습니다. 검색 정밀도를 낮추거나 키워드를 조정해 보세요.")
+                st.warning("⚠️ 일치하는 사례가 없습니다.")
 
 # --- 2. 현장 노하우 등록 ---
 elif mode == "📝 등록":
@@ -137,7 +119,7 @@ elif mode == "📝 등록":
                 supabase.table("knowledge_base").insert({"manufacturer": mfr, "model_name": model, "measurement_item": item, "issue": iss, "solution": sol, "registered_by": reg, "source_type": "MANUAL", "embedding": vec}).execute()
                 st.success("🎉 실전 지식이 등록되었습니다!")
 
-# --- 3. 문서 전체 벡터화 (자동 분류 강화) ---
+# --- 3. 문서 전체 벡터화 ---
 elif mode == "📂 문서 관리":
     st.subheader("📂 매뉴얼 전체 벡터화")
     up_file = st.file_uploader("PDF 매뉴얼 업로드", type="pdf")
@@ -145,8 +127,6 @@ elif mode == "📂 문서 관리":
         if st.button("🚀 전체 지식화 시작"):
             with st.spinner("매뉴얼 분석 중..."):
                 pdf_reader = PyPDF2.PdfReader(io.BytesIO(up_file.read()))
-                
-                # [추가] 매뉴얼 전체에서 제조사와 모델명을 찾는 로직
                 first_page_text = pdf_reader.pages[0].extract_text()
                 info_prompt = f"다음 텍스트에서 분석기 '제조사'와 '모델명'을 추출하세요. 텍스트: {first_page_text[:1000]}"
                 info_res = ai_model.generate_content(info_prompt)
@@ -159,17 +139,16 @@ elif mode == "📂 문서 관리":
                 for chunk in chunks:
                     vec = get_embedding(chunk)
                     supabase.table("knowledge_base").insert({
-                        "manufacturer": info_res.text.split('\n')[0][:50], # AI 추출값
+                        "manufacturer": info_res.text.split('\n')[0][:50],
                         "model_name": info_res.text.split('\n')[-1][:50], 
                         "measurement_item": "전체", "issue": "매뉴얼 본문", "solution": "원문 참조", "content": chunk,
                         "registered_by": up_file.name, "source_type": "DOC", "embedding": vec
                     }).execute()
-                st.success(f"✅ 분석 완료. {len(chunks)}개의 지식 조각이 분류되어 저장되었습니다.")
+                st.success(f"✅ 분석 및 저장 완료.")
 
-# --- 4. 데이터 관리 (상세 정보 확인 및 정정) ---
+# --- 4. 데이터 관리 (리스트 표출 강화) ---
 elif mode == "🛠️ 관리":
     if st.session_state.edit_id:
-        # 수정 로직 (V14와 동일)
         res = supabase.table("knowledge_base").select("*").eq("id", st.session_state.edit_id).execute()
         if res.data:
             item = res.data[0]
@@ -188,8 +167,20 @@ elif mode == "🛠️ 관리":
         if res.data:
             df = pd.DataFrame(res.data)
             for _, row in df.iterrows():
-                with st.expander(f"[{row['source_type']}] {row['manufacturer']} | {row['model_name']}"):
-                    st.write(row['issue'])
+                is_manual = row['source_type'] == 'MANUAL'
+                # [개선] 리스트 제목 및 내용 표출 로직
+                exp_title = f"[{'👤경험' if is_manual else '📄이론'}] {row['manufacturer']} | {row['model_name']}"
+                with st.expander(exp_title):
+                    if is_manual:
+                        st.markdown(f"**⚠️ 현상:** {row['issue']}")
+                        st.markdown(f"**🛠️ 조치:** {row['solution']}")
+                    else:
+                        # 매뉴얼 본문 대신 실제 내용 요약 표출
+                        content_snippet = row['content'][:150] + "..." if len(row['content']) > 150 else row['content']
+                        st.markdown(f"**📄 매뉴얼 내용:**")
+                        st.info(content_snippet)
+                    
+                    st.caption(f"등록자: {row['registered_by']} | 등록일: {row['created_at'][:10]}")
                     c1, c2 = st.columns(2)
                     if c1.button("✏️", key=f"e_{row['id']}"): st.session_state.edit_id = row['id']; st.rerun()
                     if c2.button("🗑️", key=f"d_{row['id']}"): supabase.table("knowledge_base").delete().eq("id", row['id']).execute(); st.rerun()
