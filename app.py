@@ -41,13 +41,13 @@ st.set_page_config(
     page_icon="🌊"
 )
 
-# 사이드바 설정 (관리용)
+# 사이드바 설정
 st.sidebar.title("⚙️ 시스템 관리")
 mode = st.sidebar.radio("작업 선택", ["🤖 검증 지식 조치 가이드", "📝 새로운 사례 등록", "🛠️ 데이터 진단"])
-search_threshold = st.sidebar.slider("검색 정밀도 (Threshold)", 0.0, 1.0, 0.25, 0.05)
+search_threshold = st.sidebar.slider("검색 정밀도 (Threshold)", 0.0, 1.0, 0.3, 0.05)
 
 st.title("🌊 K-eco 현장 조치 챗봇")
-st.caption("조성주 님의 DB 사례만 '그대로' 전달하는 울트라 엄격 모드입니다.")
+st.caption("성주 님의 DB 사례만 '그대로' 전달하는 울트라 엄격 모드입니다.")
 st.markdown("---")
 
 # --- 기능 1: 지능형 조치 가이드 (Ultra-Strict Mode) ---
@@ -61,7 +61,7 @@ if mode == "🤖 검증 지식 조치 가이드":
                 # 1. 질문 벡터화
                 query_vec = get_embedding(user_question)
                 
-                # 2. 벡터 검색 호출 (상위 2개만 집중)
+                # 2. 벡터 검색 호출 (상위 2개 집중)
                 rpc_res = supabase.rpc("match_knowledge", {
                     "query_embedding": query_vec,
                     "match_threshold": search_threshold,
@@ -75,21 +75,28 @@ if mode == "🤖 검증 지식 조치 가이드":
                     context_data = ""
                     source_names = []
                     for i, c in enumerate(past_cases):
-                        context_data += f"### 사례 {i+1}\n- 장비: {c['equipment']}\n- 상황: {c['issue']}\n- 조치: {c['solution']}\n\n"
+                        context_data += f"### 자료 {i+1}\n- 장비명: {c['equipment']}\n- 발생현상: {c['issue']}\n- 해결방법: {c['solution']}\n\n"
                         source_names.append(f"{c['equipment']} (ID: {c.get('id', 'N/A')})")
 
-                    # [핵심] AI의 외부 지식을 원천 차단하는 '봉인' 프롬프트
-                    prompt = f"""
-                    [엄격 명령: 당신은 지식 배달 기계입니다]
-                    당신은 아래 제공된 [성주 님의 DB 자료]에 적힌 텍스트만 사용하여 답변해야 합니다. 
-                    당신이 원래 알고 있던 수질, 화학, 장비 지식은 모두 무시하십시오. 
+                    # [핵심] 창의성을 0으로 만들고 외부 지식을 완전히 차단하는 설정
+                    generation_config = {
+                        "temperature": 0.0, # 창의성 배제
+                        "top_p": 1,
+                        "top_k": 1,
+                        "max_output_tokens": 1000,
+                    }
 
-                    [답변 규칙]
-                    1. 반드시 "조성주 님의 {', '.join(source_names)} 사례를 바탕으로 안내드립니다."로 시작하십시오.
-                    2. 오직 [성주 님의 DB 자료]의 '조치' 항목에 적힌 내용만 번호를 매겨 요약하십시오.
-                    3. 자료에 없는 단어(예: NDIR, 필터 누출, 시료 오염 등 성주 님이 쓰지 않은 단어)가 답변에 포함되면 안 됩니다.
-                    4. 자료에 없는 '일반적인 주의사항'이나 '제조사 문의' 같은 사족을 절대 붙이지 마십시오.
-                    5. 자료가 질문과 맞지 않는다면 "관련 사례가 있으나 조치 내용이 상이합니다."라고만 말하십시오.
+                    prompt = f"""
+                    [명령: 당신은 지식 전달용 기계입니다]
+                    당신은 수질 전문가가 아닙니다. 당신은 오직 제공된 [성주 님의 DB 자료]의 내용만 '요약'하여 전달하는 역할입니다.
+                    자료에 없는 내용은 **절대** 언급하지 마십시오.
+
+                    [작성 규칙]
+                    1. 답변 시작 시 반드시 "성주 님의 {', '.join(source_names)} 사례를 바탕으로 안내드립니다."라고 한 문장만 적으세요.
+                    2. 오직 [성주 님의 DB 자료]의 '해결방법'에 적힌 내용만 번호를 매겨 설명하세요.
+                    3. 자료에 없는 단어(예: NDIR, 필터 누출, 시료 오염, 펌프 점검 등 성주 님이 쓰지 않은 단어)는 **절대** 답변에 포함하면 안 됩니다.
+                    4. "매뉴얼을 참고하라", "제조사에 문의하라" 같은 사족은 DB에 없다면 절대 적지 마십시오.
+                    5. 자료가 부족하다면 "검색된 사례에 조치 방법이 명시되어 있지 않습니다."라고만 하십시오.
 
                     [성주 님의 DB 자료]
                     {context_data}
@@ -98,9 +105,12 @@ if mode == "🤖 검증 지식 조치 가이드":
                     {user_question}
                     """
                     
-                    response = ai_model.generate_content(prompt)
+                    response = ai_model.generate_content(
+                        prompt,
+                        generation_config=generation_config
+                    )
+                    
                     st.markdown("### 💡 검증된 조치 사항")
-                    # 결과를 박스 안에 넣어 가독성 높임
                     st.success(response.text)
                     
                     with st.expander("📚 참조한 실제 DB 원본 보기"):
@@ -110,7 +120,7 @@ if mode == "🤖 검증 지식 조치 가이드":
             except Exception as e:
                 st.error(f"검색 오류: {e}")
 
-# --- 기능 2: 새로운 사례 등록 (자동 벡터화 포함) ---
+# --- 기능 2: 새로운 사례 등록 (자동 벡터화 보장) ---
 elif mode == "📝 새로운 사례 등록":
     st.subheader("📝 신규 노하우 등록")
     st.info("여기에 저장하면 AI가 자동으로 벡터 데이터를 생성합니다.")
