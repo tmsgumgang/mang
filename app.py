@@ -86,7 +86,7 @@ if mode == "🤖 정밀 조치 가이드":
                         context_data += f"- 조치: {c['solution']}\n\n"
                         source_info.append(f"{c['manufacturer']} {c['model_name']} ({c['measurement_item']})")
 
-                    # AI 프롬프트: 데이터 세분화에 따른 정밀도 강조
+                    # AI 프롬프트
                     prompt = f"""
                     당신은 수질 분석 전문가이자 조성주 님의 지식 조수입니다. 
                     제공된 [데이터베이스 사례]를 바탕으로 현장 직원에게 조치법을 설명하세요.
@@ -95,7 +95,7 @@ if mode == "🤖 정밀 조치 가이드":
                     1. 첫 문장은 "조성주 님의 {', '.join(source_info)} 사례를 바탕으로 안내드립니다."로 시작하세요.
                     2. 사용자의 질문과 [데이터베이스 사례]의 '제조사' 및 '측정항목'이 일치하는지 반드시 확인하고 답변하세요.
                     3. '조치'에 적힌 내용을 바탕으로 단계별 가이드를 작성하세요.
-                    4. 데이터에 없는 외부 지식(예: 시약 유효기간 등)은 절대 섞지 마세요. 만약 데이터가 너무 짧다면 데이터에 적힌 내용만 강조하세요.
+                    4. 데이터에 없는 외부 지식은 절대 섞지 마세요. 
 
                     [데이터베이스 사례]
                     {context_data}
@@ -115,13 +115,25 @@ if mode == "🤖 정밀 조치 가이드":
             except Exception as e:
                 st.error(f"검색 오류: {e}")
 
-# --- 기능 2: 세부 사례 등록 (5개 필드 확장) ---
+# --- 기능 2: 세부 사례 등록 (제조사 직접 입력 기능 추가) ---
 elif mode == "📝 세부 사례 등록":
     st.subheader("📝 신규 노하우 등록 (5대 필드)")
     with st.form("add_form", clear_on_submit=True):
         col1, col2, col3 = st.columns(3)
+        
         with col1:
-            mfr = st.selectbox("제조사", ["시마즈(Shimadzu)", "로보켐(Robochem)", "HATP", "코비(KORBI)", "기타"])
+            # 제조사 선택 리스트 업데이트
+            mfr_options = ["시마즈", "코비", "백년기술", "케이엔알", "YSI", "직접 입력"]
+            selected_mfr = st.selectbox("제조사", mfr_options)
+            
+            # "직접 입력" 선택 시 텍스트 입력창 활성화 (폼 내부이므로 변수로 관리)
+            final_mfr = ""
+            if selected_mfr == "직접 입력":
+                input_mfr = st.text_input("제조사명 입력", placeholder="제조사 이름을 직접 쓰세요")
+                final_mfr = input_mfr
+            else:
+                final_mfr = selected_mfr
+                
         with col2:
             model = st.text_input("모델명", placeholder="예: TOC-4200")
         with col3:
@@ -131,26 +143,27 @@ elif mode == "📝 세부 사례 등록":
         sol = st.text_area("조치 내용", placeholder="성주 님만의 상세 해결 방법을 기록해 주세요.")
         
         if st.form_submit_button("지식 베이스 저장"):
-            if mfr and model and iss and sol:
+            # 제조사 정보가 비어있는지 체크
+            if final_mfr and model and iss and sol:
                 with st.spinner("AI 분석 및 자동 벡터화 진행 중..."):
                     # 5개 필드를 모두 결합하여 강력한 의미 벡터 생성
-                    combined_text = f"제조사:{mfr} 모델:{model} 항목:{item} 현상:{iss} 조치:{sol}"
+                    combined_text = f"제조사:{final_mfr} 모델:{model} 항목:{item} 현상:{iss} 조치:{sol}"
                     vec = get_embedding(combined_text)
                     
                     try:
                         supabase.table("knowledge_base").insert({
-                            "manufacturer": mfr,
+                            "manufacturer": final_mfr,
                             "model_name": model,
                             "measurement_item": item,
                             "issue": iss,
                             "solution": sol,
                             "embedding": vec
                         }).execute()
-                        st.success("✅ 세분화된 데이터가 성공적으로 등록되었습니다!")
+                        st.success(f"✅ [{final_mfr}] 데이터가 성공적으로 등록되었습니다!")
                     except Exception as e:
                         st.error(f"DB 저장 오류: {e}")
             else:
-                st.warning("모든 필드를 입력해 주세요.")
+                st.warning("모든 필드를 입력해 주세요. (제조사 포함)")
 
 # --- 기능 3: 데이터 진단 ---
 elif mode == "🛠️ 데이터 진단":
@@ -158,6 +171,6 @@ elif mode == "🛠️ 데이터 진단":
     res = supabase.table("knowledge_base").select("id, manufacturer, model_name, measurement_item, issue").execute()
     if res.data:
         st.write(f"현재 등록된 지식: {len(res.data)}건")
-        st.dataframe(res.data) # 관리용 표 출력
+        st.dataframe(res.data) 
     else:
         st.info("현재 저장된 지식이 없습니다. '세부 사례 등록'을 이용해 주세요.")
