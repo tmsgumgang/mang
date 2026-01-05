@@ -27,11 +27,18 @@ try:
 except Exception as e:
     st.error(f"시스템 연결 실패: {e}")
 
+# [핵심] DB 저장 전 금지 문자(Null Byte)를 제거하는 클리닝 함수
+def clean_text_for_db(text):
+    if not text:
+        return ""
+    # PostgreSQL에서 금지하는 \u0000 문자를 제거
+    return text.replace("\u0000", "").strip()
+
 def get_embedding(text):
     result = genai.embed_content(model="models/text-embedding-004", content=text, task_type="retrieval_document")
     return result['embedding']
 
-# --- [V20] 입력 오류 수정 및 PDF 분석 안정화 버전 ---
+# --- [V21] 데이터 클리닝 및 안정화 통합 버전 ---
 st.set_page_config(page_title="금강수계 AI 챗봇", layout="centered", initial_sidebar_state="collapsed")
 
 if 'page_mode' not in st.session_state: st.session_state.page_mode = "🔍 검색"
@@ -70,9 +77,9 @@ with st.container():
 search_threshold = st.sidebar.slider("검색 정밀도", 0.0, 1.0, 0.35, 0.05)
 mode = st.session_state.page_mode
 
-# --- 1. 통합 지식 검색 (정밀 필터링) ---
+# --- 1. 통합 지식 검색 ---
 if mode == "🔍 검색":
-    user_q = st.text_input("상황 입력", label_visibility="collapsed", placeholder="상황 입력 (예: TN-2060 동작불량)")
+    user_q = st.text_input("상황 입력", label_visibility="collapsed", placeholder="상황 입력 (예: APK2950W 펌프 이상)")
     if user_q:
         with st.spinner("최적의 정보를 정밀 검색 중..."):
             ext_p = f"질문: {user_q} \n 위 질문에서 장비 제조사와 모델명을 추출하여 JSON(mfr, model)으로만 답하세요. 없으면 null."
@@ -89,7 +96,7 @@ if mode == "🔍 검색":
             
             if rpc_res.data:
                 cases = rpc_res.data
-                if f_model: # 모델명 명시 시 엉뚱한 기종 필터링
+                if f_model:
                     cases = [c for c in cases if f_model.lower() in str(c['model_name']).lower() or c['model_name'] == "매뉴얼 참조"]
                 
                 context = "\n".join([f"[{c['source_type']}] {c['manufacturer']} {c['model_name']}: {c['solution'] if c['source_type']=='MANUAL' else c['content']}" for c in cases])
@@ -101,30 +108,34 @@ if mode == "🔍 검색":
                     with st.expander(f"[{'👤경험' if is_man else '📄이론'}] {c['manufacturer']} | {c['model_name']}"):
                         st.markdown(f'<span class="source-tag {"tag-manual" if is_man else "tag-doc"}">{c["registered_by"]}</span>', unsafe_allow_html=True)
                         st.write(c['solution'] if is_man else c['content'])
-            else: st.warning("⚠️ 검색 결과가 없습니다.")
+            else: st.warning("⚠️ 일치하는 정보가 없습니다.")
 
-# --- 2. 현장 노하우 등록 (직접 입력 UI 완전 개편) ---
+# --- 2. 현장 노하우 등록 (직접 입력 UI 최적화) ---
 elif mode == "📝 등록":
     st.subheader("📝 현장 노하우 등록")
     with st.form("manual_reg", clear_on_submit=True):
         st.write("📍 **장비 정보 입력**")
         mfr_choice = st.selectbox("1. 제조사 선택", options=["시마즈", "코비", "백년기술", "케이엔알", "YSI", "직접 입력"])
+        manual_mfr = st.text_input("└ ('직접 입력' 선택 시 제조사명을 작성하세요)")
         
-        # [수정] 직접 입력 선택 시에만 입력하는 칸임을 명확히 함
-        manual_mfr = st.text_input("└ (위에서 '직접 입력' 선택 시에만 작성)")
-        
-        model = st.text_input("2. 모델명", placeholder="예: TN-2060")
-        item = st.text_input("3. 측정항목", placeholder="예: TN")
+        model = st.text_input("2. 모델명", placeholder="예: APK2950W")
+        item = st.text_input("3. 측정항목", placeholder="예: VOC")
         reg = st.text_input("4. 등록자 성함")
         
         st.write("---")
         st.write("📍 **상세 조치 내용**")
-        iss = st.text_input("발생 현상", placeholder="어떤 문제가 있나요?")
-        sol = st.text_area("조치 내용", placeholder="어떻게 해결하셨나요?")
+        iss = st.text_input("발생 현상")
+        sol = st.text_area("조치 내용")
         
         if st.form_submit_button("✅ 지식 베이스 저장"):
-            # 최종 제조사 값 결정
             mfr_to_save = manual_mfr if mfr_choice == "직접 입력" else mfr_choice
+            # 저장 전 모든 데이터 클리닝 수행
+            mfr_to_save = clean_text_for_db(mfr_to_save)
+            model = clean_text_for_db(model)
+            item = clean_text_for_db(item)
+            iss = clean_text_for_db(iss)
+            sol = clean_text_for_db(sol)
+            reg = clean_text_for_db(reg)
             
             if mfr_to_save and model and iss and sol:
                 try:
@@ -134,50 +145,55 @@ elif mode == "📝 등록":
                         "issue": iss, "solution": sol, "registered_by": reg, 
                         "source_type": "MANUAL", "embedding": vec
                     }).execute()
-                    st.success(f"🎉 {mfr_to_save} 장비 노하우가 성공적으로 공유되었습니다!")
+                    st.success(f"🎉 {mfr_to_save} 노하우 저장 완료!")
                 except Exception as e:
-                    st.error(f"저장 중 오류 발생: {e}")
-            else:
-                st.warning("⚠️ 필수 항목(제조사, 모델, 현상, 조치)을 모두 입력해 주세요.")
+                    st.error(f"저장 실패: {e}")
+            else: st.warning("⚠️ 필수 정보를 모두 입력해 주세요.")
 
-# --- 3. 문서(매뉴얼) 등록 및 현황 리스트업 ---
+# --- 3. 문서(매뉴얼) 등록 (에러 수정 로직 탑재) ---
 elif mode == "📂 문서 관리":
     st.subheader("📄 문서(매뉴얼) 기반 지식 등록")
-    st.caption("PDF를 업로드하면 AI가 내용을 쪼개어 지식 베이스에 통합합니다.")
     up_file = st.file_uploader("PDF 매뉴얼 업로드", type="pdf")
     
     if up_file:
         if st.button("🚀 매뉴얼 분석 및 등록 시작"):
-            with st.spinner("매뉴얼을 읽고 지식 조각을 생성 중..."):
+            with st.spinner("널 문자 제거 및 데이터 최적화 분석 중..."):
                 try:
                     pdf_reader = PyPDF2.PdfReader(io.BytesIO(up_file.read()))
                     
-                    # [강화] 첫 페이지에서 제조사와 모델명을 JSON으로 안전하게 추출
+                    # 1. 메타데이터 추출 (제조사, 모델)
                     first_pg = pdf_reader.pages[0].extract_text()
                     info_p = f"텍스트: {first_pg[:1500]}\n위 텍스트에서 제조사와 모델명을 찾아 JSON으로 답하세요: {{\"mfr\":\"제조사\", \"model\":\"모델명\"}}"
                     info_res = ai_model.generate_content(info_p).text.replace("```json", "").replace("```", "").strip()
                     meta = json.loads(info_res)
                     
+                    mfr_meta = clean_text_for_db(meta.get("mfr", "기타"))
+                    model_meta = clean_text_for_db(meta.get("model", "매뉴얼"))
+                    
+                    # 2. 텍스트 추출 및 클리닝
                     full_txt = ""
-                    for pg in pdf_reader.pages: full_txt += pg.extract_text() + "\n"
+                    for pg in pdf_reader.pages:
+                        page_text = pg.extract_text()
+                        if page_text:
+                            # [해결 핵심] 추출 단계에서 널 문자 및 불필요한 제어 문자 제거
+                            full_txt += clean_text_for_db(page_text) + "\n"
                     
-                    # 600자 단위 청킹
+                    # 3. 청킹 및 저장
                     chunks = [full_txt[i:i+600] for i in range(0, len(full_txt), 600)]
-                    
-                    # DB 저장 루프
                     for chk in chunks:
                         vec = get_embedding(chk)
                         supabase.table("knowledge_base").insert({
-                            "manufacturer": meta.get("mfr", "기타")[:50], 
-                            "model_name": meta.get("model", "매뉴얼")[:50], 
+                            "manufacturer": mfr_meta[:50], 
+                            "model_name": model_meta[:50], 
                             "issue": "매뉴얼 본문", "solution": "원문 참조", "content": chk,
-                            "registered_by": up_file.name, "source_type": "DOC", "embedding": vec
+                            "registered_by": clean_text_for_db(up_file.name), 
+                            "source_type": "DOC", "embedding": vec
                         }).execute()
                     
-                    st.success(f"✅ '{up_file.name}' 매뉴얼에서 {len(chunks)}개의 지식을 추출했습니다!")
+                    st.success(f"✅ '{up_file.name}' 매뉴얼 {len(chunks)}개 지식 저장 완료!")
                     st.rerun()
                 except Exception as e:
-                    st.error(f"분석 중 오류 발생: {e}. PDF 형식이 너무 복잡하거나 보안 설정이 되어있을 수 있습니다.")
+                    st.error(f"분석 중 오류 발생: {e}")
 
     st.markdown("---")
     st.markdown("### 📋 현재 등록된 매뉴얼 현황")
@@ -188,7 +204,7 @@ elif mode == "📂 문서 관리":
             for m_name in manual_list:
                 st.markdown(f'<div class="doc-status-card">📄 {m_name}</div>', unsafe_allow_html=True)
         else: st.info("등록된 매뉴얼이 없습니다.")
-    except: st.error("데이터를 불러오는 중 오류가 발생했습니다.")
+    except: st.error("데이터 로딩 오류")
 
 # --- 4. 데이터 관리 (검색 기반 노출) ---
 elif mode == "🛠️ 관리":
@@ -201,30 +217,22 @@ elif mode == "🛠️ 관리":
                 e_model = st.text_input("모델명", value=it['model_name'])
                 e_sol = st.text_area("내용 정정", value=it['solution'] if it['source_type']=='MANUAL' else it['content'])
                 if st.form_submit_button("💾 저장"):
+                    e_mfr, e_model, e_sol = clean_text_for_db(e_mfr), clean_text_for_db(e_model), clean_text_for_db(e_sol)
                     new_v = get_embedding(f"{e_mfr} {e_model} {e_sol}")
                     supabase.table("knowledge_base").update({"manufacturer": e_mfr, "model_name": e_model, "solution": e_sol if it['source_type']=='MANUAL' else None, "content": e_sol if it['source_type']=='DOC' else None, "embedding": new_v}).eq("id", it['id']).execute()
                     st.session_state.edit_id = None; st.rerun()
                 if st.form_submit_button("❌ 취소"): st.session_state.edit_id = None; st.rerun()
     else:
         st.subheader("🛠️ 지식 데이터 상세 관리")
-        m_search = st.text_input("🔍 관리 대상 검색", placeholder="모델명, 제조사 등 검색 시 리스트가 노출됩니다.")
-        
+        m_search = st.text_input("🔍 관리 대상 검색", placeholder="모델명, 제조사 등 검색...")
         if m_search:
             res = supabase.table("knowledge_base").select("*").or_(f"manufacturer.ilike.%{m_search}%,model_name.ilike.%{m_search}%,issue.ilike.%{m_search}%,solution.ilike.%{m_search}%,content.ilike.%{m_search}%").order("created_at", desc=True).execute()
             if res.data:
-                st.caption(f"검색 결과: {len(res.data)}건")
                 for row in res.data:
                     is_man = row['source_type'] == 'MANUAL'
                     with st.expander(f"[{'👤경험' if is_man else '📄이론'}] {row['manufacturer']} | {row['model_name']}"):
-                        if is_man:
-                            st.markdown(f"**⚠️ 현상:** {row['issue']}\n\n**🛠️ 조치:** {row['solution']}")
-                        else:
-                            st.info(row['content'])
-                        
+                        if is_man: st.markdown(f"**⚠️ 현상:** {row['issue']}\n\n**🛠️ 조치:** {row['solution']}")
+                        else: st.info(row['content'])
                         c1, c2 = st.columns(2)
                         if c1.button("✏️", key=f"e_{row['id']}"): st.session_state.edit_id = row['id']; st.rerun()
                         if c2.button("🗑️", key=f"d_{row['id']}"): supabase.table("knowledge_base").delete().eq("id", row['id']).execute(); st.rerun()
-            else: st.warning("일치하는 데이터가 없습니다.")
-        else:
-            st.write("---")
-            st.caption("위 검색창을 사용하여 관리할 항목을 불러오세요.")
