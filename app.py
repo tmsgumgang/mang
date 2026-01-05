@@ -13,11 +13,8 @@ except KeyError:
 
 @st.cache_resource
 def init_clients():
-    # Supabase 클라이언트 초기화
     supabase_client = create_client(SUPABASE_URL, SUPABASE_KEY)
-    # Gemini API 설정
     genai.configure(api_key=GEMINI_API_KEY)
-    # 대화 및 가이드 생성용 모델 (Gemini 2.0 Flash)
     chat_model = genai.GenerativeModel('gemini-2.0-flash') 
     return supabase_client, chat_model
 
@@ -26,7 +23,7 @@ try:
 except Exception as e:
     st.error(f"시스템 연결 실패: {e}")
 
-# 벡터 임베딩 생성 함수 (5개 핵심 필드 결합)
+# 벡터 임베딩 생성 함수
 def get_embedding(text):
     result = genai.embed_content(
         model="models/text-embedding-004",
@@ -35,7 +32,7 @@ def get_embedding(text):
     )
     return result['embedding']
 
-# --- 모바일 및 웹 최적화 UI 설정 ---
+# --- 모바일 최적화 UI ---
 st.set_page_config(
     page_title="K-eco 지식베이스 V2", 
     layout="centered", 
@@ -46,26 +43,21 @@ st.set_page_config(
 # 사이드바 설정
 st.sidebar.title("⚙️ 시스템 관리")
 mode = st.sidebar.radio("작업 선택", ["🤖 정밀 조치 가이드", "📝 세부 사례 등록", "🛠️ 데이터 진단"])
-st.sidebar.markdown("---")
-# 검색 정밀도 (기본 0.35)
 search_threshold = st.sidebar.slider("검색 정밀도 (Threshold)", 0.0, 1.0, 0.35, 0.05)
 
 st.title("🌊 K-eco 현장 조치 데이터베이스")
-st.caption("제조사/모델/항목별로 세분화된 성주 님의 2세대 검증 노하우")
+st.caption("제조사/모델/항목별 세분화 모드 (성주 님 검증 노하우)")
 st.markdown("---")
 
-# --- 기능 1: 정밀 조치 가이드 (5개 필드 기반) ---
+# --- 기능 1: 정밀 조치 가이드 (답변 강제화 로직 반영) ---
 if mode == "🤖 정밀 조치 가이드":
     st.subheader("📱 현장 상황 설명")
-    user_question = st.text_input("", placeholder="예: HATP-2000 TP mv 0 발생")
+    user_question = st.text_input("", placeholder="예: 시마즈 toc 값이 갑자기 올라갔어")
     
     if user_question:
-        with st.spinner("세분화된 데이터를 검색 중..."):
+        with st.spinner("DB에서 조치법을 즉시 추출 중..."):
             try:
-                # 1. 상황 벡터화
                 query_vec = get_embedding(user_question)
-                
-                # 2. 벡터 검색 (상위 2개 참조)
                 rpc_res = supabase.rpc("match_knowledge", {
                     "query_embedding": query_vec,
                     "match_threshold": search_threshold,
@@ -82,30 +74,36 @@ if mode == "🤖 정밀 조치 가이드":
                         context_data += f"- 제조사: {c['manufacturer']}\n"
                         context_data += f"- 모델명: {c['model_name']}\n"
                         context_data += f"- 측정항목: {c['measurement_item']}\n"
-                        context_data += f"- 현상: {c['issue']}\n"
-                        context_data += f"- 조치: {c['solution']}\n\n"
+                        context_data += f"- 조치내용: {c['solution']}\n\n"
                         source_info.append(f"{c['manufacturer']} {c['model_name']} ({c['measurement_item']})")
 
-                    # AI 프롬프트
+                    # [핵심] 되묻지 말고 바로 답하게 만드는 프롬프트
                     prompt = f"""
-                    당신은 수질 분석 전문가이자 조성주 님의 지식 조수입니다. 
-                    제공된 [데이터베이스 사례]를 바탕으로 현장 직원에게 조치법을 설명하세요.
+                    당신은 수질 전문가이자 조성주 님의 지식 조수입니다. 
+                    사용자에게 다시 질문하거나 무엇을 알고 싶냐고 되묻지 마십시오.
+                    제공된 [데이터베이스 사례]에 있는 '조치내용'을 즉시 설명하십시오.
 
                     [작성 수칙]
-                    1. 첫 문장은 "조성주 님의 {', '.join(source_info)} 사례를 바탕으로 안내드립니다."로 시작하세요.
-                    2. 사용자의 질문과 [데이터베이스 사례]의 '측정항목'이나 '모델명'이 일치하는지 반드시 확인하고 답변하세요.
-                    3. '조치'에 적힌 내용을 바탕으로 단계별 가이드를 작성하세요.
-                    4. 데이터에 없는 외부 지식은 절대 섞지 마세요.
+                    1. 첫 문장은 "조성주 님의 {', '.join(source_info)} 사례를 바탕으로 안내드립니다."로 시작하십시오.
+                    2. 사용자의 질문과 관련된 조치 단계를 번호를 매겨 명확하게 작성하십시오.
+                    3. 데이터베이스에 있는 텍스트를 최대한 활용하고, 외부 지식은 섞지 마십시오.
+                    4. 만약 데이터가 질문과 맞지 않는다면 "유사 사례가 있으나 조치법이 상이합니다."라고 짧게 말하십시오.
+
+                    [데이터베이스 사례]
+                    {context_data}
+                    
+                    [사용자 질문]
+                    {user_question}
                     """
                     
                     response = ai_model.generate_content(prompt)
                     st.markdown("### 💡 권장 조치 사항")
                     st.info(response.text)
                     
-                    with st.expander("📚 참조한 원본 데이터 상세 보기"):
+                    with st.expander("📚 참조한 실제 DB 원본 텍스트 보기"):
                         st.table(past_cases)
                 else:
-                    st.warning("⚠️ 일치하는 성주 님의 검증 사례가 없습니다. 검색 정밀도를 조절해 보세요.")
+                    st.warning("⚠️ 일치하는 사례가 없습니다. 검색 정밀도를 조절해 보세요.")
             except Exception as e:
                 st.error(f"검색 오류: {e}")
 
@@ -116,36 +114,28 @@ elif mode == "📝 세부 사례 등록":
         col1, col2, col3 = st.columns(3)
         
         with col1:
-            # [1] 제조사 선택 및 직접 입력
             mfr_options = ["시마즈", "코비", "백년기술", "케이엔알", "YSI", "직접 입력"]
             selected_mfr = st.selectbox("제조사", mfr_options)
-            final_mfr = selected_mfr
-            if selected_mfr == "직접 입력":
-                custom_mfr = st.text_input("제조사명 직접 입력")
-                if custom_mfr:
-                    final_mfr = custom_mfr
-                
+            custom_mfr = st.text_input("제조사 직접 입력 (필요시)")
+            
         with col2:
-            # [2] 모델명 입력
             model = st.text_input("모델명", placeholder="예: TOC-4200")
             
         with col3:
-            # [3] 측정항목 선택 및 직접 입력
             item_options = ["TOC", "TP", "TN", "조류", "기타", "직접 입력"]
             selected_item = st.selectbox("측정항목", item_options)
-            final_item = selected_item
-            if selected_item == "직접 입력":
-                custom_item = st.text_input("측정항목 직접 입력", placeholder="예: pH, 전도도 등")
-                if custom_item:
-                    final_item = custom_item
+            custom_item = st.text_input("측정항목 직접 입력 (필요시)")
         
-        iss = st.text_input("발생 현상", placeholder="예: TP mv 값 0 확인")
-        sol = st.text_area("조치 내용", placeholder="성주 님만의 상세 해결 방법을 기록해 주세요.")
+        iss = st.text_input("발생 현상", placeholder="예: TOC 값이 갑자기 높아짐")
+        sol = st.text_area("조치 내용", placeholder="현장에서 바로 따라 할 수 있는 해결 방법을 적어주세요.")
         
         if st.form_submit_button("지식 베이스 저장"):
+            # 직접 입력값 우선 처리 로직
+            final_mfr = custom_mfr if selected_mfr == "직접 입력" else selected_mfr
+            final_item = custom_item if selected_item == "직접 입력" else selected_item
+            
             if final_mfr and model and final_item and iss and sol:
-                with st.spinner("AI 분석 및 자동 벡터화 진행 중..."):
-                    # 5개 필드를 결합하여 강력한 의미 벡터 생성
+                with st.spinner("자동 벡터화 진행 중..."):
                     combined_text = f"제조사:{final_mfr} 모델:{model} 항목:{final_item} 현상:{iss} 조치:{sol}"
                     vec = get_embedding(combined_text)
                     
@@ -158,13 +148,13 @@ elif mode == "📝 세부 사례 등록":
                             "solution": sol,
                             "embedding": vec
                         }).execute()
-                        st.success(f"✅ [{final_item}] 관련 데이터가 성공적으로 등록되었습니다!")
+                        st.success(f"✅ [{final_mfr}] 사례가 성공적으로 등록되었습니다!")
                     except Exception as e:
                         st.error(f"DB 저장 오류: {e}")
             else:
-                st.warning("모든 필드를 입력해 주세요. (직접 입력창 포함)")
+                st.warning("모든 필드를 입력해 주세요.")
 
-# --- 기능 3: 데이터 진단 ---
+# --- 기능 3: 데이터 관리 ---
 elif mode == "🛠️ 데이터 진단":
     st.subheader("🛠️ 데이터 관리")
     res = supabase.table("knowledge_base").select("id, manufacturer, model_name, measurement_item, issue").execute()
@@ -172,4 +162,4 @@ elif mode == "🛠️ 데이터 진단":
         st.write(f"현재 등록된 지식: {len(res.data)}건")
         st.dataframe(res.data) 
     else:
-        st.info("현재 저장된 지식이 없습니다. '세부 사례 등록'을 이용해 주세요.")
+        st.info("현재 저장된 지식이 없습니다.")
