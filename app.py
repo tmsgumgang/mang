@@ -65,7 +65,7 @@ if mode == "🤖 정밀 조치 가이드":
                 # 1. 상황 벡터화
                 query_vec = get_embedding(user_question)
                 
-                # 2. 벡터 검색 (가장 유사한 1건을 우선으로 하되 최대 2개 참조)
+                # 2. 벡터 검색 (상위 2개 참조)
                 rpc_res = supabase.rpc("match_knowledge", {
                     "query_embedding": query_vec,
                     "match_threshold": search_threshold,
@@ -93,15 +93,9 @@ if mode == "🤖 정밀 조치 가이드":
 
                     [작성 수칙]
                     1. 첫 문장은 "조성주 님의 {', '.join(source_info)} 사례를 바탕으로 안내드립니다."로 시작하세요.
-                    2. 사용자의 질문과 [데이터베이스 사례]의 '제조사' 및 '측정항목'이 일치하는지 반드시 확인하고 답변하세요.
+                    2. 사용자의 질문과 [데이터베이스 사례]의 '측정항목'이나 '모델명'이 일치하는지 반드시 확인하고 답변하세요.
                     3. '조치'에 적힌 내용을 바탕으로 단계별 가이드를 작성하세요.
-                    4. 데이터에 없는 외부 지식은 절대 섞지 마세요. 
-
-                    [데이터베이스 사례]
-                    {context_data}
-                    
-                    [사용자 질문]
-                    {user_question}
+                    4. 데이터에 없는 외부 지식은 절대 섞지 마세요.
                     """
                     
                     response = ai_model.generate_content(prompt)
@@ -111,59 +105,64 @@ if mode == "🤖 정밀 조치 가이드":
                     with st.expander("📚 참조한 원본 데이터 상세 보기"):
                         st.table(past_cases)
                 else:
-                    st.warning("⚠️ 일치하는 성주 님의 검증 사례가 없습니다. 검색 정밀도를 조절하거나 사례를 먼저 등록해 주세요.")
+                    st.warning("⚠️ 일치하는 성주 님의 검증 사례가 없습니다. 검색 정밀도를 조절해 보세요.")
             except Exception as e:
                 st.error(f"검색 오류: {e}")
 
-# --- 기능 2: 세부 사례 등록 (제조사 직접 입력 기능 추가) ---
+# --- 기능 2: 세부 사례 등록 (제조사 & 측정항목 직접 입력) ---
 elif mode == "📝 세부 사례 등록":
     st.subheader("📝 신규 노하우 등록 (5대 필드)")
     with st.form("add_form", clear_on_submit=True):
         col1, col2, col3 = st.columns(3)
         
         with col1:
-            # 제조사 선택 리스트 업데이트
+            # [1] 제조사 선택 및 직접 입력
             mfr_options = ["시마즈", "코비", "백년기술", "케이엔알", "YSI", "직접 입력"]
             selected_mfr = st.selectbox("제조사", mfr_options)
-            
-            # "직접 입력" 선택 시 텍스트 입력창 활성화 (폼 내부이므로 변수로 관리)
-            final_mfr = ""
+            final_mfr = selected_mfr
             if selected_mfr == "직접 입력":
-                input_mfr = st.text_input("제조사명 입력", placeholder="제조사 이름을 직접 쓰세요")
-                final_mfr = input_mfr
-            else:
-                final_mfr = selected_mfr
+                custom_mfr = st.text_input("제조사명 직접 입력")
+                if custom_mfr:
+                    final_mfr = custom_mfr
                 
         with col2:
+            # [2] 모델명 입력
             model = st.text_input("모델명", placeholder="예: TOC-4200")
+            
         with col3:
-            item = st.selectbox("측정항목", ["TOC", "TP", "TN", "조류", "기타"])
+            # [3] 측정항목 선택 및 직접 입력
+            item_options = ["TOC", "TP", "TN", "조류", "기타", "직접 입력"]
+            selected_item = st.selectbox("측정항목", item_options)
+            final_item = selected_item
+            if selected_item == "직접 입력":
+                custom_item = st.text_input("측정항목 직접 입력", placeholder="예: pH, 전도도 등")
+                if custom_item:
+                    final_item = custom_item
         
         iss = st.text_input("발생 현상", placeholder="예: TP mv 값 0 확인")
         sol = st.text_area("조치 내용", placeholder="성주 님만의 상세 해결 방법을 기록해 주세요.")
         
         if st.form_submit_button("지식 베이스 저장"):
-            # 제조사 정보가 비어있는지 체크
-            if final_mfr and model and iss and sol:
+            if final_mfr and model and final_item and iss and sol:
                 with st.spinner("AI 분석 및 자동 벡터화 진행 중..."):
-                    # 5개 필드를 모두 결합하여 강력한 의미 벡터 생성
-                    combined_text = f"제조사:{final_mfr} 모델:{model} 항목:{item} 현상:{iss} 조치:{sol}"
+                    # 5개 필드를 결합하여 강력한 의미 벡터 생성
+                    combined_text = f"제조사:{final_mfr} 모델:{model} 항목:{final_item} 현상:{iss} 조치:{sol}"
                     vec = get_embedding(combined_text)
                     
                     try:
                         supabase.table("knowledge_base").insert({
                             "manufacturer": final_mfr,
                             "model_name": model,
-                            "measurement_item": item,
+                            "measurement_item": final_item,
                             "issue": iss,
                             "solution": sol,
                             "embedding": vec
                         }).execute()
-                        st.success(f"✅ [{final_mfr}] 데이터가 성공적으로 등록되었습니다!")
+                        st.success(f"✅ [{final_item}] 관련 데이터가 성공적으로 등록되었습니다!")
                     except Exception as e:
                         st.error(f"DB 저장 오류: {e}")
             else:
-                st.warning("모든 필드를 입력해 주세요. (제조사 포함)")
+                st.warning("모든 필드를 입력해 주세요. (직접 입력창 포함)")
 
 # --- 기능 3: 데이터 진단 ---
 elif mode == "🛠️ 데이터 진단":
