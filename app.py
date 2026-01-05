@@ -36,16 +36,13 @@ def get_embedding(text):
     result = genai.embed_content(model="models/text-embedding-004", content=text, task_type="retrieval_document")
     return result['embedding']
 
-# AI 응답에서 JSON만 안전하게 추출하는 함수
 def extract_json(text):
     try:
-        # ```json ... ``` 형태 제거
         cleaned = re.sub(r'```json\s*|```', '', text).strip()
         return json.loads(cleaned)
-    except:
-        return None
+    except: return None
 
-# --- [V24] 스마트 검색 폴백 및 안정화 통합 ---
+# --- [V25] 카테고리 명칭 수정 및 매뉴얼 리스트 복구 ---
 st.set_page_config(page_title="금강수계 AI 챗봇", layout="centered", initial_sidebar_state="collapsed")
 
 if 'page_mode' not in st.session_state: st.session_state.page_mode = "🔍 검색"
@@ -66,7 +63,7 @@ st.markdown("""
     .tag-manual { background-color: #e0f2fe; color: #0369a1; }
     .tag-doc { background-color: #fef3c7; color: #92400e; }
     .tag-tip { background-color: #f0fdf4; color: #166534; }
-    .manage-card { background-color: #ffffff; border-radius: 12px; padding: 15px; border: 1px solid #e2e8f0; margin-bottom: 10px; }
+    .doc-status-card { background-color: #f8fafc; border-radius: 8px; padding: 10px; border-left: 4px solid #92400e; margin-bottom: 8px; font-size: 0.85rem; font-weight: 600; color: #334155; }
     </style>
     <div class="fixed-header"><span class="header-title">🌊 금강수계 수질자동측정망 통합 지식뱅크</span></div>
     """, unsafe_allow_html=True)
@@ -84,12 +81,11 @@ with st.container():
 search_threshold = st.sidebar.slider("검색 정밀도", 0.0, 1.0, 0.30, 0.05)
 mode = st.session_state.page_mode
 
-# --- 1. 통합 지식 검색 (스마트 폴백 로직) ---
+# --- 1. 통합 지식 검색 ---
 if mode == "🔍 검색":
     user_q = st.text_input("상황 입력", label_visibility="collapsed", placeholder="장비 문제나 현장 정보를 물어보세요")
     if user_q:
         with st.spinner("최적의 정보를 분석 중..."):
-            # 의도 파악
             intent_p = f"질문: {user_q} \n 질문의 성격(기기수리/생활정보), 제조사, 모델명을 JSON으로 답하세요: {{\"type\":\"기기수리/생활정보\", \"mfr\":\"제조사\", \"model\":\"모델명\"}}"
             intent_res = ai_model.generate_content(intent_p)
             meta = extract_json(intent_res.text)
@@ -99,31 +95,18 @@ if mode == "🔍 검색":
             f_model = meta.get("model") if meta and meta.get("model") not in ["null", "None", "모델명"] else None
 
             query_vec = get_embedding(user_q)
-            
-            # [1단계] 필터 적용 정밀 검색
-            rpc_res = supabase.rpc("match_knowledge", {
-                "query_embedding": query_vec, "match_threshold": search_threshold, 
-                "match_count": 5, "filter_mfr": f_mfr, "filter_model": f_model
-            }).execute()
-            
+            rpc_res = supabase.rpc("match_knowledge", {"query_embedding": query_vec, "match_threshold": search_threshold, "match_count": 5, "filter_mfr": f_mfr, "filter_model": f_model}).execute()
             cases = rpc_res.data
             
-            # [2단계] 결과가 없으면 필터를 풀고 전체 검색 (폴백)
-            if not cases and (f_mfr or f_model):
-                rpc_res = supabase.rpc("match_knowledge", {
-                    "query_embedding": query_vec, "match_threshold": search_threshold, 
-                    "match_count": 5, "filter_mfr": None, "filter_model": None
-                }).execute()
+            if not cases and (f_mfr or f_model): # 폴백 로직
+                rpc_res = supabase.rpc("match_knowledge", {"query_embedding": query_vec, "match_threshold": search_threshold, "match_count": 5, "filter_mfr": None, "filter_model": None}).execute()
                 cases = rpc_res.data
 
             if cases:
-                # 맛집 정보 필터링 (기기 수리 질문일 때만)
-                if q_type == "기기수리":
-                    cases = [c for c in cases if c.get('category') != '맛집/정보']
-                
+                if q_type == "기기수리": cases = [c for c in cases if c.get('category') != '맛집/정보']
                 if cases:
                     context = "\n".join([f"[{c.get('category', '지식')}] {c['manufacturer']} {c['model_name']}: {c['solution'] if c['source_type']=='MANUAL' else c['content']}" for c in cases])
-                    ans_p = f"데이터: {context}\n질문: {user_q}\n위 데이터를 바탕으로 답변하세요. 3줄 이내 단답형. 관련 정보 없으면 없다고 하세요."
+                    ans_p = f"데이터: {context}\n질문: {user_q}\n위 데이터를 바탕으로 답변하세요. 3줄 이내 단답형."
                     st.info(ai_model.generate_content(ans_p).text)
                     st.markdown("---")
                     for c in cases:
@@ -132,8 +115,6 @@ if mode == "🔍 검색":
                         with st.expander(f"[{c.get('category', '지식')}] {c['manufacturer']} | {c['model_name']}"):
                             st.markdown(f'<span class="source-tag {tag_cls}">{c["registered_by"]}</span>', unsafe_allow_html=True)
                             st.write(c['solution'] if is_man else c['content'])
-                else: st.warning("⚠️ 질문에 맞는 정보를 찾지 못했습니다.")
-            else: st.warning("⚠️ 검색 결과가 없습니다. 질문을 다르게 입력해 보세요.")
 
 # --- 2. 현장 노하우 등록 ---
 elif mode == "📝 등록":
@@ -143,9 +124,8 @@ elif mode == "📝 등록":
         col1, col2 = st.columns(2)
         with col1:
             mfr_choice = st.selectbox("2. 제조사(지역)", options=["시마즈", "코비", "백년기술", "케이엔알", "YSI", "직접 입력"])
-            manual_mfr = st.text_input("└ (직접 입력 시에만 작성)")
-        with col2:
-            model = st.text_input("3. 모델명(장소)")
+            manual_mfr = st.text_input("└ (직접 입력 시 입력)")
+        with col2: model = st.text_input("3. 모델명(장소)")
         
         reg = st.text_input("4. 등록자 성함")
         iss = st.text_input("5. 제목(현상)")
@@ -161,15 +141,15 @@ elif mode == "📝 등록":
                     "solution": clean_text_for_db(sol), "registered_by": clean_text_for_db(reg), 
                     "source_type": "MANUAL", "embedding": vec
                 }).execute()
-                st.success(f"🎉 지식이 등록되었습니다!")
+                st.success("🎉 지식이 등록되었습니다!")
 
-# --- 3. 문서(매뉴얼) 등록 ---
+# --- 3. 문서(매뉴얼) 등록 (목록 표시 로직 강화) ---
 elif mode == "📂 문서 관리":
     st.subheader("📄 문서(매뉴얼) 기반 지식 등록")
     up_file = st.file_uploader("PDF 매뉴얼 업로드", type="pdf")
     if up_file:
-        if st.button("🚀 매뉴얼 분석 및 등록"):
-            with st.spinner("매뉴얼을 읽고 지식으로 변환 중..."):
+        if st.button("🚀 매뉴얼 분석 및 등록 시작"):
+            with st.spinner("매뉴얼 분석 중..."):
                 try:
                     pdf_reader = PyPDF2.PdfReader(io.BytesIO(up_file.read()))
                     first_pg = pdf_reader.pages[0].extract_text()
@@ -193,17 +173,33 @@ elif mode == "📂 문서 관리":
                     st.rerun()
                 except Exception as e: st.error(f"오류: {e}")
 
-# --- 4. 데이터 관리 ---
+    # [수정] 업로드 버튼 아래에 등록된 매뉴얼 목록을 상시 표시
+    st.markdown("---")
+    st.markdown("### 📋 현재 등록된 매뉴얼 현황")
+    doc_res = supabase.table("knowledge_base").select("registered_by").eq("source_type", "DOC").execute()
+    if doc_res.data:
+        manual_list = sorted(list(set([d['registered_by'] for d in doc_res.data])))
+        for m_name in manual_list:
+            st.markdown(f'<div class="doc-status-card">📄 {m_name}</div>', unsafe_allow_html=True)
+    else:
+        st.info("아직 등록된 매뉴얼이 없습니다.")
+
+# --- 4. 데이터 관리 (검색 기반 노출) ---
 elif mode == "🛠️ 관리":
     st.subheader("🛠️ 지식 데이터 상세 관리")
     m_search = st.text_input("🔍 관리 대상 검색", placeholder="모델명, 제조사, 카테고리 등 검색...")
     if m_search:
-        res = supabase.table("knowledge_base").select("*").or_(f"manufacturer.ilike.%{m_search}%,model_name.ilike.%{m_search}%,category.ilike.%{m_search}%").order("created_at", desc=True).execute()
+        res = supabase.table("knowledge_base").select("*").or_(f"manufacturer.ilike.%{m_search}%,model_name.ilike.%{m_search}%,category.ilike.%{m_search}%,issue.ilike.%{m_search}%").order("created_at", desc=True).execute()
         if res.data:
+            st.caption(f"검색 결과: {len(res.data)}건")
             for row in res.data:
-                with st.expander(f"[{row.get('category', '지식')}] {row['manufacturer']} | {row['model_name']}"):
+                with st.expander(f"[{row.get('category', '기기점검')}] {row['manufacturer']} | {row['model_name']}"):
                     st.write(f"**현상/제목:** {row['issue']}")
                     if row['source_type'] == 'MANUAL': st.info(row['solution'])
                     else: st.info(row['content'][:200] + "...")
-                    if st.button("🗑️ 삭제", key=f"d_{row['id']}"):
+                    if st.button("🗑️ 데이터 삭제", key=f"d_{row['id']}"):
                         supabase.table("knowledge_base").delete().eq("id", row['id']).execute(); st.rerun()
+        else: st.warning("일치하는 데이터가 없습니다.")
+    else:
+        st.write("---")
+        st.caption("위 검색창에 키워드를 입력하여 관리할 지식을 불러오세요.")
