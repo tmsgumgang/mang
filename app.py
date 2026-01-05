@@ -31,18 +31,18 @@ def get_embedding(text):
     )
     return result['embedding']
 
-# --- [V5] 하단 네비게이션 및 모바일 최적화 UI ---
+# --- [V6] 하단 네비게이션 1열 배치 및 협업 UI ---
 st.set_page_config(
     page_title="금강수계 AI 챗봇", 
     layout="centered", 
     initial_sidebar_state="collapsed"
 )
 
-# 세션 상태 초기화 (페이지 네비게이션용)
+# 세션 상태 초기화
 if 'page_mode' not in st.session_state:
     st.session_state.page_mode = "🤖 조치법 검색"
 
-# [CSS 주입] 상단바 고정, 하단바 고정, 겹침 방지
+# [CSS 주입] 1열 가로 배치 및 겹침 방지 최적화
 st.markdown("""
     <style>
     /* 1. 고정 상단바 */
@@ -55,70 +55,74 @@ st.markdown("""
         z-index: 999; box-shadow: 0 4px 10px rgba(0,0,0,0.2);
     }
     
-    /* 2. 고정 하단 네비게이션 바 */
+    /* 2. 하단 네비게이션 바 (가로 1열 강제) */
     .fixed-footer {
         position: fixed; bottom: 0; left: 0; width: 100%;
         background-color: #ffffff;
-        display: flex; justify-content: space-around;
-        padding: 10px 0; border-top: 1px solid #e2e8f0;
+        display: flex !important; flex-direction: row !important; /* 가로 배치 */
+        justify-content: space-evenly !important; align-items: center !important;
+        padding: 10px 5px; border-top: 1px solid #e2e8f0;
         z-index: 999;
+    }
+    
+    /* 하단 버튼 미세 조정 */
+    .fixed-footer .stButton > button {
+        width: 30vw !important;
+        height: 3rem !important;
+        font-size: 0.85rem !important;
+        border-radius: 10px !important;
+        margin: 0 !important;
     }
 
     /* 3. 여백 조정 */
     .main .block-container {
         padding-top: 5rem !important;
-        padding-bottom: 6rem !important;
+        padding-bottom: 7rem !important;
         padding-left: 1rem !important;
         padding-right: 1rem !important;
     }
 
-    /* 4. "Press Enter" 가이드 삭제 */
+    /* 4. 가이드 문구 삭제 */
     [data-testid="InputInstructions"] { display: none !important; }
 
-    /* 5. 카드형 UI */
+    /* 5. 카드형 UI 및 등록자 태그 */
     .result-card {
         background-color: #ffffff; border-radius: 15px;
         padding: 18px; border-left: 6px solid #004a99;
         box-shadow: 0 2px 8px rgba(0,0,0,0.1); margin-bottom: 15px;
     }
-    .card-meta { font-size: 0.8rem; color: #7f8c8d; margin-bottom: 5px; }
-    .card-title { font-size: 1rem; font-weight: 800; color: #2c3e50; margin-bottom: 10px; }
-
-    /* 6. 버튼 스타일 */
-    .stButton>button {
-        width: 100%; border-radius: 12px; height: 3.2rem;
-        background-color: #004a99; color: white; border: none;
-    }
+    .card-meta { font-size: 0.75rem; color: #7f8c8d; margin-bottom: 5px; }
+    .card-title { font-size: 1rem; font-weight: 800; color: #2c3e50; margin-bottom: 8px; }
+    .reg-info { font-size: 0.75rem; color: #004a99; font-weight: 600; }
     </style>
     
     <div class="fixed-header">🌊 금강수계 수질자동측정망 AI 챗봇</div>
     """, unsafe_allow_html=True)
 
-# --- 하단 네비게이션 로직 (버튼 클릭 시 세션 상태 변경) ---
+# --- 하단 네비게이션 (1열 배치) ---
 st.markdown('<div class="fixed-footer">', unsafe_allow_html=True)
-col_nav1, col_nav2, col_nav3 = st.columns(3)
-with col_nav1:
-    if st.button("🔍 검색"): st.session_state.page_mode = "🤖 조치법 검색"
-with col_nav2:
-    if st.button("📝 등록"): st.session_state.page_mode = "📝 사례 등록"
-with col_nav3:
-    if st.button("🛠️ 관리"): st.session_state.page_mode = "🛠️ 데이터 관리"
+col_n1, col_n2, col_n3 = st.columns(3)
+with col_n1:
+    if st.button("🔍 검색", key="nav_s"): st.session_state.page_mode = "🤖 조치법 검색"
+with col_n2:
+    if st.button("📝 등록", key="nav_r"): st.session_state.page_mode = "📝 사례 등록"
+with col_n3:
+    if st.button("🛠️ 관리", key="nav_m"): st.session_state.page_mode = "🛠️ 데이터 관리"
 st.markdown('</div>', unsafe_allow_html=True)
 
-# 사이드바 설정 (백업용 슬라이더 유지)
+# 검색 설정
 search_threshold = st.sidebar.slider("검색 정밀도", 0.0, 1.0, 0.35, 0.05)
-
-# --- 페이지 렌더링 ---
 mode = st.session_state.page_mode
 
 # 1. 조치법 검색
 if mode == "🤖 조치법 검색":
     with st.form("search_form", clear_on_submit=False):
-        user_question = st.text_input("현장 상황", label_visibility="collapsed", placeholder="상황 입력 (예: 시마즈 toc 값 상승)")
+        user_question = st.text_input("상황", label_visibility="collapsed", placeholder="상황 입력 (예: 시마즈 toc 값 상승)")
         submit_button = st.form_submit_button("💡 조치법 즉시 찾기")
     
     if (submit_button or user_question) and user_question:
-        with st.spinner("성주 님의 노하우를 분석 중..."):
+        # 문구 수정: 우리 파트 동료들의 지식 강조
+        with st.spinner("금강수계 동료들의 축적된 노하우를 분석 중..."):
             try:
                 query_vec = get_embedding(user_question)
                 rpc_res = supabase.rpc("match_knowledge", {
@@ -127,28 +131,28 @@ if mode == "🤖 조치법 검색":
                 
                 past_cases = rpc_res.data
                 if past_cases:
-                    case_context = "\n".join([f"사례: {c['manufacturer']} {c['model_name']} - 조치: {c['solution']}" for c in past_cases])
-                    prompt = f"당신은 조성주 님의 지식 조수입니다. 다음 데이터를 바탕으로 질문에 짧고 명확하게 답하세요.\n\n{case_context}\n\n질문: {user_question}"
+                    case_context = "\n".join([f"사례: {c['manufacturer']} {c['model_name']} - 등록자: {c.get('registered_by', '공동')} - 조치: {c['solution']}" for c in past_cases])
+                    prompt = f"당신은 금강수계 동료들의 지식 조수입니다. 다음 데이터를 바탕으로 질문에 짧고 명확하게 답하세요.\n\n{case_context}\n\n질문: {user_question}"
                     response = ai_model.generate_content(prompt)
                     
                     st.markdown("### 💡 권장 조치 사항")
                     st.info(response.text)
                     st.markdown("---")
-                    st.markdown("### 📚 참조 데이터 (카드)")
                     
                     for c in past_cases:
+                        reg_user = c.get('registered_by', '공동 지식')
                         st.markdown(f"""
                         <div class="result-card">
-                            <div class="card-meta">{c['manufacturer']} | {c['measurement_item']}</div>
+                            <div class="card-meta">{c['manufacturer']} | {c['measurement_item']} | <span class="reg-info">👤 {reg_user}</span></div>
                             <div class="card-title">{c['model_name']}</div>
                             <div style="font-size: 0.9rem; color: #34495e;"><b>⚠️ 현상:</b> {c['issue']}</div>
                         </div>
                         """, unsafe_allow_html=True)
-                        with st.expander("🛠️ 상세 조치 방법 확인"):
+                        with st.expander(f"🛠️ {reg_user} 님의 상세 조치 확인"):
                             st.success(f"**해결책:** {c['solution']}")
                             st.caption(f"일치도: {c['similarity']*100:.1f}%")
                 else:
-                    st.warning("⚠️ 일치하는 사례를 찾지 못했습니다.")
+                    st.warning("⚠️ 아직 등록되지 않은 사례입니다. 동료들을 위해 지식을 등록해 주세요!")
             except Exception as e:
                 st.error(f"검색 오류: {e}")
 
@@ -156,29 +160,36 @@ if mode == "🤖 조치법 검색":
 elif mode == "📝 사례 등록":
     st.subheader("📝 신규 노하우 기록")
     with st.form("add_form", clear_on_submit=True):
-        mfr = st.selectbox("제조사", ["시마즈", "코비", "백년기술", "케이엔알", "YSI", "직접 입력"])
-        if mfr == "직접 입력": mfr = st.text_input("제조사명 입력")
-        model = st.text_input("모델명")
-        item = st.selectbox("측정항목", ["TOC", "TP", "TN", "조류", "기타", "직접 입력"])
-        if item == "직접 입력": item = st.text_input("측정항목명 입력")
+        col1, col2 = st.columns(2)
+        with col1:
+            mfr = st.selectbox("제조사", ["시마즈", "코비", "백년기술", "케이엔알", "YSI", "직접 입력"])
+            if mfr == "직접 입력": mfr = st.text_input("제조사명 입력")
+            reg_name = st.text_input("등록자 성명", placeholder="이름을 입력하세요") # 등록자 필드
+        with col2:
+            model = st.text_input("모델명")
+            item = st.selectbox("측정항목", ["TOC", "TP", "TN", "조류", "기타", "직접 입력"])
+            if item == "직접 입력": item = st.text_input("측정항목명 입력")
+        
         iss = st.text_input("발생 현상")
         sol = st.text_area("조치 내용")
         
-        if st.form_submit_button("✅ 저장"):
-            if mfr and model and item and iss and sol:
-                vec = get_embedding(f"{mfr} {model} {item} {iss} {sol}")
+        if st.form_submit_button("✅ 지식 베이스 저장"):
+            if mfr and model and item and iss and sol and reg_name:
+                vec = get_embedding(f"{mfr} {model} {item} {iss} {sol} {reg_name}")
                 supabase.table("knowledge_base").insert({
                     "manufacturer": mfr, "model_name": model, "measurement_item": item,
-                    "issue": iss, "solution": sol, "embedding": vec
+                    "issue": iss, "solution": sol, "registered_by": reg_name, "embedding": vec
                 }).execute()
-                st.success("데이터베이스 저장 완료")
+                st.success(f"🎉 {reg_name} 님의 노하우가 성공적으로 공유되었습니다!")
+            else:
+                st.warning("⚠️ 모든 항목과 등록자 성명을 입력해 주세요.")
 
 # 3. 데이터 관리
 elif mode == "🛠️ 데이터 관리":
-    st.subheader("🛠️ 지식 리스트")
-    res = supabase.table("knowledge_base").select("id, manufacturer, model_name, measurement_item, issue, solution").execute()
+    st.subheader("🛠️ 지식 데이터셋")
+    res = supabase.table("knowledge_base").select("id, manufacturer, model_name, measurement_item, issue, solution, registered_by").execute()
     if res.data:
-        st.write(f"전체: {len(res.data)}건")
+        st.write(f"현재 총 {len(res.data)}건의 지식이 축적되었습니다.")
         st.dataframe(res.data, use_container_width=True)
     else:
         st.info("데이터가 없습니다.")
