@@ -31,7 +31,7 @@ def get_embedding(text):
     result = genai.embed_content(model="models/text-embedding-004", content=text, task_type="retrieval_document")
     return result['embedding']
 
-# --- [V18] 정밀 기종 필터링 및 등록 매뉴얼 리스트업 UI ---
+# --- [V18] 직접 입력 수정 및 매뉴얼 리스트업 UI ---
 st.set_page_config(page_title="금강수계 AI 챗봇", layout="centered", initial_sidebar_state="collapsed")
 
 if 'page_mode' not in st.session_state: st.session_state.page_mode = "🔍 검색"
@@ -52,89 +52,91 @@ st.markdown("""
     .tag-manual { background-color: #e0f2fe; color: #0369a1; border: 1px solid #bae6fd; }
     .tag-doc { background-color: #fef3c7; color: #92400e; border: 1px solid #fde68a; }
     .manage-card { background-color: #ffffff; border-radius: 12px; padding: 15px; border: 1px solid #e2e8f0; margin-bottom: 10px; }
-    .doc-card { background-color: #f8fafc; border-radius: 8px; padding: 10px; border-left: 4px solid #92400e; margin-bottom: 8px; font-size: 0.9rem; }
+    .doc-status-card { background-color: #f8fafc; border-radius: 8px; padding: 10px; border-left: 4px solid #92400e; margin-bottom: 8px; font-size: 0.85rem; }
     </style>
     <div class="fixed-header"><span class="header-title">🌊 금강수계 수질자동측정망 AI 챗봇</span></div>
     """, unsafe_allow_html=True)
 
-# 네비게이션 메뉴
+# 네비게이션
 with st.container():
-    col_m, _ = st.columns([0.4, 0.6])
-    with col_m:
+    col_menu, _ = st.columns([0.4, 0.6])
+    with col_menu:
         with st.popover("☰ 메뉴 선택"):
             if st.button("🔍 통합 지식 검색", use_container_width=True): st.session_state.page_mode = "🔍 검색"; st.rerun()
             if st.button("📝 현장 노하우 등록", use_container_width=True): st.session_state.page_mode = "📝 등록" ; st.rerun()
             if st.button("📄 문서(매뉴얼) 등록", use_container_width=True): st.session_state.page_mode = "📂 문서 관리"; st.rerun()
             if st.button("🛠️ 데이터 관리", use_container_width=True): st.session_state.page_mode = "🛠️ 관리"; st.session_state.edit_id = None; st.rerun()
 
-search_threshold = st.sidebar.slider("검색 정밀도", 0.0, 1.0, 0.35, 0.05)
 mode = st.session_state.page_mode
 
-# --- 1. 통합 지식 검색 (정밀 기종 필터링) ---
+# --- 1. 통합 지식 검색 (정밀 필터링) ---
 if mode == "🔍 검색":
-    user_q = st.text_input("상황 입력", label_visibility="collapsed", placeholder="상황을 입력하세요 (예: TN 2060 동작불량)")
+    user_q = st.text_input("상황 입력", label_visibility="collapsed", placeholder="상황 입력 (예: TN-2060 동작불량)")
     if user_q:
-        with st.spinner("해당 기종의 정보를 정밀 검색 중..."):
-            # 질문에서 기종 정보를 명확히 추출
-            ext_p = f"질문: {user_q} \n 위 질문에서 제조사와 모델명을 추출하여 JSON(mfr, model)으로 답하세요. 확실하지 않으면 null."
+        with st.spinner("관련 지식을 정밀 검색 중..."):
+            # 질문에서 기종 정보를 추출하여 필터로 활용
+            ext_p = f"질문: {user_q} \n 위 질문에서 장비 제조사와 모델명을 추출하여 JSON(mfr, model)으로만 답하세요. 없으면 null."
             try:
                 ext_res = ai_model.generate_content(ext_p)
                 meta = json.loads(ext_res.text.replace("```json", "").replace("```", "").strip())
                 f_mfr, f_model = meta.get("mfr"), meta.get("model")
-            except:
-                f_mfr, f_model = None, None
+            except: f_mfr, f_model = None, None
 
             query_vec = get_embedding(user_q)
             rpc_res = supabase.rpc("match_knowledge", {
-                "query_embedding": query_vec, "match_threshold": search_threshold, 
-                "match_count": 5, "filter_mfr": f_mfr, "filter_model": f_model
+                "query_embedding": query_vec, "match_threshold": 0.35, "match_count": 5, "filter_mfr": f_mfr, "filter_model": f_model
             }).execute()
             
-            cases = rpc_res.data
-            if cases:
-                # [강화] 모델명이 추출된 경우, 검색 결과에서 엉뚱한 기종을 엄격히 배제
+            if rpc_res.data:
+                # 모델명이 명시된 경우 엉뚱한 장비 결과 배제 로직 강화
+                cases = rpc_res.data
                 if f_model:
                     cases = [c for c in cases if f_model.lower() in c['model_name'].lower() or c['model_name'] == "매뉴얼 참조"]
                 
-                if cases:
-                    context = "\n".join([f"[{c['source_type']}] {c['manufacturer']} {c['model_name']}: {c['solution'] if c['source_type']=='MANUAL' else c['content']}" for c in cases])
-                    ans_p = f"데이터: {context}\n질문: {user_q}\n위 데이터를 바탕으로 핵심 조치법을 3줄 이내 단답형으로 설명하세요."
-                    st.info(ai_model.generate_content(ans_p).text)
-                    
-                    st.markdown("---")
-                    for c in cases:
-                        is_man = c['source_type'] == 'MANUAL'
-                        with st.expander(f"[{'👤경험' if is_man else '📄이론'}] {c['manufacturer']} | {c['model_name']}"):
-                            st.markdown(f'<span class="source-tag {"tag-manual" if is_man else "tag-doc"}">{c["registered_by"]}</span>', unsafe_allow_html=True)
-                            st.write(c['solution'] if is_man else c['content'])
-                else:
-                    st.warning("⚠️ 해당 모델과 일치하는 관련 정보를 찾을 수 없습니다.")
-            else:
-                st.warning("⚠️ 검색된 지식이 없습니다.")
+                context = "\n".join([f"[{c['source_type']}] {c['manufacturer']} {c['model_name']}: {c['solution'] if c['source_type']=='MANUAL' else c['content']}" for c in cases])
+                ans_p = f"데이터: {context}\n질문: {user_q}\n위 데이터를 바탕으로 핵심 조치법을 3줄 이내 단답형으로 답변하세요."
+                st.info(ai_model.generate_content(ans_p).text)
+                st.markdown("---")
+                for c in cases:
+                    is_man = c['source_type'] == 'MANUAL'
+                    with st.expander(f"[{'👤경험' if is_man else '📄이론'}] {c['manufacturer']} | {c['model_name']}"):
+                        st.markdown(f'<span class="source-tag {"tag-manual" if is_man else "tag-doc"}">{c["registered_by"]}</span>', unsafe_allow_html=True)
+                        st.write(c['solution'] if is_man else c['content'])
+            else: st.warning("⚠️ 일치하는 정보가 없습니다.")
 
-# --- 2. 현장 노하우 등록 ---
+# --- 2. 현장 노하우 등록 (직접 입력 오류 수정) ---
 elif mode == "📝 등록":
     st.subheader("📝 현장 노하우 등록")
     with st.form("manual_reg", clear_on_submit=True):
-        mfr = st.selectbox("제조사", ["시마즈", "코비", "백년기술", "케이엔알", "직접 입력"])
+        mfr_opt = st.selectbox("제조사 선택", ["시마즈", "코비", "백년기술", "케이엔알", "YSI", "직접 입력"])
+        # [수정] 직접 입력 선택 시에만 텍스트 입력창 활성화
+        mfr_val = ""
+        if mfr_opt == "직접 입력":
+            mfr_val = st.text_input("제조사명을 직접 입력하세요")
+        else:
+            mfr_val = mfr_opt
+            
         reg = st.text_input("등록자 성함")
         model = st.text_input("모델명")
         item = st.text_input("측정항목")
         iss = st.text_input("발생 현상")
         sol = st.text_area("조치 내용")
+        
         if st.form_submit_button("✅ 노하우 저장"):
-            if mfr and model and iss and sol:
-                vec = get_embedding(f"{mfr} {model} {item} {iss} {sol} {reg}")
-                supabase.table("knowledge_base").insert({"manufacturer": mfr, "model_name": model, "measurement_item": item, "issue": iss, "solution": sol, "registered_by": reg, "source_type": "MANUAL", "embedding": vec}).execute()
-                st.success("🎉 실전 경험 지식이 등록되었습니다!")
+            final_mfr = mfr_val if mfr_opt == "직접 입력" else mfr_opt
+            if final_mfr and model and iss and sol:
+                vec = get_embedding(f"{final_mfr} {model} {item} {iss} {sol} {reg}")
+                supabase.table("knowledge_base").insert({"manufacturer": final_mfr, "model_name": model, "measurement_item": item, "issue": iss, "solution": sol, "registered_by": reg, "source_type": "MANUAL", "embedding": vec}).execute()
+                st.success(f"🎉 {final_mfr} {model} 노하우가 등록되었습니다!")
+            else: st.warning("⚠️ 모든 필수 항목을 입력해 주세요.")
 
-# --- 3. 문서(매뉴얼) 등록 및 현황 대시보드 ---
+# --- 3. 문서(매뉴얼) 등록 및 현황 리스트업 ---
 elif mode == "📂 문서 관리":
     st.subheader("📄 문서(매뉴얼) 기반 지식 등록")
     up_file = st.file_uploader("PDF 매뉴얼 업로드", type="pdf")
     if up_file:
-        if st.button("🚀 매뉴얼 지식화 시작"):
-            with st.spinner("매뉴얼의 모든 페이지를 지식 조각으로 분해 중..."):
+        if st.button("🚀 매뉴얼 분석 및 등록 시작"):
+            with st.spinner("매뉴얼 내용을 지식 조각으로 분해 중..."):
                 pdf_reader = PyPDF2.PdfReader(io.BytesIO(up_file.read()))
                 first_pg = pdf_reader.pages[0].extract_text()
                 info_p = f"텍스트: {first_pg[:1000]}\n위 텍스트에서 제조사와 모델명을 찾아 2줄로 답하세요."
@@ -150,22 +152,20 @@ elif mode == "📂 문서 관리":
                         "issue": "매뉴얼 본문", "solution": "원문 참조", "content": chk,
                         "registered_by": up_file.name, "source_type": "DOC", "embedding": vec
                     }).execute()
-                st.success(f"✅ '{up_file.name}' 매뉴얼 등록 완료!")
+                st.success(f"✅ '{up_file.name}' 매뉴얼 지식화 완료!")
                 st.rerun()
 
     st.markdown("---")
-    st.markdown("### 📋 현재 등록된 매뉴얼 목록")
-    # 등록된 매뉴얼 목록을 DB에서 가져옴 (source_type='DOC'인 데이터의 registered_by 컬럼)
-    doc_res = supabase.table("knowledge_base").select("registered_by").eq("source_type", "DOC").execute()
-    if doc_res.data:
-        # 중복 제거 후 리스트업
-        manual_list = sorted(list(set([d['registered_by'] for d in doc_res.data])))
-        for m_name in manual_list:
-            st.markdown(f'<div class="doc-card">📄 {m_name}</div>', unsafe_allow_html=True)
-    else:
-        st.info("아직 등록된 매뉴얼이 없습니다.")
+    st.markdown("### 📋 현재 등록된 매뉴얼 현황")
+    # 등록된 매뉴얼 리스트업 (source_type='DOC'의 중복 없는 파일명 추출)
+    doc_data = supabase.table("knowledge_base").select("registered_by").eq("source_type", "DOC").execute()
+    if doc_data.data:
+        unique_manuals = sorted(list(set([d['registered_by'] for d in doc_data.data])))
+        for m_name in unique_manuals:
+            st.markdown(f'<div class="doc-status-card">📄 {m_name}</div>', unsafe_allow_html=True)
+    else: st.info("등록된 매뉴얼이 없습니다.")
 
-# --- 4. 데이터 관리 (정보 표출 및 검색 강화) ---
+# --- 4. 데이터 관리 (검색 후 노출 및 내용 표출 강화) ---
 elif mode == "🛠️ 관리":
     if st.session_state.edit_id:
         res = supabase.table("knowledge_base").select("*").eq("id", st.session_state.edit_id).execute()
@@ -174,7 +174,7 @@ elif mode == "🛠️ 관리":
             with st.form("edit_f"):
                 e_mfr = st.text_input("제조사", value=it['manufacturer'])
                 e_model = st.text_input("모델명", value=it['model_name'])
-                e_sol = st.text_area("내용 정정", value=it['solution'] if it['source_type']=='MANUAL' else it['content'])
+                e_sol = st.text_area("내용", value=it['solution'] if it['source_type']=='MANUAL' else it['content'])
                 if st.form_submit_button("💾 저장"):
                     new_v = get_embedding(f"{e_mfr} {e_model} {e_sol}")
                     supabase.table("knowledge_base").update({"manufacturer": e_mfr, "model_name": e_model, "solution": e_sol if it['source_type']=='MANUAL' else None, "content": e_sol if it['source_type']=='DOC' else None, "embedding": new_v}).eq("id", it['id']).execute()
@@ -182,7 +182,7 @@ elif mode == "🛠️ 관리":
                 if st.form_submit_button("❌ 취소"): st.session_state.edit_id = None; st.rerun()
     else:
         st.subheader("🛠️ 지식 데이터 상세 관리")
-        m_search = st.text_input("🔍 관리 대상 검색 (모델, 현상 등)", placeholder="검색어를 입력하면 수정 가능한 리스트가 나타납니다.")
+        m_search = st.text_input("🔍 관리할 데이터 검색", placeholder="모델명, 제조사 등 검색 시 리스트가 나타납니다.")
         
         if m_search:
             res = supabase.table("knowledge_base").select("*").or_(f"manufacturer.ilike.%{m_search}%,model_name.ilike.%{m_search}%,issue.ilike.%{m_search}%,solution.ilike.%{m_search}%,content.ilike.%{m_search}%").order("created_at", desc=True).execute()
@@ -195,14 +195,13 @@ elif mode == "🛠️ 관리":
                             st.markdown(f"**⚠️ 현상:** {row['issue']}")
                             st.markdown(f"**🛠️ 조치:** {row['solution']}")
                         else:
-                            st.markdown("**📄 매뉴얼 내용:**")
+                            st.markdown(f"**📄 매뉴얼 내용:**")
                             st.info(row['content'])
                         
                         c1, c2 = st.columns(2)
                         if c1.button("✏️", key=f"e_{row['id']}"): st.session_state.edit_id = row['id']; st.rerun()
                         if c2.button("🗑️", key=f"d_{row['id']}"): supabase.table("knowledge_base").delete().eq("id", row['id']).execute(); st.rerun()
-            else:
-                st.warning("검색된 데이터가 없습니다.")
+            else: st.warning("검색된 데이터가 없습니다.")
         else:
             st.write("---")
-            st.caption("위 검색창에 모델명 등을 입력하여 관리할 지식을 불러오세요.")
+            st.caption("위 검색창을 사용하여 관리할 항목을 불러오세요.")
