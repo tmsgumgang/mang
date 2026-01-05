@@ -42,12 +42,13 @@ def extract_json(text):
         return json.loads(cleaned)
     except: return None
 
-# --- [V28] 지능형 브로드 검색 및 유연 매칭 시스템 ---
+# --- [V29] 헤더 고정 및 AI 답변 확신 로직 강화 ---
 st.set_page_config(page_title="금강수계 AI 챗봇", layout="centered", initial_sidebar_state="collapsed")
 
 if 'page_mode' not in st.session_state: st.session_state.page_mode = "🔍 검색"
 if 'edit_id' not in st.session_state: st.session_state.edit_id = None
 
+# [헤더 고정]
 st.markdown("""
     <style>
     header[data-testid="stHeader"] { display: none !important; }
@@ -57,7 +58,7 @@ st.markdown("""
         padding: 10px 0; z-index: 999; text-align: center;
         box-shadow: 0 4px 10px rgba(0,0,0,0.2);
     }
-    .header-title { font-size: 1.05rem; font-weight: 800; }
+    .header-title { font-size: 1.1rem; font-weight: 800; }
     .main .block-container { padding-top: 4.5rem !important; }
     .source-tag { font-size: 0.7rem; padding: 2px 8px; border-radius: 6px; font-weight: 700; margin-bottom: 5px; display: inline-block; }
     .tag-manual { background-color: #e0f2fe; color: #0369a1; }
@@ -65,7 +66,7 @@ st.markdown("""
     .tag-tip { background-color: #f0fdf4; color: #166534; }
     .doc-status-card { background-color: #f8fafc; border-radius: 8px; padding: 10px; border-left: 4px solid #92400e; margin-bottom: 8px; font-size: 0.85rem; font-weight: 600; color: #334155; }
     </style>
-    <div class="fixed-header"><span class="header-title">🌊 금강수계 수질자동측정망 통합 지식뱅크</span></div>
+    <div class="fixed-header"><span class="header-title">🌊 금강수계 수질자동측정망 AI 챗봇</span></div>
     """, unsafe_allow_html=True)
 
 # 네비게이션
@@ -78,40 +79,37 @@ with st.container():
             if st.button("📄 문서(매뉴얼) 등록", use_container_width=True): st.session_state.page_mode = "📂 문서 관리"; st.rerun()
             if st.button("🛠️ 데이터 관리", use_container_width=True): st.session_state.page_mode = "🛠️ 관리"; st.session_state.edit_id = None; st.rerun()
 
-search_threshold = st.sidebar.slider("검색 정밀도", 0.0, 1.0, 0.20, 0.05)
+search_threshold = st.sidebar.slider("검색 정밀도", 0.0, 1.0, 0.15, 0.05) # 더 넓게 검색하도록 기본값 하향
 mode = st.session_state.page_mode
 
-# --- 1. 통합 지식 검색 (지능형 브로드 검색) ---
+# --- 1. 통합 지식 검색 (지능형 유연 답변 강화) ---
 if mode == "🔍 검색":
-    user_q = st.text_input("상황 입력", label_visibility="collapsed", placeholder="장비 문제나 현장 정보를 자유롭게 물어보세요")
+    user_q = st.text_input("상황 입력", label_visibility="collapsed", placeholder="상황을 입력하세요 (예: TN 물이 넘침)")
     if user_q:
-        with st.spinner("전문가가 지식 베이스를 정밀 분석 중입니다..."):
+        with st.spinner("전문 지식을 분석하여 최적의 해결책을 도출 중..."):
             query_vec = get_embedding(user_q)
             
-            # [핵심 변경] 하드 필터링을 제거하고 더 많은 후보(10개)를 가져옴
+            # 넓은 후보군 확보 (10개)
             rpc_res = supabase.rpc("match_knowledge", {
-                "query_embedding": query_vec, "match_threshold": search_threshold, 
-                "match_count": 10  # 후보군을 넓게 확보
+                "query_embedding": query_vec, "match_threshold": search_threshold, "match_count": 10
             }).execute()
             
             cases = rpc_res.data
             if cases:
-                # 데이터를 요약하여 AI에게 전달
                 context = ""
                 for c in cases:
                     src = "경험" if c['source_type'] == 'MANUAL' else "매뉴얼"
-                    context += f"[{src} / {c['manufacturer']} / {c['model_name']} / 항목:{c.get('measurement_item','-')}]: {c['solution'] if src=='경험' else c['content']}\n"
+                    context += f"[{src} / 제조사:{c['manufacturer']} / 모델:{c['model_name']} / 항목:{c.get('measurement_item','-')}]: {c['solution'] if src=='경험' else c['content']}\n"
                 
-                # [강화된 답변 프롬프트]
+                # [핵심] 답변의 확신을 높이는 프롬프트 개편
                 ans_p = f"""
-                당신은 수질 측정 장비 전문가입니다. 제공된 [참조 데이터]를 바탕으로 질문에 답변하세요.
+                당신은 수질 측정 장비 전문가입니다. 제공된 [참조 데이터]를 바탕으로 질문에 답하세요.
                 
-                [매칭 규칙 - 매우 중요]
-                1. 명칭이 완벽히 일치하지 않아도 맥락상 관련성이 높으면 적극적으로 참고하세요.
-                   (예: '코비 TN' 질문에 'HATN-2000' 데이터는 매우 중요한 참조 정보입니다.)
-                2. 제조사가 생략되었더라도 질문의 현상(예: 물이 넘침, 통신 에러)이 데이터와 유사하면 해당 장비의 조치법을 '참고용'으로 제시하세요.
-                3. 만약 질문과 데이터의 모델명이 다르다면 "비슷한 기종인 [기종명]의 사례를 참고하면..."과 같이 유연하게 언급하며 답변하세요.
-                4. 답변은 3줄 이내의 명확한 단답형 리스트로 구성하세요.
+                [답변 지침 - 절대 준수]
+                1. '직접적인 정보가 없다'는 말은 웬만하면 피하세요. 유사한 제조사, 모델, 측정항목이 있다면 그것을 정답으로 간주하고 조치법을 설명하세요.
+                2. 예를 들어 사용자가 'TN'에 대해 물었는데 데이터에 'HATN-2000'이 있다면, 같은 장비로 인식하고 조치법을 알려주세요.
+                3. 질문의 '현상(예: 물이 넘침)'과 데이터의 '현상'이 일치하면, 제조사가 다르더라도 "유사 사례인 [제조사]의 조치법을 참고하면..."이라며 답변을 제공하세요.
+                4. 답변은 3줄 이내, 단답형 리스트로 명확하게 하세요.
                 
                 [참조 데이터]
                 {context}
@@ -122,34 +120,33 @@ if mode == "🔍 검색":
                 st.info(response.text)
                 
                 st.markdown("---")
-                st.markdown("### 📚 관련 근거 데이터 (유사도순)")
+                st.markdown("### 📚 상세 근거 데이터 (유사도순)")
                 for c in cases:
                     is_man = c['source_type'] == 'MANUAL'
                     tag_cls = "tag-tip" if c.get('category') == '맛집/정보' else ("tag-manual" if is_man else "tag-doc")
-                    title = f"[{c.get('category', '기기점검')}] {c['manufacturer']} | {c['model_name']}"
-                    with st.expander(title):
+                    with st.expander(f"[{c.get('category', '기기점검')}] {c['manufacturer']} | {c['model_name']} ({c.get('measurement_item','전체')})"):
                         st.markdown(f'<span class="source-tag {tag_cls}">{c["registered_by"]}</span>', unsafe_allow_html=True)
                         st.write(c['solution'] if is_man else c['content'])
             else:
-                st.warning("⚠️ 입력하신 검색어와 관련된 지식을 찾지 못했습니다. 키워드를 바꾸거나 정밀도를 낮춰보세요.")
+                st.warning("⚠️ 관련 지식을 찾을 수 없습니다. 키워드를 더 단순하게 입력해 보세요.")
 
 # --- 2. 현장 노하우 등록 ---
 elif mode == "📝 등록":
     st.subheader("📝 현장 노하우 및 팁 등록")
     with st.form("manual_reg", clear_on_submit=True):
         cat = st.selectbox("1. 분류", ["기기점검", "현장꿀팁", "맛집/정보"])
-        col_info1, col_info2 = st.columns(2)
-        with col_info1:
+        col_i1, col_i2 = st.columns(2)
+        with col_i1:
             mfr_choice = st.selectbox("2. 제조사(지역)", options=["시마즈", "코비", "백년기술", "케이엔알", "YSI", "직접 입력"])
             manual_mfr = st.text_input("└ ('직접 입력' 시 입력)")
-        with col_info2:
+        with col_i2:
             model = st.text_input("3. 모델명(장소)", placeholder="예: APK2950W")
             m_item = st.text_input("4. 측정항목", placeholder="예: TOC, TN 등")
         
         reg = st.text_input("5. 등록자 성함")
         st.write("---")
-        iss = st.text_input("6. 제목(현상)", placeholder="예: 시료 도입 펌프 소음")
-        sol = st.text_area("7. 상세 내용(조치)", placeholder="노하우를 상세히 적어주세요.")
+        iss = st.text_input("6. 제목(현상)")
+        sol = st.text_area("7. 상세 내용(조치)")
         
         if st.form_submit_button("✅ 지식 저장"):
             mfr_final = manual_mfr if mfr_choice == "직접 입력" else mfr_choice
@@ -168,8 +165,8 @@ elif mode == "📂 문서 관리":
     st.subheader("📄 문서(매뉴얼) 기반 지식 등록")
     up_file = st.file_uploader("PDF 매뉴얼 업로드", type="pdf")
     if up_file:
-        if st.button("🚀 매뉴얼 분석 시작"):
-            with st.spinner("매뉴얼의 지식을 조각으로 분해 중..."):
+        if st.button("🚀 매뉴얼 분석 및 등록 시작"):
+            with st.spinner("매뉴얼 내용을 지식 조각으로 분해 중..."):
                 try:
                     pdf_reader = PyPDF2.PdfReader(io.BytesIO(up_file.read()))
                     first_pg = pdf_reader.pages[0].extract_text()
