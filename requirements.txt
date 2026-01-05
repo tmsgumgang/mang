@@ -1,3 +1,5 @@
 streamlit
 supabase
 google-generativeai
+pandas
+PyPDF2
