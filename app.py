@@ -8,7 +8,7 @@ try:
     SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
     GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
 except KeyError:
-    st.error("⚠️ Secrets 설정이 누락되었습니다. Streamlit Cloud 설정(Settings > Secrets)에서 정보를 입력해 주세요.")
+    st.error("⚠️ Secrets 설정이 누락되었습니다. Streamlit Cloud 설정에서 정보를 입력해 주세요.")
     st.stop()
 
 @st.cache_resource
@@ -31,58 +31,82 @@ def get_embedding(text):
     )
     return result['embedding']
 
-# --- [시각적 개선] UI/UX 커스텀 설정 ---
+# --- [V3] 지능형 UI/UX 커스텀 설정 ---
 st.set_page_config(
-    page_title="K-eco 조치 챗봇", 
+    page_title="금강수계 AI 챗봇", 
     layout="centered", 
-    initial_sidebar_state="collapsed",
-    page_icon="🌊"
+    initial_sidebar_state="collapsed"
 )
 
-# [CSS 주입] 작가님이 지적하신 제목 및 표 폰트 사이즈 조정
+# [CSS 주입] 상단바, 카드형 UI, 겹침 방지 최적화
 st.markdown("""
     <style>
-    /* 1. 메인 제목 폰트 크기 및 상단 여백 축소 */
-    h1 {
-        font-size: 1.6rem !important;
-        padding-top: 0rem !important;
-        padding-bottom: 0.5rem !important;
-        margin-bottom: 0.5rem !important;
-    }
-    
-    /* 2. 캡션 및 부제목 크기 조정 */
-    .stCaption {
-        font-size: 0.85rem !important;
-    }
-    
-    /* 3. 표(Table) 내부 폰트 크기 및 높이 최적화 */
-    [data-testid="stTable"] td, [data-testid="stTable"] th {
-        font-size: 0.75rem !important;
-        padding: 4px 6px !important;
-        line-height: 1.2 !important;
-    }
-    
-    /* 4. 데이터프레임 폰트 크기 조정 */
-    [data-testid="stDataFrame"] {
-        font-size: 0.75rem !important;
-    }
-
-    /* 5. 모바일 버튼 스타일 강화 */
-    .stButton>button {
+    /* 1. 상단바(Header Bar) 구현 */
+    .top-bar {
+        position: fixed;
+        top: 0;
+        left: 0;
         width: 100%;
-        border-radius: 8px;
-        font-size: 0.9rem !important;
-        background-color: #007BFF;
+        background-color: #1E3A8A; /* 금강의 깊은 물색 */
         color: white;
+        padding: 12px 16px;
+        text-align: center;
+        font-size: 1.1rem;
+        font-weight: 700;
+        z-index: 1000;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
     }
     
-    /* 6. 전체 컨테이너 여백 축소 */
+    /* 2. 메인 컨텐츠 상단 여백 (상단바 공간 확보) */
     .main .block-container {
-        padding-top: 1.5rem !important;
+        padding-top: 4rem !important;
         padding-left: 1rem !important;
         padding-right: 1rem !important;
     }
+
+    /* 3. 텍스트 겹침 방지 (Press Enter 안내 숨김) */
+    [data-testid="InputInstructions"] {
+        display: none !important;
+    }
+
+    /* 4. 카드형 결과 UI */
+    .result-card {
+        background-color: #f8fafc;
+        border-radius: 12px;
+        padding: 15px;
+        border: 1px solid #e2e8f0;
+        margin-bottom: 10px;
+    }
+    
+    .card-header {
+        font-size: 0.85rem;
+        color: #64748b;
+        margin-bottom: 4px;
+    }
+    
+    .card-title {
+        font-size: 1rem;
+        font-weight: 700;
+        color: #1e293b;
+    }
+
+    /* 5. 버튼 스타일 유지 */
+    .stButton>button {
+        width: 100%;
+        border-radius: 10px;
+        font-size: 0.95rem !important;
+        background-color: #2563eb;
+        color: white;
+        border: none;
+    }
+
+    /* 6. 가로 구분선 스타일 */
+    hr {
+        margin: 1rem 0 !important;
+    }
     </style>
+    
+    <div class="top-bar">🌊 금강수계 수질자동측정망 AI 챗봇</div>
     """, unsafe_allow_html=True)
 
 # 사이드바 설정
@@ -91,21 +115,16 @@ mode = st.sidebar.radio("작업 선택", ["🤖 조치법 검색", "📝 사례 
 st.sidebar.markdown("---")
 search_threshold = st.sidebar.slider("검색 정밀도", 0.0, 1.0, 0.35, 0.05)
 
-# 메인 헤더
-st.title("🌊 K-eco 현장 조치 챗봇")
-st.caption("성주 님의 노하우를 현장에서 가장 빠르게 확인하세요.")
-st.markdown("---")
-
-# --- 기능 1: 조치법 검색 (UI 개선 반영) ---
+# --- 기능 1: 조치법 검색 (카드형 UI로 전면 개편) ---
 if mode == "🤖 조치법 검색":
     st.subheader("🔍 현장 상황 입력")
     
     with st.form("search_form", clear_on_submit=False):
-        user_question = st.text_input("상황을 짧게 입력하세요", placeholder="예: 발광 박테리아 소리 남")
+        user_question = st.text_input("상황을 짧게 입력하세요", label_visibility="collapsed", placeholder="상황 입력 (예: HATP TP mv 0)")
         submit_button = st.form_submit_button("💡 조치법 즉시 찾기")
     
     if (submit_button or user_question) and user_question:
-        with st.spinner("최적의 해결책 추출 중..."):
+        with st.spinner("최적의 노하우 분석 중..."):
             try:
                 query_vec = get_embedding(user_question)
                 rpc_res = supabase.rpc("match_knowledge", {
@@ -120,8 +139,7 @@ if mode == "🤖 조치법 검색":
                     case_list = []
                     context_data = ""
                     for i, c in enumerate(past_cases):
-                        context_data += f"### 사례 {i+1}\n"
-                        context_data += f"- 제조사: {c['manufacturer']}\n- 모델명: {c['model_name']}\n- 항목: {c['measurement_item']}\n- 조치: {c['solution']}\n\n"
+                        context_data += f"### 사례 {i+1}\n- 제조사: {c['manufacturer']}\n- 모델명: {c['model_name']}\n- 항목: {c['measurement_item']}\n- 조치: {c['solution']}\n\n"
                         case_list.append(f"{c['manufacturer']} {c['model_name']}")
 
                     prompt = f"당신은 조성주 님의 지식 조수입니다. 질문에 되묻지 말고 데이터베이스에 기반하여 조치법을 설명하세요.\n\n[데이터]\n{context_data}\n\n[질문]\n{user_question}"
@@ -130,9 +148,22 @@ if mode == "🤖 조치법 검색":
                     st.markdown("### 💡 권장 조치 사항")
                     st.info(response.text)
                     
-                    # [개선] 표 높이를 줄이기 위해 작은 폰트가 적용된 테이블
-                    with st.expander("📚 참조한 원본 데이터 상세 (요약)"):
-                        st.table(past_cases)
+                    st.markdown("---")
+                    st.markdown("### 📚 참조 데이터 상세")
+                    
+                    # [V3 개선] 무너지는 표 대신 카드형 + 익스펜더 조합
+                    for c in past_cases:
+                        with st.container():
+                            st.markdown(f"""
+                            <div class="result-card">
+                                <div class="card-header">{c['manufacturer']} | {c['measurement_item']}</div>
+                                <div class="card-title">{c['model_name']}</div>
+                                <div style="font-size: 0.85rem; color: #475569; margin-top:5px;"><b>현상:</b> {c['issue']}</div>
+                            </div>
+                            """, unsafe_allow_html=True)
+                            with st.expander("🛠️ 상세 조치 방법 확인"):
+                                st.write(c['solution'])
+                                st.caption(f"유사도 점수: {c['similarity']:.4f}")
                 else:
                     st.warning("⚠️ 유사 사례를 찾지 못했습니다.")
             except Exception as e:
@@ -142,21 +173,20 @@ if mode == "🤖 조치법 검색":
 elif mode == "📝 사례 등록":
     st.subheader("📝 신규 노하우 기록")
     with st.form("add_form", clear_on_submit=True):
-        col1, col2, col3 = st.columns(3)
+        col1, col2 = st.columns(2)
         with col1:
-            mfr_options = ["시마즈", "코비", "백년기술", "케이엔알", "YSI", "직접 입력"]
+            mfr_options = ["시마즈", "코비", "백년기술", "케이엔알", "YSI", "직경 입력"]
             selected_mfr = st.selectbox("제조사", mfr_options)
-            custom_mfr = st.text_input("제조사 직접 입력 (필요시)")
+            custom_mfr = st.text_input("제조사 직접 입력")
         with col2:
             model = st.text_input("모델명")
-        with col3:
             item_options = ["TOC", "TP", "TN", "조류", "기타", "직접 입력"]
             selected_item = st.selectbox("측정항목", item_options)
             custom_item = st.text_input("측정항목 직접 입력")
         
         iss = st.text_input("발생 현상")
         sol = st.text_area("조치 내용")
-        reg_button = st.form_submit_button("✅ 저장")
+        reg_button = st.form_submit_button("✅ 지식 베이스 저장")
         
         if reg_button:
             final_mfr = custom_mfr if selected_mfr == "직접 입력" else selected_mfr
@@ -167,15 +197,14 @@ elif mode == "📝 사례 등록":
                     "manufacturer": final_mfr, "model_name": model, "measurement_item": final_item,
                     "issue": iss, "solution": sol, "embedding": vec
                 }).execute()
-                st.success("등록 완료")
+                st.success("데이터베이스 저장 완료")
 
-# --- 기능 3: 데이터 관리 (가독성 개선) ---
+# --- 기능 3: 데이터 관리 ---
 elif mode == "🛠️ 데이터 관리":
     st.subheader("🛠️ 지식 리스트")
     res = supabase.table("knowledge_base").select("id, manufacturer, model_name, measurement_item, issue, solution").execute()
     if res.data:
         st.write(f"전체: {len(res.data)}건")
-        # 데이터프레임 폰트 및 너비 최적화
-        st.dataframe(res.data, use_container_width=True, height=450)
+        st.dataframe(res.data, use_container_width=True)
     else:
         st.info("데이터가 없습니다.")
