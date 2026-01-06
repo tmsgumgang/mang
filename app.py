@@ -42,7 +42,7 @@ def extract_json(text):
         return json.loads(cleaned)
     except: return None
 
-# --- [V32] 다크모드 글자색 보정 및 UI 최종 안정화 ---
+# --- [V33] 데이터 관리 전수 검색 로직 적용 ---
 st.set_page_config(page_title="금강수계 AI 챗봇", layout="centered", initial_sidebar_state="collapsed")
 
 if 'page_mode' not in st.session_state: st.session_state.page_mode = "🔍 통합 지식 검색"
@@ -54,7 +54,7 @@ st.markdown("""
     .fixed-header {
         position: fixed; top: 0; left: 0; width: 100%;
         background-color: #004a99; color: white;
-        padding: 12px 0; z-index: 999; text-align: center;
+        padding: 10px 0; z-index: 999; text-align: center;
         box-shadow: 0 4px 10px rgba(0,0,0,0.2);
     }
     .header-title { font-size: 1.1rem; font-weight: 800; }
@@ -63,28 +63,19 @@ st.markdown("""
     .tag-manual { background-color: #e0f2fe; color: #0369a1; }
     .tag-doc { background-color: #fef3c7; color: #92400e; }
     .tag-tip { background-color: #f0fdf4; color: #166534; }
-    /* [수정] 다크모드에서도 글자가 잘 보이도록 색상 강제 지정 */
     .doc-status-card { 
-        background-color: #f8fafc; 
-        border-radius: 8px; 
-        padding: 10px; 
-        border-left: 4px solid #92400e; 
-        margin-bottom: 8px; 
-        font-size: 0.85rem; 
-        font-weight: 600;
-        color: #1e293b !important; 
+        background-color: #f8fafc; border-radius: 8px; padding: 10px; border-left: 4px solid #92400e; margin-bottom: 8px; 
+        font-size: 0.85rem; font-weight: 600; color: #1e293b !important; 
     }
     </style>
     <div class="fixed-header"><span class="header-title">🌊 금강수계 수질자동측정망 AI 챗봇</span></div>
     """, unsafe_allow_html=True)
 
-# 네비게이션 (셀렉트박스 방식 유지)
+# 네비게이션
 with st.container():
     menu_options = ["🔍 통합 지식 검색", "📝 현장 노하우 등록", "📄 문서(매뉴얼) 등록", "🛠️ 데이터 전체 관리"]
-    try:
-        current_idx = menu_options.index(st.session_state.page_mode)
-    except:
-        current_idx = 0
+    try: current_idx = menu_options.index(st.session_state.page_mode)
+    except: current_idx = 0
     selected_mode = st.selectbox("☰ 메뉴 이동", options=menu_options, index=current_idx, label_visibility="collapsed")
     if selected_mode != st.session_state.page_mode:
         st.session_state.page_mode = selected_mode
@@ -109,12 +100,10 @@ if mode == "🔍 통합 지식 검색":
             
             if cases:
                 context = "\n".join([f"[{c['source_type']}/{c['manufacturer']}/{c['model_name']}]: {c['solution'] if c['source_type']=='MANUAL' else c['content']}" for c in cases])
-                ans_p = f"""수질 전문가로서 답변하세요. 
-                1. 명칭이 달라도(TN <-> HATN-2000) 연관성이 높으면 적극 참고하세요.
-                2. 해결책을 3줄 이내 단답형으로 제시하세요.
+                ans_p = f"""수질 전문가로서 3줄 이내 단답형으로 답변하세요. 
+                * 약칭(TN <-> HATN-2000) 등 연관성이 높으면 적극 참고하세요.
                 데이터: {context} \n 질문: {user_q}"""
                 st.info(ai_model.generate_content(ans_p).text)
-                
                 st.markdown("---")
                 for c in cases:
                     is_man = c['source_type'] == 'MANUAL'
@@ -132,15 +121,13 @@ elif mode == "📝 현장 노하우 등록":
         c1, c2 = st.columns(2)
         with c1:
             mfr_choice = st.selectbox("제조사 선택", options=["시마즈", "코비", "백년기술", "케이엔알", "YSI", "직접 입력"])
-            manual_mfr = st.text_input("└ ('직접 입력' 시에만 입력)")
+            manual_mfr = st.text_input("└ ('직접 입력' 시 입력)")
         with c2:
             model = st.text_input("모델명(장소)")
             m_item = st.text_input("측정항목(TOC, TN 등)")
-        
         reg = st.text_input("등록자 성함")
         iss = st.text_input("제목(현상)")
         sol = st.text_area("상세 내용(조치)")
-        
         if st.form_submit_button("✅ 지식 저장"):
             mfr_final = manual_mfr if mfr_choice == "직접 입력" else mfr_choice
             if mfr_final and iss and sol:
@@ -151,7 +138,7 @@ elif mode == "📝 현장 노하우 등록":
                     "solution": clean_text_for_db(sol), "registered_by": clean_text_for_db(reg), 
                     "source_type": "MANUAL", "embedding": vec
                 }).execute()
-                st.success("🎉 지식이 성공적으로 등록되었습니다!")
+                st.success("🎉 지식이 등록되었습니다!")
 
 # --- 3. 문서(매뉴얼) 등록 ---
 elif mode == "📄 문서(매뉴얼) 등록":
@@ -159,17 +146,14 @@ elif mode == "📄 문서(매뉴얼) 등록":
     up_file = st.file_uploader("PDF 매뉴얼 업로드", type="pdf")
     if up_file:
         if st.button("🚀 매뉴얼 분석 시작"):
-            with st.spinner("데이터 분석 중..."):
+            with st.spinner("분석 중..."):
                 try:
                     pdf_reader = PyPDF2.PdfReader(io.BytesIO(up_file.read()))
-                    first_pg = pdf_reader.pages[0].extract_text()
-                    info_res = extract_json(ai_model.generate_content(f"텍스트: {first_pg[:1500]}\n제조사와 모델명을 JSON으로: {{\"mfr\":\"제조사\", \"model\":\"모델명\"}}").text)
-                    
+                    info_res = extract_json(ai_model.generate_content(f"텍스트: {pdf_reader.pages[0].extract_text()[:1500]}\n제조사와 모델명을 JSON으로: {{\"mfr\":\"제조사\", \"model\":\"모델명\"}}").text)
                     full_txt = ""
                     for pg in pdf_reader.pages:
                         txt = pg.extract_text()
                         if txt: full_txt += clean_text_for_db(txt) + "\n"
-                    
                     chunks = [full_txt[i:i+600] for i in range(0, len(full_txt), 600)]
                     for chk in chunks:
                         vec = get_embedding(chk)
@@ -179,29 +163,47 @@ elif mode == "📄 문서(매뉴얼) 등록":
                             "issue": "매뉴얼 본문", "solution": "원문 참조", "content": chk,
                             "registered_by": up_file.name, "source_type": "DOC", "embedding": vec
                         }).execute()
-                    st.success("✅ 매뉴얼 등록 완료!")
+                    st.success("✅ 등록 완료!")
                     st.rerun()
                 except Exception as e: st.error(f"오류: {e}")
-
     st.markdown("---")
     st.markdown("### 📋 현재 등록된 매뉴얼 현황")
     doc_res = supabase.table("knowledge_base").select("registered_by").eq("source_type", "DOC").execute()
     if doc_res.data:
         for m in sorted(list(set([d['registered_by'] for d in doc_res.data]))):
-            # [수정된 부분] 텍스트가 잘 보이도록 HTML 클래스 적용
             st.markdown(f'<div class="doc-status-card">📄 {m}</div>', unsafe_allow_html=True)
 
-# --- 4. 데이터 관리 ---
+# --- 4. 데이터 관리 (개선: 전수 필드 검색 적용) ---
 elif mode == "🛠️ 데이터 전체 관리":
     st.subheader("🛠️ 지식 데이터 상세 관리")
-    m_search = st.text_input("🔍 관리 대상 검색", placeholder="검색어를 입력하세요...")
+    st.caption("제조사, 모델, 제목은 물론 '조치 내용'이나 '매뉴얼 본문' 안의 단어도 검색됩니다.")
+    m_search = st.text_input("🔍 데이터 통합 검색 (예: SSR, 펌프, 영동)", placeholder="검색어를 입력하세요...")
+    
     if m_search:
-        res = supabase.table("knowledge_base").select("*").or_(f"manufacturer.ilike.%{m_search}%,model_name.ilike.%{m_search}%,category.ilike.%{m_search}%,issue.ilike.%{m_search}%").order("created_at", desc=True).execute()
+        # [핵심] 검색 범위를 모든 텍스트 필드(measurement_item, solution, content 포함)로 확장
+        res = supabase.table("knowledge_base").select("*").or_(
+            f"manufacturer.ilike.%{m_search}%,"
+            f"model_name.ilike.%{m_search}%,"
+            f"category.ilike.%{m_search}%,"
+            f"issue.ilike.%{m_search}%,"
+            f"measurement_item.ilike.%{m_search}%,"
+            f"solution.ilike.%{m_search}%,"
+            f"content.ilike.%{m_search}%"
+        ).order("created_at", desc=True).execute()
+        
         if res.data:
             st.caption(f"검색 결과: {len(res.data)}건")
             for row in res.data:
-                with st.expander(f"[{row.get('category', '기기점검')}] {row['manufacturer']} | {row['model_name']}"):
-                    st.write(f"**제목:** {row['issue']}")
-                    st.info(row['solution'] if row['source_type']=='MANUAL' else row['content'][:200])
+                with st.expander(f"[{row.get('category', '기기점검')}] {row['manufacturer']} | {row['model_name']} ({row.get('measurement_item','-')})"):
+                    st.write(f"**제목/현상:** {row['issue']}")
+                    if row['source_type'] == 'MANUAL':
+                        st.info(f"**조치내용:**\n{row['solution']}")
+                    else:
+                        st.info(f"**매뉴얼내용:**\n{row['content'][:300]}...")
+                    
                     if st.button("🗑️ 삭제", key=f"d_{row['id']}"):
                         supabase.table("knowledge_base").delete().eq("id", row['id']).execute(); st.rerun()
+        else: st.warning(f"⚠️ '{m_search}'를 포함하는 데이터를 찾지 못했습니다.")
+    else:
+        st.write("---")
+        st.caption("위 검색창에 'SSR'과 같은 키워드를 입력하여 관리할 지식을 불러오세요.")
