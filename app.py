@@ -36,7 +36,7 @@ def clean_text_for_db(text):
 
 def get_embedding(text):
     clean_txt = clean_text_for_db(text)
-    # [V48] 768차원 임베딩 생성 (text-embedding-004 모델)
+    # [V49] 768차원 최적화 규격 유지
     if not clean_txt: return [0.0] * 768
     result = genai.embed_content(model="models/text-embedding-004", content=clean_txt, task_type="retrieval_document")
     return result['embedding']
@@ -47,7 +47,7 @@ def extract_json(text):
         return json.loads(cleaned)
     except: return None
 
-# [기능 유지] 게시판 지식을 'experience_base'로 동기화
+# [이원화] 게시판 지식을 'experience_base'로 동기화 (768차원 적용)
 def sync_qa_to_experience(q_id):
     try:
         q_res = supabase.table("qa_board").select("*").eq("id", q_id).execute()
@@ -109,7 +109,7 @@ if mode == "🔍 통합 지식 검색":
     with col_b: search_clicked = st.button("조회", use_container_width=True)
     
     if user_q and (search_clicked or user_q):
-        with st.spinner("축적된 지식 분석 중..."):
+        with st.spinner("지식 분석 중..."):
             query_vec = get_embedding(user_q)
             exp_res = supabase.rpc("match_experience", {"query_embedding": query_vec, "match_threshold": 0.05, "match_count": 5}).execute()
             man_res = supabase.rpc("match_manual", {"query_embedding": query_vec, "match_threshold": 0.05, "match_count": 5}).execute()
@@ -138,7 +138,7 @@ elif mode == "📝 현장 노하우 등록":
             mfr_choice = st.selectbox("제조사", ["시마즈", "코비", "백년기술", "케이엔알", "YSI", "직접 입력"])
             manual_mfr = st.text_input("└ 직접 입력 시")
         with c2: model, m_item = st.text_input("모델명"), st.text_input("측정항목")
-        reg, iss, sol = st.text_input("등록자"), st.text_input("제목"), st.text_area("내용")
+        reg, iss, sol = st.text_input("등록자 성함"), st.text_input("제목"), st.text_area("내용")
         if st.form_submit_button("✅ 저장"):
             mfr = manual_mfr if mfr_choice == "직접 입력" else mfr_choice
             if mfr and iss and sol:
@@ -146,54 +146,55 @@ elif mode == "📝 현장 노하우 등록":
                 supabase.table("experience_base").insert({"category": cat, "manufacturer": clean_text_for_db(mfr), "model_name": clean_text_for_db(model), "measurement_item": clean_text_for_db(m_item), "issue": clean_text_for_db(iss), "solution": clean_text_for_db(sol), "registered_by": clean_text_for_db(reg), "embedding": vec}).execute()
                 st.success("🎉 경험 지식이 등록되었습니다!")
 
-# --- 3. 문서(매뉴얼) 등록 (규격 최적화 완료) ---
+# --- 3. 문서(매뉴얼) 등록 (리스트 시인성 보강 버전) ---
 elif mode == "📄 문서(매뉴얼) 등록":
-    st.subheader("📄 매뉴얼 등록 (지식 최적화)")
+    st.subheader("📄 매뉴얼 등록 (768차원)")
+    st.info("💡 SQL 실행으로 테이블이 초기화되었습니다. 기존 매뉴얼을 다시 등록해 주세요.")
     up_file = st.file_uploader("PDF 업로드", type=["pdf"])
     
     if up_file and st.button("🚀 매뉴얼 저장 시작"):
-        with st.status("📑 매뉴얼 분석 및 저장 중...", expanded=True) as status:
+        with st.status("📑 분석 및 저장 중...", expanded=True) as status:
             try:
-                status.write("1. PDF 텍스트 추출 중...")
                 pdf_reader = PyPDF2.PdfReader(io.BytesIO(up_file.read()))
                 all_text = "\n".join([p.extract_text() for p in pdf_reader.pages if p.extract_text()])
-                
-                status.write("2. 메타데이터 분석 및 768차원 벡터 생성 중...")
                 info_res = extract_json(ai_model.generate_content(f"제조사와 모델명 추출(JSON): {all_text[:3000]}").text)
                 if info_res is None: info_res = {}
                 mfr, model = info_res.get("mfr", "기타"), info_res.get("model", "매뉴얼")
 
-                status.write("3. DB 규격 맞춰 저장 중...")
                 chunks = [all_text[i:i+1000] for i in range(0, len(all_text), 800)]
                 prog_bar, success_count = st.progress(0), 0
-
                 for i, chunk in enumerate(chunks):
                     clean_chunk = clean_text_for_db(chunk)
                     if len(clean_chunk) < 10: continue
                     vec = get_embedding(clean_chunk)
-                    # [V48 핵심] 저장 전 차원 개수 검증
-                    if len(vec) != 768:
-                        st.error(f"임베딩 차원 오류 (현재: {len(vec)}, 필요: 768)"); st.stop()
-                    
-                    res = supabase.table("manual_base").insert({
-                        "manufacturer": mfr, "model_name": model, "content": clean_chunk, 
-                        "file_name": up_file.name, "page_num": (i//2)+1, "embedding": vec
-                    }).execute()
+                    res = supabase.table("manual_base").insert({"manufacturer": mfr, "model_name": model, "content": clean_chunk, "file_name": up_file.name, "page_num": (i//2)+1, "embedding": vec}).execute()
                     if res.data: success_count += 1
                     prog_bar.progress((i+1)/len(chunks))
-                
                 status.update(label="✅ 저장 완료!", state="complete", expanded=False)
-                st.success(f"🎉 {success_count}개의 지식이 성공적으로 등록되었습니다!"); time.sleep(1); st.rerun()
-            except Exception as e: st.error(f"❌ 처리 중 오류 발생: {e}")
+                st.success(f"🎉 {success_count}개의 지식이 등록되었습니다!"); time.sleep(1); st.rerun()
+            except Exception as e: st.error(f"❌ 오류 발생: {e}")
 
-# --- 4. 데이터 전체 관리 (탭 방식 유지) ---
+    # [수정] 리스트 시인성 보완: 항상 제목을 보여주고, 데이터 유무에 따른 안내 메시지 출력
+    st.markdown("---")
+    st.markdown("### 📋 현재 등록된 매뉴얼 현황")
+    try:
+        doc_res = supabase.table("manual_base").select("file_name").execute()
+        if doc_res.data and len(doc_res.data) > 0:
+            for m in sorted(list(set([d['file_name'] for d in doc_res.data]))):
+                st.markdown(f'<div class="doc-status-card">📄 {m}</div>', unsafe_allow_html=True)
+        else:
+            st.info("현재 등록된 매뉴얼이 없습니다. 위에서 파일을 업로드해 주세요.")
+    except Exception:
+        st.warning("⚠️ SQL 초기화 전이라면 리스트를 불러올 수 없습니다. 1단계 SQL을 먼저 실행해주세요.")
+
+# --- 4. 데이터 전체 관리 ---
 elif mode == "🛠️ 데이터 전체 관리":
-    tab1, tab2 = st.tabs(["📝 경험 지식 관리", "📄 매뉴얼 관리"])
+    tab1, tab2 = st.tabs(["📝 경험 관리", "📄 매뉴얼 관리"])
     with tab1:
-        m_s = st.text_input("🔍 경험 검색", key="e_search")
+        m_s = st.text_input("🔍 경험 검색 (SSR 등)", key="e_search")
         if m_s:
             res = supabase.table("experience_base").select("*").or_(f"manufacturer.ilike.%{m_s}%,issue.ilike.%{m_s}%,solution.ilike.%{m_s}%").execute()
-            for r in res.data:
+            for r in (res.data or []):
                 with st.expander(f"{r['manufacturer']} | {r['issue']}"):
                     st.write(r['solution'])
                     if st.button("🗑️ 삭제", key=f"e_{r['id']}"): supabase.table("experience_base").delete().eq("id", r['id']).execute(); st.rerun()
@@ -201,12 +202,12 @@ elif mode == "🛠️ 데이터 전체 관리":
         d_s = st.text_input("🔍 매뉴얼 검색", key="m_search")
         if d_s:
             res = supabase.table("manual_base").select("*").or_(f"manufacturer.ilike.%{d_s}%,content.ilike.%{d_s}%").execute()
-            for r in res.data:
+            for r in (res.data or []):
                 with st.expander(f"{r['manufacturer']} | {r['model_name']} (일부)"):
                     st.write(r['content'][:300])
                     if st.button("🗑️ 삭제", key=f"m_{r['id']}"): supabase.table("manual_base").delete().eq("id", r['id']).execute(); st.rerun()
 
-# --- 5. 질문 게시판 (기능 유지) ---
+# --- 5. 질문 게시판 (메타데이터 표출 유지) ---
 elif mode == "💬 질문 게시판 (Q&A)":
     if st.session_state.selected_q_id:
         if st.button("⬅️ 목록으로 돌아가기"): st.session_state.selected_q_id = None; st.rerun()
@@ -214,6 +215,7 @@ elif mode == "💬 질문 게시판 (Q&A)":
         if q_res.data:
             q = q_res.data[0]
             st.subheader(f"❓ {q['title']}")
+            # [기능 유지] 작성자 및 일자 표출
             st.caption(f"👤 작성자: {q['author']} | 📅 등록일: {q['created_at'][:10]}")
             st.markdown(f'<div class="q-card">{q["content"]}</div>', unsafe_allow_html=True)
             a_res = supabase.table("qa_answers").select("*").eq("question_id", q['id']).order("created_at").execute()
