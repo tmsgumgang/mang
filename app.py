@@ -109,7 +109,7 @@ if mode == "🔍 통합 지식 검색":
     with col_b: search_clicked = st.button("조회", use_container_width=True)
     
     if user_q and (search_clicked or user_q):
-        with st.spinner("768차원 정밀 지식 분석 중..."):
+        with st.spinner("축적된 지식 분석 중..."):
             query_vec = get_embedding(user_q)
             exp_res = supabase.rpc("match_experience", {"query_embedding": query_vec, "match_threshold": 0.05, "match_count": 5}).execute()
             man_res = supabase.rpc("match_manual", {"query_embedding": query_vec, "match_threshold": 0.05, "match_count": 5}).execute()
@@ -148,7 +148,7 @@ elif mode == "📝 현장 노하우 등록":
 
 # --- 3. 문서(매뉴얼) 등록 (규격 최적화 완료) ---
 elif mode == "📄 문서(매뉴얼) 등록":
-    st.subheader("📄 매뉴얼 등록 (768차원 최적화)")
+    st.subheader("📄 매뉴얼 등록 (지식 최적화)")
     up_file = st.file_uploader("PDF 업로드", type=["pdf"])
     
     if up_file and st.button("🚀 매뉴얼 저장 시작"):
