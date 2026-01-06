@@ -42,13 +42,12 @@ def extract_json(text):
         return json.loads(cleaned)
     except: return None
 
-# --- [V31] 선택 즉시 닫히는 네비게이션 UI 최적화 ---
+# --- [V32] 다크모드 글자색 보정 및 UI 최종 안정화 ---
 st.set_page_config(page_title="금강수계 AI 챗봇", layout="centered", initial_sidebar_state="collapsed")
 
 if 'page_mode' not in st.session_state: st.session_state.page_mode = "🔍 통합 지식 검색"
 if 'edit_id' not in st.session_state: st.session_state.edit_id = None
 
-# [헤더 이름 고정]
 st.markdown("""
     <style>
     header[data-testid="stHeader"] { display: none !important; }
@@ -64,25 +63,29 @@ st.markdown("""
     .tag-manual { background-color: #e0f2fe; color: #0369a1; }
     .tag-doc { background-color: #fef3c7; color: #92400e; }
     .tag-tip { background-color: #f0fdf4; color: #166534; }
-    .doc-status-card { background-color: #f8fafc; border-radius: 8px; padding: 10px; border-left: 4px solid #92400e; margin-bottom: 8px; font-size: 0.85rem; font-weight: 600; }
-    /* 검색바/버튼 정렬 */
-    .search-row { display: flex; align-items: flex-end; gap: 10px; margin-bottom: 20px; }
+    /* [수정] 다크모드에서도 글자가 잘 보이도록 색상 강제 지정 */
+    .doc-status-card { 
+        background-color: #f8fafc; 
+        border-radius: 8px; 
+        padding: 10px; 
+        border-left: 4px solid #92400e; 
+        margin-bottom: 8px; 
+        font-size: 0.85rem; 
+        font-weight: 600;
+        color: #1e293b !important; 
+    }
     </style>
     <div class="fixed-header"><span class="header-title">🌊 금강수계 수질자동측정망 AI 챗봇</span></div>
     """, unsafe_allow_html=True)
 
-# --- [개선] 번거로움 없는 네비게이션 (선택 시 즉시 닫힘) ---
+# 네비게이션 (셀렉트박스 방식 유지)
 with st.container():
     menu_options = ["🔍 통합 지식 검색", "📝 현장 노하우 등록", "📄 문서(매뉴얼) 등록", "🛠️ 데이터 전체 관리"]
-    # 현재 세션의 모드가 옵션 리스트의 몇 번째인지 인덱스 찾기
     try:
         current_idx = menu_options.index(st.session_state.page_mode)
     except:
         current_idx = 0
-
-    # 셀렉트박스로 변경하여 선택 즉시 UI가 사라지도록 구현
     selected_mode = st.selectbox("☰ 메뉴 이동", options=menu_options, index=current_idx, label_visibility="collapsed")
-    
     if selected_mode != st.session_state.page_mode:
         st.session_state.page_mode = selected_mode
         st.session_state.edit_id = None
@@ -107,7 +110,7 @@ if mode == "🔍 통합 지식 검색":
             if cases:
                 context = "\n".join([f"[{c['source_type']}/{c['manufacturer']}/{c['model_name']}]: {c['solution'] if c['source_type']=='MANUAL' else c['content']}" for c in cases])
                 ans_p = f"""수질 전문가로서 답변하세요. 
-                1. 약칭(TN <-> HATN-2000)이라도 연관성이 높으면 적극 참고하세요.
+                1. 명칭이 달라도(TN <-> HATN-2000) 연관성이 높으면 적극 참고하세요.
                 2. 해결책을 3줄 이내 단답형으로 제시하세요.
                 데이터: {context} \n 질문: {user_q}"""
                 st.info(ai_model.generate_content(ans_p).text)
@@ -156,7 +159,7 @@ elif mode == "📄 문서(매뉴얼) 등록":
     up_file = st.file_uploader("PDF 매뉴얼 업로드", type="pdf")
     if up_file:
         if st.button("🚀 매뉴얼 분석 시작"):
-            with st.spinner("데이터 분석 및 널 문자 제거 중..."):
+            with st.spinner("데이터 분석 중..."):
                 try:
                     pdf_reader = PyPDF2.PdfReader(io.BytesIO(up_file.read()))
                     first_pg = pdf_reader.pages[0].extract_text()
@@ -185,6 +188,7 @@ elif mode == "📄 문서(매뉴얼) 등록":
     doc_res = supabase.table("knowledge_base").select("registered_by").eq("source_type", "DOC").execute()
     if doc_res.data:
         for m in sorted(list(set([d['registered_by'] for d in doc_res.data]))):
+            # [수정된 부분] 텍스트가 잘 보이도록 HTML 클래스 적용
             st.markdown(f'<div class="doc-status-card">📄 {m}</div>', unsafe_allow_html=True)
 
 # --- 4. 데이터 관리 ---
