@@ -13,7 +13,7 @@ try:
     SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
     GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
 except KeyError:
-    st.error("⚠️ Secrets 설정이 누락되었습니다. 설정을 확인해주세요.")
+    st.error("⚠️ Secrets 설정이 누락되었습니다. 관리자에게 문의하세요.")
     st.stop()
 
 @st.cache_resource
@@ -42,7 +42,7 @@ def extract_json(text):
         return json.loads(cleaned)
     except: return None
 
-# 게시판 지식을 AI 검색용으로 동기화하는 함수 (V35+ 유지)
+# [기능 유지] 게시판 지식을 AI 검색용으로 동기화
 def sync_qa_to_knowledge(q_id):
     try:
         q_res = supabase.table("qa_board").select("*").eq("id", q_id).execute()
@@ -62,13 +62,12 @@ def sync_qa_to_knowledge(q_id):
         else: supabase.table("knowledge_base").insert(sync_data).execute()
     except: pass
 
-# --- UI 설정 ---
+# --- UI 설정 및 CSS (다크모드 대응 포함) ---
 st.set_page_config(page_title="금강수계 AI 챗봇", layout="centered", initial_sidebar_state="collapsed")
 
 if 'page_mode' not in st.session_state: st.session_state.page_mode = "🔍 통합 지식 검색"
 if 'selected_q_id' not in st.session_state: st.session_state.selected_q_id = None
 
-# CSS (헤더 고정, 다크모드 글자색 보정 포함)
 st.markdown("""
     <style>
     header[data-testid="stHeader"] { display: none !important; }
@@ -85,6 +84,7 @@ st.markdown("""
     .tag-doc { background-color: #fef3c7; color: #92400e; }
     .tag-tip { background-color: #f0fdf4; color: #166534; }
     .tag-qa { background-color: #f5f3ff; color: #5b21b6; }
+    /* 다크모드 가시성 보정 */
     .doc-status-card { 
         background-color: #f8fafc; border-radius: 8px; padding: 10px; border-left: 4px solid #92400e; margin-bottom: 8px; 
         color: #1e293b !important; font-weight: 600; 
@@ -95,7 +95,7 @@ st.markdown("""
     <div class="fixed-header"><span class="header-title">🌊 금강수계 수질자동측정망 AI 챗봇</span></div>
     """, unsafe_allow_html=True)
 
-# 네비게이션
+# 네비게이션 (셀렉트박스 방식 유지)
 menu_options = ["🔍 통합 지식 검색", "📝 현장 노하우 등록", "📄 문서(매뉴얼) 등록", "🛠️ 데이터 전체 관리", "💬 질문 게시판 (Q&A)"]
 try: current_idx = menu_options.index(st.session_state.page_mode)
 except: current_idx = 0
@@ -107,13 +107,13 @@ if selected_mode != st.session_state.page_mode:
 
 mode = st.session_state.page_mode
 
-# --- 1. 통합 지식 검색 ---
+# --- 1. 통합 지식 검색 (조회 버튼 포함) ---
 if mode == "🔍 통합 지식 검색":
-    col_i, col_b = st.columns([0.8, 0.2])
-    with col_i: user_q = st.text_input("상황 입력", label_visibility="collapsed", placeholder="예: 코비 TN 물이 넘침")
-    with col_b: search_clicked = st.button("조회", use_container_width=True)
+    col_input, col_btn = st.columns([0.8, 0.2])
+    with col_input: user_q = st.text_input("상황 입력", label_visibility="collapsed", placeholder="예: 코비 TN 물이 넘침")
+    with col_btn: search_clicked = st.button("조회", use_container_width=True)
     if user_q and (search_clicked or user_q):
-        with st.spinner("지식 분석 중..."):
+        with st.spinner("전문 지식 분석 중..."):
             query_vec = get_embedding(user_q)
             rpc_res = supabase.rpc("match_knowledge", {"query_embedding": query_vec, "match_threshold": 0.15, "match_count": 10}).execute()
             if rpc_res.data:
@@ -129,7 +129,7 @@ if mode == "🔍 통합 지식 검색":
                         st.write(c['solution'] if (is_man or is_qa) else c['content'])
             else: st.warning("⚠️ 일치하는 지식이 없습니다.")
 
-# --- 2. 현장 노하우 등록 ---
+# --- 2. 현장 노하우 등록 (측정항목/카테고리 유지) ---
 elif mode == "📝 현장 노하우 등록":
     st.subheader("📝 현장 노하우 및 팁 등록")
     with st.form("manual_reg", clear_on_submit=True):
@@ -139,24 +139,25 @@ elif mode == "📝 현장 노하우 등록":
             mfr_choice = st.selectbox("제조사 선택", options=["시마즈", "코비", "백년기술", "케이엔알", "YSI", "직접 입력"])
             manual_mfr = st.text_input("└ ('직접 입력' 시 입력)")
         with c2:
-            model, m_item = st.text_input("모델명(장소)"), st.text_input("측정항목")
-        reg, iss, sol = st.text_input("등록자"), st.text_input("제목(현상)"), st.text_area("상세 내용")
-        if st.form_submit_button("✅ 저장"):
-            mfr = manual_mfr if mfr_choice == "직접 입력" else mfr_choice
-            if mfr and iss and sol:
-                vec = get_embedding(f"{cat} {mfr} {model} {m_item} {iss} {sol}")
-                supabase.table("knowledge_base").insert({"category": cat, "manufacturer": clean_text_for_db(mfr), "model_name": clean_text_for_db(model), "measurement_item": clean_text_for_db(m_item), "issue": clean_text_for_db(iss), "solution": clean_text_for_db(sol), "registered_by": clean_text_for_db(reg), "source_type": "MANUAL", "embedding": vec}).execute()
+            model, m_item = st.text_input("모델명(장소)"), st.text_input("측정항목(TOC, TN 등)")
+        reg, iss, sol = st.text_input("등록자 성함"), st.text_input("제목(현상)"), st.text_area("상세 내용(조치)")
+        if st.form_submit_button("✅ 지식 저장"):
+            mfr_final = manual_mfr if mfr_choice == "직접 입력" else mfr_choice
+            if mfr_final and iss and sol:
+                vec = get_embedding(f"{cat} {mfr_final} {model} {m_item} {iss} {sol}")
+                supabase.table("knowledge_base").insert({"category": cat, "manufacturer": clean_text_for_db(mfr_final), "model_name": clean_text_for_db(model), "measurement_item": clean_text_for_db(m_item), "issue": clean_text_for_db(iss), "solution": clean_text_for_db(sol), "registered_by": clean_text_for_db(reg), "source_type": "MANUAL", "embedding": vec}).execute()
                 st.success("🎉 지식이 등록되었습니다!")
 
-# --- 3. 문서(매뉴얼) 등록 ---
+# --- 3. 문서(매뉴얼) 등록 (모바일 안내 강화) ---
 elif mode == "📄 문서(매뉴얼) 등록":
     st.subheader("📄 매뉴얼 기반 지식 등록")
-    up_file = st.file_uploader("PDF 매뉴얼 업로드", type="pdf")
-    if up_file and st.button("🚀 매뉴얼 분석 시작"):
-        with st.spinner("분석 중..."):
+    st.error("💡 [모바일 필수] 파일이 보이지 않는다면, 우측 상단 '⋮' -> '다른 브라우저(크롬/사파리)로 열기'를 꼭 선택해 주세요!")
+    up_file = st.file_uploader("PDF 매뉴얼 선택 (크롬 브라우저 권장)", type=["pdf"])
+    if up_file and st.button("🚀 분석 및 등록 시작"):
+        with st.spinner("매뉴얼 분석 중..."):
             try:
                 pdf_reader = PyPDF2.PdfReader(io.BytesIO(up_file.read()))
-                info_res = extract_json(ai_model.generate_content(f"텍스트: {pdf_reader.pages[0].extract_text()[:1500]}\n제조사와 모델명을 JSON으로: {{\"mfr\":\"제조사\", \"model\":\"모델명\"}}").text)
+                info_res = extract_json(ai_model.generate_content(f"텍스트: {pdf_reader.pages[0].extract_text()[:1500]}\n제조사와 모델명을 JSON: {{\"mfr\":\"제조사\", \"model\":\"모델명\"}}").text)
                 full_txt = ""
                 for pg in pdf_reader.pages:
                     txt = pg.extract_text()
@@ -166,40 +167,39 @@ elif mode == "📄 문서(매뉴얼) 등록":
                     vec = get_embedding(chk)
                     supabase.table("knowledge_base").insert({"category": "기기점검", "manufacturer": info_res.get("mfr", "기타") if info_res else "기타", "model_name": info_res.get("model", "매뉴얼") if info_res else "매뉴얼", "issue": "매뉴얼 본문", "solution": "원문 참조", "content": chk, "registered_by": up_file.name, "source_type": "DOC", "embedding": vec}).execute()
                 st.success("✅ 등록 완료!"); st.rerun()
-            except: st.error("분석 오류 발생")
+            except: st.error("분석 중 오류가 발생했습니다.")
     st.markdown("---")
+    st.markdown("### 📋 등록된 매뉴얼 목록")
     doc_res = supabase.table("knowledge_base").select("registered_by").eq("source_type", "DOC").execute()
     if doc_res.data:
         for m in sorted(list(set([d['registered_by'] for d in doc_res.data]))):
             st.markdown(f'<div class="doc-status-card">📄 {m}</div>', unsafe_allow_html=True)
 
-# --- 4. 데이터 전체 관리 (SSR 등 전수 필드 검색 유지) ---
+# --- 4. 데이터 전체 관리 (SSR 등 전수 검색 유지) ---
 elif mode == "🛠️ 데이터 전체 관리":
     st.subheader("🛠️ 지식 데이터 상세 관리")
-    m_search = st.text_input("🔍 데이터 통합 검색 (예: SSR, 펌프, QA)", placeholder="검색어를 입력하세요...")
+    m_search = st.text_input("🔍 전수 키워드 검색 (예: SSR, 펌프, QA)", placeholder="검색어를 입력하세요...")
     if m_search:
         res = supabase.table("knowledge_base").select("*").or_(f"manufacturer.ilike.%{m_search}%,model_name.ilike.%{m_search}%,issue.ilike.%{m_search}%,solution.ilike.%{m_search}%,content.ilike.%{m_search}%").order("created_at", desc=True).execute()
         if res.data:
             for row in res.data:
-                with st.expander(f"[{row.get('category', '기기점검')}] {row['manufacturer']} | {row['model_name']}"):
-                    st.write(f"**제목/내용:** {row['issue']}")
+                with st.expander(f"[{row.get('category', '지식')}] {row['manufacturer']} | {row['model_name']}"):
+                    st.write(f"**제목/현상:** {row['issue']}")
                     st.info(row['solution'] if row['source_type'] in ['MANUAL', 'QA'] else row['content'][:300])
                     if st.button("🗑️ 삭제", key=f"d_{row['id']}"): supabase.table("knowledge_base").delete().eq("id", row['id']).execute(); st.rerun()
 
-# --- 5. 질문 게시판 (상세 정보 복구 버전) ---
+# --- 5. 질문 게시판 (메타데이터 표시 복구) ---
 elif mode == "💬 질문 게시판 (Q&A)":
     if st.session_state.selected_q_id:
-        # [상세 보기]
         if st.button("⬅️ 목록으로 돌아가기"): st.session_state.selected_q_id = None; st.rerun()
         q_res = supabase.table("qa_board").select("*").eq("id", st.session_state.selected_q_id).execute()
         if q_res.data:
             q = q_res.data[0]
             st.subheader(f"❓ {q['title']}")
-            # [복구된 부분] 작성자 및 등록 일자 상시 표출
+            # [복구] 상세 보기 작성자 및 일자 표시
             st.caption(f"👤 작성자: {q['author']} | 📅 등록일: {q['created_at'][:10]} | 🏷️ 분류: {q['category']}")
             st.markdown(f'<div class="q-card">{q["content"]}</div>', unsafe_allow_html=True)
             st.write("---")
-            st.write("💬 **답변 목록**")
             a_res = supabase.table("qa_answers").select("*").eq("question_id", q['id']).order("created_at").execute()
             for a in a_res.data:
                 st.markdown(f'<div class="a-card"><b>{a["author"]}</b> ({a["created_at"][5:16]}): {a["content"]}</div>', unsafe_allow_html=True)
@@ -208,21 +208,21 @@ elif mode == "💬 질문 게시판 (Q&A)":
                 if st.form_submit_button("✅ 답변 등록") and a_auth and a_cont:
                     supabase.table("qa_answers").insert({"question_id": q['id'], "author": a_auth, "content": clean_text_for_db(a_cont)}).execute()
                     sync_qa_to_knowledge(q['id'])
-                    st.success("답변 등록 및 AI 지식 동기화 완료!"); st.rerun()
+                    st.success("답변 등록 완료!"); st.rerun()
     else:
-        # [목록 보기]
         st.subheader("💬 질문 게시판")
         with st.popover("➕ 새로운 질문하기", use_container_width=True):
             with st.form("q_f", clear_on_submit=True):
-                q_cat, q_auth, q_title, q_cont = st.selectbox("분류", ["기기이상", "일반문의", "기타"]), st.text_input("작성자"), st.text_input("제목"), st.text_area("내용")
+                q_cat, q_auth, q_title, q_cont = st.selectbox("분류", ["기기이상", "일반문의"]), st.text_input("작성자"), st.text_input("제목"), st.text_area("내용")
                 if st.form_submit_button("🚀 질문 올리기") and q_auth and q_title and q_cont:
                     res = supabase.table("qa_board").insert({"author": q_auth, "title": q_title, "content": clean_text_for_db(q_cont), "category": q_cat}).execute()
                     if res.data: sync_qa_to_knowledge(res.data[0]['id'])
-                    st.success("질문이 등록되었습니다!"); st.rerun()
+                    st.success("질문 등록 완료!"); st.rerun()
         q_list = supabase.table("qa_board").select("*").order("created_at", desc=True).execute()
         for q in q_list.data:
             col1, col2 = st.columns([0.8, 0.2])
             col1.markdown(f"**[{q['category']}] {q['title']}**")
-            col1.caption(f"👤 {q['author']} | 📅 {q['created_at'][:10]}") # 목록에서도 메타데이터 유지
+            # [복구] 목록 작성자 및 일자 표시
+            col1.caption(f"👤 {q['author']} | 📅 {q['created_at'][:10]}")
             if col2.button("보기", key=f"q_{q['id']}"): st.session_state.selected_q_id = q['id']; st.rerun()
             st.write("---")
