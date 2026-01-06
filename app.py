@@ -42,99 +42,101 @@ def extract_json(text):
         return json.loads(cleaned)
     except: return None
 
-# --- [V30] 검색 버튼 복구 및 UI 최종 통합 버전 ---
+# --- [V31] 선택 즉시 닫히는 네비게이션 UI 최적화 ---
 st.set_page_config(page_title="금강수계 AI 챗봇", layout="centered", initial_sidebar_state="collapsed")
 
-if 'page_mode' not in st.session_state: st.session_state.page_mode = "🔍 검색"
+if 'page_mode' not in st.session_state: st.session_state.page_mode = "🔍 통합 지식 검색"
 if 'edit_id' not in st.session_state: st.session_state.edit_id = None
 
+# [헤더 이름 고정]
 st.markdown("""
     <style>
     header[data-testid="stHeader"] { display: none !important; }
     .fixed-header {
         position: fixed; top: 0; left: 0; width: 100%;
         background-color: #004a99; color: white;
-        padding: 10px 0; z-index: 999; text-align: center;
+        padding: 12px 0; z-index: 999; text-align: center;
         box-shadow: 0 4px 10px rgba(0,0,0,0.2);
     }
     .header-title { font-size: 1.1rem; font-weight: 800; }
-    .main .block-container { padding-top: 4.5rem !important; }
+    .main .block-container { padding-top: 4.8rem !important; }
     .source-tag { font-size: 0.7rem; padding: 2px 8px; border-radius: 6px; font-weight: 700; margin-bottom: 5px; display: inline-block; }
     .tag-manual { background-color: #e0f2fe; color: #0369a1; }
     .tag-doc { background-color: #fef3c7; color: #92400e; }
     .tag-tip { background-color: #f0fdf4; color: #166534; }
     .doc-status-card { background-color: #f8fafc; border-radius: 8px; padding: 10px; border-left: 4px solid #92400e; margin-bottom: 8px; font-size: 0.85rem; font-weight: 600; }
-    /* 버튼 정렬 커스텀 */
-    div[data-testid="column"] { display: flex; align-items: flex-end; }
+    /* 검색바/버튼 정렬 */
+    .search-row { display: flex; align-items: flex-end; gap: 10px; margin-bottom: 20px; }
     </style>
     <div class="fixed-header"><span class="header-title">🌊 금강수계 수질자동측정망 AI 챗봇</span></div>
     """, unsafe_allow_html=True)
 
-# 네비게이션 메뉴
+# --- [개선] 번거로움 없는 네비게이션 (선택 시 즉시 닫힘) ---
 with st.container():
-    col_menu, _ = st.columns([0.4, 0.6])
-    with col_menu:
-        with st.popover("☰ 메뉴 선택"):
-            if st.button("🔍 통합 지식 검색", use_container_width=True): st.session_state.page_mode = "🔍 검색"; st.rerun()
-            if st.button("📝 현장 노하우 등록", use_container_width=True): st.session_state.page_mode = "📝 등록" ; st.rerun()
-            if st.button("📄 문서(매뉴얼) 등록", use_container_width=True): st.session_state.page_mode = "📂 문서 관리"; st.rerun()
-            if st.button("🛠️ 데이터 관리", use_container_width=True): st.session_state.page_mode = "🛠️ 관리"; st.session_state.edit_id = None; st.rerun()
+    menu_options = ["🔍 통합 지식 검색", "📝 현장 노하우 등록", "📄 문서(매뉴얼) 등록", "🛠️ 데이터 전체 관리"]
+    # 현재 세션의 모드가 옵션 리스트의 몇 번째인지 인덱스 찾기
+    try:
+        current_idx = menu_options.index(st.session_state.page_mode)
+    except:
+        current_idx = 0
 
-search_threshold = st.sidebar.slider("검색 정밀도", 0.0, 1.0, 0.15, 0.05)
+    # 셀렉트박스로 변경하여 선택 즉시 UI가 사라지도록 구현
+    selected_mode = st.selectbox("☰ 메뉴 이동", options=menu_options, index=current_idx, label_visibility="collapsed")
+    
+    if selected_mode != st.session_state.page_mode:
+        st.session_state.page_mode = selected_mode
+        st.session_state.edit_id = None
+        st.rerun()
+
 mode = st.session_state.page_mode
 
-# --- 1. 통합 지식 검색 (조회 버튼 복구) ---
-if mode == "🔍 검색":
-    # [수정] 검색창과 버튼을 한 줄에 배치
+# --- 1. 통합 지식 검색 ---
+if mode == "🔍 통합 지식 검색":
     col_input, col_btn = st.columns([0.8, 0.2])
     with col_input:
-        user_q = st.text_input("상황 입력", label_visibility="collapsed", placeholder="예: TN 물이 넘침")
+        user_q = st.text_input("상황 입력", label_visibility="collapsed", placeholder="예: 코비 TN 물이 넘침")
     with col_btn:
         search_clicked = st.button("조회", use_container_width=True)
 
     if user_q and (search_clicked or user_q):
-        with st.spinner("전문 지식을 분석 중입니다..."):
+        with st.spinner("전문 지식 분석 중..."):
             query_vec = get_embedding(user_q)
-            rpc_res = supabase.rpc("match_knowledge", {"query_embedding": query_vec, "match_threshold": search_threshold, "match_count": 10}).execute()
+            rpc_res = supabase.rpc("match_knowledge", {"query_embedding": query_vec, "match_threshold": 0.15, "match_count": 10}).execute()
             cases = rpc_res.data
             
             if cases:
-                context = ""
-                for c in cases:
-                    src = "경험" if c['source_type'] == 'MANUAL' else "매뉴얼"
-                    context += f"[{src} / 제조사:{c['manufacturer']} / 모델:{c['model_name']} / 항목:{c.get('measurement_item','-')}]: {c['solution'] if src=='경험' else c['content']}\n"
-                
-                ans_p = f"""당신은 수질 장비 전문가입니다. 제공된 데이터를 참고하여 답변하세요.
-                [가이드] 1. 명칭이 불완전해도 관련성이 높으면(예: TN <-> HATN-2000) 적극 참고하세요. 2. 핵심 해결책을 3줄 이내 단답형으로 제시하세요.
+                context = "\n".join([f"[{c['source_type']}/{c['manufacturer']}/{c['model_name']}]: {c['solution'] if c['source_type']=='MANUAL' else c['content']}" for c in cases])
+                ans_p = f"""수질 전문가로서 답변하세요. 
+                1. 약칭(TN <-> HATN-2000)이라도 연관성이 높으면 적극 참고하세요.
+                2. 해결책을 3줄 이내 단답형으로 제시하세요.
                 데이터: {context} \n 질문: {user_q}"""
                 st.info(ai_model.generate_content(ans_p).text)
                 
                 st.markdown("---")
-                st.markdown("### 📚 상세 근거 데이터")
                 for c in cases:
                     is_man = c['source_type'] == 'MANUAL'
                     tag_cls = "tag-tip" if c.get('category') == '맛집/정보' else ("tag-manual" if is_man else "tag-doc")
-                    with st.expander(f"[{c.get('category', '기기점검')}] {c['manufacturer']} | {c['model_name']} ({c.get('measurement_item','-')})"):
+                    with st.expander(f"[{c.get('category', '기기점검')}] {c['manufacturer']} | {c['model_name']}"):
                         st.markdown(f'<span class="source-tag {tag_cls}">{c["registered_by"]}</span>', unsafe_allow_html=True)
                         st.write(c['solution'] if is_man else c['content'])
             else: st.warning("⚠️ 일치하는 지식이 없습니다.")
 
 # --- 2. 현장 노하우 등록 ---
-elif mode == "📝 등록":
+elif mode == "📝 현장 노하우 등록":
     st.subheader("📝 현장 노하우 및 팁 등록")
     with st.form("manual_reg", clear_on_submit=True):
-        cat = st.selectbox("1. 분류", ["기기점검", "현장꿀팁", "맛집/정보"])
+        cat = st.selectbox("분류", ["기기점검", "현장꿀팁", "맛집/정보"])
         c1, c2 = st.columns(2)
         with c1:
-            mfr_choice = st.selectbox("2. 제조사 선택", options=["시마즈", "코비", "백년기술", "케이엔알", "YSI", "직접 입력"])
+            mfr_choice = st.selectbox("제조사 선택", options=["시마즈", "코비", "백년기술", "케이엔알", "YSI", "직접 입력"])
             manual_mfr = st.text_input("└ ('직접 입력' 시에만 입력)")
         with c2:
-            model = st.text_input("3. 모델명(장소)")
-            m_item = st.text_input("4. 측정항목(TOC, TN 등)")
+            model = st.text_input("모델명(장소)")
+            m_item = st.text_input("측정항목(TOC, TN 등)")
         
-        reg = st.text_input("5. 등록자 성함")
-        iss = st.text_input("6. 제목(현상)")
-        sol = st.text_area("7. 상세 내용(조치)")
+        reg = st.text_input("등록자 성함")
+        iss = st.text_input("제목(현상)")
+        sol = st.text_area("상세 내용(조치)")
         
         if st.form_submit_button("✅ 지식 저장"):
             mfr_final = manual_mfr if mfr_choice == "직접 입력" else mfr_choice
@@ -149,12 +151,12 @@ elif mode == "📝 등록":
                 st.success("🎉 지식이 성공적으로 등록되었습니다!")
 
 # --- 3. 문서(매뉴얼) 등록 ---
-elif mode == "📂 문서 관리":
-    st.subheader("📄 문서(매뉴얼) 기반 지식 등록")
+elif mode == "📄 문서(매뉴얼) 등록":
+    st.subheader("📄 매뉴얼 기반 지식 등록")
     up_file = st.file_uploader("PDF 매뉴얼 업로드", type="pdf")
     if up_file:
         if st.button("🚀 매뉴얼 분석 시작"):
-            with st.spinner("데이터 분석 중..."):
+            with st.spinner("데이터 분석 및 널 문자 제거 중..."):
                 try:
                     pdf_reader = PyPDF2.PdfReader(io.BytesIO(up_file.read()))
                     first_pg = pdf_reader.pages[0].extract_text()
@@ -186,12 +188,13 @@ elif mode == "📂 문서 관리":
             st.markdown(f'<div class="doc-status-card">📄 {m}</div>', unsafe_allow_html=True)
 
 # --- 4. 데이터 관리 ---
-elif mode == "🛠️ 관리":
+elif mode == "🛠️ 데이터 전체 관리":
     st.subheader("🛠️ 지식 데이터 상세 관리")
     m_search = st.text_input("🔍 관리 대상 검색", placeholder="검색어를 입력하세요...")
     if m_search:
         res = supabase.table("knowledge_base").select("*").or_(f"manufacturer.ilike.%{m_search}%,model_name.ilike.%{m_search}%,category.ilike.%{m_search}%,issue.ilike.%{m_search}%").order("created_at", desc=True).execute()
         if res.data:
+            st.caption(f"검색 결과: {len(res.data)}건")
             for row in res.data:
                 with st.expander(f"[{row.get('category', '기기점검')}] {row['manufacturer']} | {row['model_name']}"):
                     st.write(f"**제목:** {row['issue']}")
