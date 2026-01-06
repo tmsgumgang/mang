@@ -31,10 +31,14 @@ except Exception as e:
 
 def clean_text_for_db(text):
     if not text: return ""
+    # [V43 보강] DB 저장을 방해하는 널 문자와 비표준 제어 문자를 완벽히 제거
+    text = text.replace("\u0000", "")
     return "".join(ch for ch in text if ch.isprintable() or ch in ['\n', '\r', '\t']).strip()
 
 def get_embedding(text):
-    result = genai.embed_content(model="models/text-embedding-004", content=text, task_type="retrieval_document")
+    # 임베딩 시에도 텍스트 정제 적용
+    clean_txt = clean_text_for_db(text)
+    result = genai.embed_content(model="models/text-embedding-004", content=clean_txt, task_type="retrieval_document")
     return result['embedding']
 
 def extract_json(text):
@@ -52,7 +56,7 @@ def sync_qa_to_knowledge(q_id):
         a_res = supabase.table("qa_answers").select("*").eq("question_id", q_id).order("created_at").execute()
         ans_txt = "\n".join([f"[{a['author']}의 답변]: {a['content']}" for a in a_res.data])
         full_txt = f"제목: {q['title']}\n내용: {q['content']}\n{ans_txt}"
-        vec = get_embedding(full_text)
+        vec = get_embedding(full_txt)
         sync_data = {
             "category": "커뮤니티Q&A", "manufacturer": "게시판", "model_name": q['category'],
             "issue": f"QA_ID_{q_id}", "solution": full_txt, "registered_by": q['author'],
@@ -63,21 +67,26 @@ def sync_qa_to_knowledge(q_id):
         else: supabase.table("knowledge_base").insert(sync_data).execute()
     except: pass
 
-# [V42 수정] 원문 보존형 저장을 위한 스레드 함수
-def save_raw_chunk(data):
+# [V43 수정] 안정성을 위해 스레드 당 처리 로직을 더 정밀하게 구성
+def save_raw_chunk_safely(data):
     chunk, mfr, model, idx, filename = data
     try:
-        vec = get_embedding(chunk)
-        supabase.table("knowledge_base").insert({
+        clean_chunk = clean_text_for_db(chunk)
+        if len(clean_chunk) < 10: return True # 너무 짧은 조각은 패스
+        
+        vec = get_embedding(clean_chunk)
+        res = supabase.table("knowledge_base").insert({
             "category": "기기점검", "manufacturer": mfr, "model_name": model,
             "issue": f"매뉴얼 원문 {idx+1}페이지 부근", "solution": "원문 참조",
-            "content": chunk, "registered_by": filename,
+            "content": clean_chunk, "registered_by": filename,
             "source_type": "DOC", "embedding": vec
         }).execute()
-        return True
-    except: return False
+        return True if res.data else False
+    except Exception as e:
+        print(f"저장 실패 조각 {idx}: {e}")
+        return False
 
-# --- UI 및 CSS ---
+# --- UI 설정 ---
 st.set_page_config(page_title="금강수계 AI 챗봇", layout="centered", initial_sidebar_state="collapsed")
 
 if 'page_mode' not in st.session_state: st.session_state.page_mode = "🔍 통합 지식 검색"
@@ -117,7 +126,7 @@ if selected_mode != st.session_state.page_mode:
 
 mode = st.session_state.page_mode
 
-# --- 1. 통합 지식 검색 (하이브리드 원문 참조 로직) ---
+# --- 1. 통합 지식 검색 ---
 if mode == "🔍 통합 지식 검색":
     col_i, col_b = st.columns([0.8, 0.2])
     with col_i: user_q = st.text_input("상황 입력", label_visibility="collapsed", placeholder="예: 코비 TN 물이 넘침")
@@ -127,15 +136,13 @@ if mode == "🔍 통합 지식 검색":
             query_vec = get_embedding(user_q)
             rpc_res = supabase.rpc("match_knowledge", {"query_embedding": query_vec, "match_threshold": 0.10, "match_count": 10}).execute()
             if rpc_res.data:
-                # [V42] AI에게 원문 그대로를 전달하여 디테일 보존
                 context = ""
                 for c in rpc_res.data:
                     src = "경험" if c['source_type'] == 'MANUAL' else ("게시판" if c['source_type'] == 'QA' else "매뉴얼원문")
                     context += f"[{src} / {c['manufacturer']} / {c['model_name']}]: {c['solution'] if src != '매뉴얼원문' else c['content']}\n"
                 
-                ans_p = f"""수질 전문가로서 답변하세요.
-                [중요] 제공된 데이터는 매뉴얼의 '원문'입니다. 에러 코드, 수치, 특수 기호 등을 절대 생략하지 말고 정확하게 답변하세요.
-                내용이 방대하다면 핵심 조치를 우선 순위대로 3줄 이내 요약하세요.
+                ans_p = f"""수질 전문가로서 답변하세요. 
+                [중요] 데이터는 매뉴얼 원문입니다. 에러 코드나 수치를 정확히 전달하세요. 3줄 이내 요약 답변.
                 데이터: {context} \n 질문: {user_q}"""
                 st.info(ai_model.generate_content(ans_p).text)
                 st.markdown("---")
@@ -155,8 +162,8 @@ elif mode == "📝 현장 노하우 등록":
         with c1:
             mfr_choice = st.selectbox("제조사 선택", options=["시마즈", "코비", "백년기술", "케이엔알", "YSI", "직접 입력"])
             manual_mfr = st.text_input("└ (직접 입력 시)")
-        with c2: model, m_item = st.text_input("모델명(장소)"), st.text_input("측정항목")
-        reg, iss, sol = st.text_input("등록자"), st.text_input("제목"), st.text_area("상세 내용")
+        with c2: model, m_item = st.text_input("모델명"), st.text_input("측정항목")
+        reg, iss, sol = st.text_input("등록자"), st.text_input("제목"), st.text_area("내용")
         if st.form_submit_button("✅ 저장"):
             mfr = manual_mfr if mfr_choice == "직접 입력" else mfr_choice
             if mfr and iss and sol:
@@ -164,26 +171,24 @@ elif mode == "📝 현장 노하우 등록":
                 supabase.table("knowledge_base").insert({"category": cat, "manufacturer": clean_text_for_db(mfr), "model_name": clean_text_for_db(model), "measurement_item": clean_text_for_db(m_item), "issue": clean_text_for_db(iss), "solution": clean_text_for_db(sol), "registered_by": clean_text_for_db(reg), "source_type": "MANUAL", "embedding": vec}).execute()
                 st.success("🎉 저장 완료!")
 
-# --- 3. 문서(매뉴얼) 등록 (원문 보존형 고속 등록) ---
+# --- 3. 문서(매뉴얼) 등록 (안정성 강화 버전) ---
 elif mode == "📄 문서(매뉴얼) 등록":
-    st.subheader("📄 매뉴얼 지식 엔진 (원문 보존형)")
-    st.info("💡 AI 정제 과정을 생략하고 원문을 그대로 저장하여 데이터 손실을 방지합니다.")
+    st.subheader("📄 매뉴얼 지식 엔진 (안정성 보강)")
+    st.info("💡 원문을 그대로 보존하여 정밀한 답변을 보장합니다.")
     up_file = st.file_uploader("PDF 매뉴얼 업로드", type=["pdf"])
-    if up_file and st.button("🚀 원문 데이터 고속 등록"):
+    if up_file and st.button("🚀 원문 데이터 정밀 저장"):
         try:
             pdf_reader = PyPDF2.PdfReader(io.BytesIO(up_file.read()))
             all_text = ""
             for page in pdf_reader.pages:
                 txt = page.extract_text()
                 if txt: all_text += txt + "\n"
-            all_text = clean_text_for_db(all_text)
             
             meta_p = f"제조사와 모델명을 JSON으로: {all_text[:3000]}\n결과: {{\"mfr\":\"제조사\", \"model\":\"모델명\"}}"
             info_res = extract_json(ai_model.generate_content(meta_p).text)
-            mfr = info_res.get("mfr", "기타") if info_res else "기타"
-            model = info_res.get("model", "매뉴얼") if info_res else "매뉴얼"
+            mfr, model = info_res.get("mfr", "기타") if info_res else "기타", info_res.get("model", "매뉴얼") if info_res else "매뉴얼"
 
-            # 원문 보존을 위해 청크 크기를 늘리고 정제 없이 병렬 저장
+            # 청크 크기와 오버랩 유지
             chunk_size, overlap = 1000, 200
             chunks = [all_text[i:i + chunk_size] for i in range(0, len(all_text), chunk_size - overlap)]
             
@@ -191,12 +196,15 @@ elif mode == "📄 문서(매뉴얼) 등록":
             status_text = st.empty()
             chunk_data_list = [(chk, mfr, model, i, up_file.name) for i, chk in enumerate(chunks)]
             
-            with ThreadPoolExecutor(max_workers=10) as executor:
-                for i, _ in enumerate(executor.map(save_raw_chunk, chunk_data_list)):
+            # [V43 핵심] 속도를 줄이고 안정성을 확보 (max_workers=3)
+            with ThreadPoolExecutor(max_workers=3) as executor:
+                success_count = 0
+                for i, result in enumerate(executor.map(save_raw_chunk_safely, chunk_data_list)):
+                    if result: success_count += 1
                     prog_bar.progress((i + 1) / len(chunks))
-                    status_text.text(f"📥 원문 데이터 저장 중... ({i+1}/{len(chunks)} 조각)")
+                    status_text.text(f"📥 정밀 저장 중... ({i+1}/{len(chunks)}) - 성공: {success_count}")
             
-            st.success(f"✅ {len(chunks)}개의 고품질 원문 지식이 등록되었습니다!")
+            st.success(f"✅ 총 {success_count}개의 지식 조각이 DB에 안전하게 저장되었습니다!")
             st.rerun()
         except Exception as e: st.error(f"오류: {e}")
     st.markdown("---")
@@ -208,13 +216,13 @@ elif mode == "📄 문서(매뉴얼) 등록":
 # --- 4. 데이터 전체 관리 ---
 elif mode == "🛠️ 데이터 전체 관리":
     st.subheader("🛠️ 지식 데이터 상세 관리")
-    m_search = st.text_input("🔍 전수 키워드 검색 (SSR 등)", placeholder="검색어를 입력하세요...")
+    m_search = st.text_input("🔍 전수 검색 (SSR 등)", placeholder="키워드 입력...")
     if m_search:
         res = supabase.table("knowledge_base").select("*").or_(f"manufacturer.ilike.%{m_search}%,model_name.ilike.%{m_search}%,issue.ilike.%{m_search}%,solution.ilike.%{m_search}%,content.ilike.%{m_search}%").order("created_at", desc=True).execute()
         if res.data:
             for row in res.data:
                 with st.expander(f"[{row.get('category', '지식')}] {row['manufacturer']} | {row['model_name']}"):
-                    st.write(f"**제목/현상:** {row['issue']}")
+                    st.write(f"**제목:** {row['issue']}")
                     st.info(row['solution'] if row['source_type'] in ['MANUAL', 'QA'] else row['content'])
                     if st.button("🗑️ 삭제", key=f"d_{row['id']}"): supabase.table("knowledge_base").delete().eq("id", row['id']).execute(); st.rerun()
 
@@ -226,14 +234,14 @@ elif mode == "💬 질문 게시판 (Q&A)":
         if q_res.data:
             q = q_res.data[0]
             st.subheader(f"❓ {q['title']}")
-            # [기능 유지] 작성자 및 등록일 표출
+            # [기능 유지] 작성자 및 일자 표출
             st.caption(f"👤 작성자: {q['author']} | 📅 등록일: {q['created_at'][:10]} | 🏷️ 분류: {q['category']}")
             st.markdown(f'<div class="q-card">{q["content"]}</div>', unsafe_allow_html=True)
             a_res = supabase.table("qa_answers").select("*").eq("question_id", q['id']).order("created_at").execute()
             for a in a_res.data:
                 st.markdown(f'<div class="a-card"><b>{a["author"]}</b> ({a["created_at"][5:16]}): {a["content"]}</div>', unsafe_allow_html=True)
             with st.form("ans_f", clear_on_submit=True):
-                a_auth, a_cont = st.text_input("작성자 성함"), st.text_area("답변 내용")
+                a_auth, a_cont = st.text_input("작성자"), st.text_area("답변 내용")
                 if st.form_submit_button("✅ 답변 등록") and a_auth and a_cont:
                     supabase.table("qa_answers").insert({"question_id": q['id'], "author": a_auth, "content": clean_text_for_db(a_cont)}).execute()
                     sync_qa_to_knowledge(q['id'])
