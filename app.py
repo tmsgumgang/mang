@@ -36,7 +36,8 @@ def clean_text_for_db(text):
 
 def get_embedding(text):
     clean_txt = clean_text_for_db(text)
-    if not clean_txt: return [0.0] * 1536
+    # [V48] 768차원 임베딩 생성 (text-embedding-004 모델)
+    if not clean_txt: return [0.0] * 768
     result = genai.embed_content(model="models/text-embedding-004", content=clean_txt, task_type="retrieval_document")
     return result['embedding']
 
@@ -46,7 +47,7 @@ def extract_json(text):
         return json.loads(cleaned)
     except: return None
 
-# [이원화] 게시판 지식을 'experience_base'로 동기화
+# [기능 유지] 게시판 지식을 'experience_base'로 동기화
 def sync_qa_to_experience(q_id):
     try:
         q_res = supabase.table("qa_board").select("*").eq("id", q_id).execute()
@@ -59,8 +60,7 @@ def sync_qa_to_experience(q_id):
         
         sync_data = {
             "category": "Q&A", "manufacturer": "커뮤니티", "model_name": q['category'],
-            "issue": q['title'], "solution": full_txt, "registered_by": q['author'],
-            "embedding": vec
+            "issue": q['title'], "solution": full_txt, "registered_by": q['author'], "embedding": vec
         }
         existing = supabase.table("experience_base").select("id").eq("issue", q['title']).execute()
         if existing.data: supabase.table("experience_base").update(sync_data).eq("id", existing.data[0]['id']).execute()
@@ -69,7 +69,6 @@ def sync_qa_to_experience(q_id):
 
 # --- UI 설정 및 CSS ---
 st.set_page_config(page_title="금강수계 AI 챗봇", layout="centered", initial_sidebar_state="collapsed")
-
 if 'page_mode' not in st.session_state: st.session_state.page_mode = "🔍 통합 지식 검색"
 if 'selected_q_id' not in st.session_state: st.session_state.selected_q_id = None
 
@@ -94,7 +93,8 @@ st.markdown("""
 
 # 네비게이션
 menu_options = ["🔍 통합 지식 검색", "📝 현장 노하우 등록", "📄 문서(매뉴얼) 등록", "🛠️ 데이터 전체 관리", "💬 질문 게시판 (Q&A)"]
-selected_mode = st.selectbox("☰ 메뉴 이동", options=menu_options, index=menu_options.index(st.session_state.page_mode), label_visibility="collapsed")
+current_idx = menu_options.index(st.session_state.page_mode) if st.session_state.page_mode in menu_options else 0
+selected_mode = st.selectbox("☰ 메뉴 이동", options=menu_options, index=current_idx, label_visibility="collapsed")
 if selected_mode != st.session_state.page_mode:
     st.session_state.page_mode = selected_mode
     st.session_state.selected_q_id = None
@@ -109,7 +109,7 @@ if mode == "🔍 통합 지식 검색":
     with col_b: search_clicked = st.button("조회", use_container_width=True)
     
     if user_q and (search_clicked or user_q):
-        with st.spinner("지식을 정밀 분석 중..."):
+        with st.spinner("768차원 정밀 지식 분석 중..."):
             query_vec = get_embedding(user_q)
             exp_res = supabase.rpc("match_experience", {"query_embedding": query_vec, "match_threshold": 0.05, "match_count": 5}).execute()
             man_res = supabase.rpc("match_manual", {"query_embedding": query_vec, "match_threshold": 0.05, "match_count": 5}).execute()
@@ -146,31 +146,24 @@ elif mode == "📝 현장 노하우 등록":
                 supabase.table("experience_base").insert({"category": cat, "manufacturer": clean_text_for_db(mfr), "model_name": clean_text_for_db(model), "measurement_item": clean_text_for_db(m_item), "issue": clean_text_for_db(iss), "solution": clean_text_for_db(sol), "registered_by": clean_text_for_db(reg), "embedding": vec}).execute()
                 st.success("🎉 경험 지식이 등록되었습니다!")
 
-# --- 3. 문서(매뉴얼) 등록 (NoneType 오류 방지 보강) ---
+# --- 3. 문서(매뉴얼) 등록 (규격 최적화 완료) ---
 elif mode == "📄 문서(매뉴얼) 등록":
-    st.subheader("📄 매뉴얼 등록 (원문 지식)")
-    st.warning("💡 대용량 PDF는 초기 분석에 시간이 걸립니다. 버튼 클릭 후 잠시만 기다려 주세요.")
+    st.subheader("📄 매뉴얼 등록 (768차원 최적화)")
     up_file = st.file_uploader("PDF 업로드", type=["pdf"])
     
     if up_file and st.button("🚀 매뉴얼 저장 시작"):
-        with st.status("📑 매뉴얼 분석 중...", expanded=True) as status:
+        with st.status("📑 매뉴얼 분석 및 저장 중...", expanded=True) as status:
             try:
                 status.write("1. PDF 텍스트 추출 중...")
                 pdf_reader = PyPDF2.PdfReader(io.BytesIO(up_file.read()))
                 all_text = "\n".join([p.extract_text() for p in pdf_reader.pages if p.extract_text()])
                 
-                if not all_text.strip():
-                    st.error("텍스트를 추출할 수 없는 PDF입니다."); st.stop()
-                
-                status.write("2. 장비 메타데이터 분석 중...")
+                status.write("2. 메타데이터 분석 및 768차원 벡터 생성 중...")
                 info_res = extract_json(ai_model.generate_content(f"제조사와 모델명 추출(JSON): {all_text[:3000]}").text)
-                
-                # [오류 방어] NoneType object has no attribute 'get' 방지
                 if info_res is None: info_res = {}
-                mfr = info_res.get("mfr", "기타")
-                model = info_res.get("model", "매뉴얼")
+                mfr, model = info_res.get("mfr", "기타"), info_res.get("model", "매뉴얼")
 
-                status.write("3. 지식 저장 중...")
+                status.write("3. DB 규격 맞춰 저장 중...")
                 chunks = [all_text[i:i+1000] for i in range(0, len(all_text), 800)]
                 prog_bar, success_count = st.progress(0), 0
 
@@ -178,6 +171,10 @@ elif mode == "📄 문서(매뉴얼) 등록":
                     clean_chunk = clean_text_for_db(chunk)
                     if len(clean_chunk) < 10: continue
                     vec = get_embedding(clean_chunk)
+                    # [V48 핵심] 저장 전 차원 개수 검증
+                    if len(vec) != 768:
+                        st.error(f"임베딩 차원 오류 (현재: {len(vec)}, 필요: 768)"); st.stop()
+                    
                     res = supabase.table("manual_base").insert({
                         "manufacturer": mfr, "model_name": model, "content": clean_chunk, 
                         "file_name": up_file.name, "page_num": (i//2)+1, "embedding": vec
@@ -186,37 +183,30 @@ elif mode == "📄 문서(매뉴얼) 등록":
                     prog_bar.progress((i+1)/len(chunks))
                 
                 status.update(label="✅ 저장 완료!", state="complete", expanded=False)
-                st.success(f"🎉 {success_count}개의 지식이 등록되었습니다!"); time.sleep(1); st.rerun()
+                st.success(f"🎉 {success_count}개의 지식이 성공적으로 등록되었습니다!"); time.sleep(1); st.rerun()
             except Exception as e: st.error(f"❌ 처리 중 오류 발생: {e}")
 
-    st.markdown("---")
-    doc_res = supabase.table("manual_base").select("file_name").execute()
-    if doc_res.data:
-        st.markdown("### 📋 등록된 매뉴얼 현황")
-        for m in sorted(list(set([d['file_name'] for d in doc_res.data]))):
-            st.markdown(f'<div class="doc-status-card">📄 {m}</div>', unsafe_allow_html=True)
-
-# --- 4. 데이터 전체 관리 ---
+# --- 4. 데이터 전체 관리 (탭 방식 유지) ---
 elif mode == "🛠️ 데이터 전체 관리":
-    tab1, tab2 = st.tabs(["📝 경험 관리", "📄 매뉴얼 관리"])
+    tab1, tab2 = st.tabs(["📝 경험 지식 관리", "📄 매뉴얼 관리"])
     with tab1:
-        m_search = st.text_input("🔍 경험 검색 (SSR 등)", key="e_s")
-        if m_search:
-            res = supabase.table("experience_base").select("*").or_(f"manufacturer.ilike.%{m_search}%,issue.ilike.%{m_search}%,solution.ilike.%{m_search}%").execute()
+        m_s = st.text_input("🔍 경험 검색", key="e_search")
+        if m_s:
+            res = supabase.table("experience_base").select("*").or_(f"manufacturer.ilike.%{m_s}%,issue.ilike.%{m_s}%,solution.ilike.%{m_s}%").execute()
             for r in res.data:
                 with st.expander(f"{r['manufacturer']} | {r['issue']}"):
                     st.write(r['solution'])
                     if st.button("🗑️ 삭제", key=f"e_{r['id']}"): supabase.table("experience_base").delete().eq("id", r['id']).execute(); st.rerun()
     with tab2:
-        d_search = st.text_input("🔍 매뉴얼 검색", key="m_s")
-        if d_search:
-            res = supabase.table("manual_base").select("*").or_(f"manufacturer.ilike.%{d_search}%,content.ilike.%{d_search}%").execute()
+        d_s = st.text_input("🔍 매뉴얼 검색", key="m_search")
+        if d_s:
+            res = supabase.table("manual_base").select("*").or_(f"manufacturer.ilike.%{d_s}%,content.ilike.%{d_s}%").execute()
             for r in res.data:
                 with st.expander(f"{r['manufacturer']} | {r['model_name']} (일부)"):
                     st.write(r['content'][:300])
                     if st.button("🗑️ 삭제", key=f"m_{r['id']}"): supabase.table("manual_base").delete().eq("id", r['id']).execute(); st.rerun()
 
-# --- 5. 질문 게시판 ---
+# --- 5. 질문 게시판 (기능 유지) ---
 elif mode == "💬 질문 게시판 (Q&A)":
     if st.session_state.selected_q_id:
         if st.button("⬅️ 목록으로 돌아가기"): st.session_state.selected_q_id = None; st.rerun()
