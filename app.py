@@ -46,35 +46,39 @@ def extract_json(text):
         return json.loads(cleaned)
     except: return None
 
-# [V68] 장비 및 브랜드 정보의 유연한 추출
-def parse_device_info_v68(text):
-    mfr_map = {
-        "시마즈": "시마즈", "백년기술": "백년기술", "코비": "코비", "케이엔알": "케이엔알", "YSI": "YSI",
-        "robochem": "백년기술", "로보켐": "백년기술", "hatox": "코비", "hata": "코비", "hatn": "코비", "toc-l": "시마즈"
-    }
+# [V69] 질문의 의도(업무 vs 맛집) 및 브랜드/모델 정밀 분석
+def analyze_intent_v69(text):
+    # 1. 생활정보 키워드 감지
+    life_keywords = ["맛집", "식당", "카페", "메뉴", "추천", "금산", "옥천", "영동", "청주", "대전", "주차"]
+    is_lifestyle = any(k in text for k in life_keywords)
+    
+    # 2. 제조사/모델명 추출
+    mfr_map = {"시마즈": "시마즈", "백년기술": "백년기술", "코비": "코비", "케이엔알": "케이엔알", "YSI": "YSI", "robochem": "백년기술", "hatox": "코비", "hata": "코비"}
     found_mfr = next((v for k, v in mfr_map.items() if k.lower() in text.lower()), None)
-    # 모델명 추출: 공백이나 하이픈 유무에 상관없이 핵심 패턴 추출
-    model_match = re.search(r'([A-Za-z0-9]{2,})[\s-]*(\d{4})', text.upper())
-    found_model = f"{model_match.group(1)}-{model_match.group(2)}" if model_match else None
-    return found_mfr, found_model
+    model_match = re.search(r'([A-Z0-9]{2,})[\s-]*(\d{4}|[A-Z]+)', text.upper())
+    found_model = model_match.group() if model_match else None
+    
+    return is_lifestyle, found_mfr, found_model
 
-# 게시판 지식 동기화
+# 게시판 지식 동기화 (작성자/좋아요 포함)
 def sync_qa_to_knowledge(q_id):
     try:
         q_data = supabase.table("qa_board").select("*").eq("id", q_id).execute().data[0]
         a_data = supabase.table("qa_answers").select("*").eq("question_id", q_id).order("created_at").execute().data
-        ans_list = [f"[{'답글' if a.get('parent_id') else '전문가'}] {a['author']}: {a['content']}" for a in a_data]
-        full_sync_txt = f"상황: {q_data['content']}\n조치팁:\n" + "\n".join(ans_list)
-        mfr, model = parse_device_info_v68(q_data['title'] + q_data['content'])
+        ans_list = [f"[{'답글' if a.get('parent_id') else '조치팁'}] {a['author']} (👍{a.get('likes', 0)}): {a['content']}" for a in a_data]
+        full_sync_txt = f"상황: {q_data['content']}\n동료들의 해결노하우:\n" + "\n".join(ans_list)
+        is_life, mfr, model = analyze_intent_v69(q_data['title'] + q_data['content'])
+        
         supabase.table("knowledge_base").upsert({
-            "qa_id": q_id, "category": "게시판답변", "manufacturer": mfr if mfr else "커뮤니티",
+            "qa_id": q_id, "category": "맛집/정보" if is_life else "게시판답변",
+            "manufacturer": mfr if mfr else ("커뮤니티" if not is_life else "생활정보"),
             "model_name": model if model else q_data['category'], "issue": q_data['title'],
             "solution": full_sync_txt, "registered_by": q_data['author'],
             "embedding": get_embedding(f"{mfr} {model} {q_data['title']} {full_sync_txt}")
         }, on_conflict="qa_id").execute()
     except: pass
 
-# --- UI 설정 ---
+# --- UI 설정 및 CSS ---
 st.set_page_config(page_title="금강수계 AI 챗봇", layout="centered", initial_sidebar_state="collapsed")
 if 'page_mode' not in st.session_state: st.session_state.page_mode = "🔍 통합 지식 검색"
 
@@ -104,92 +108,83 @@ if selected_mode != st.session_state.page_mode:
     st.session_state.page_mode = selected_mode
     st.rerun()
 
-# --- 1. 통합 지식 검색 (V68: 모델명 우선 필터링) ---
+# --- 1. 통합 지식 검색 (V69: 의도 기반 분리 검색) ---
 if st.session_state.page_mode == "🔍 통합 지식 검색":
     col_i, col_b = st.columns([0.8, 0.2])
-    with col_i: user_q = st.text_input("상황 입력", label_visibility="collapsed", placeholder="예: HATOX 2000 노하우")
+    with col_i: user_q = st.text_input("상황 입력", label_visibility="collapsed", placeholder="장비 문제나 주변 맛집을 물어보세요")
     with col_b: search_clicked = st.button("조회", use_container_width=True)
     
     if user_q and (search_clicked or user_q):
-        with st.spinner("지능형 3트랙 필터링 분석 중..."):
+        with st.spinner("최적의 정보를 선별 중..."):
             try:
-                target_mfr, target_model = parse_device_info_v68(user_q)
+                is_life, target_mfr, target_model = analyze_intent_v69(user_q)
                 query_vec = get_embedding(user_q)
+                
                 exp_cands = supabase.rpc("match_knowledge", {"query_embedding": query_vec, "match_threshold": 0.05, "match_count": 40}).execute().data or []
                 man_cands = supabase.rpc("match_manual", {"query_embedding": query_vec, "match_threshold": 0.05, "match_count": 30}).execute().data or []
                 
-                t1_exp, t2_man, t3_qa = [], [], []
-
-                for d in exp_cands:
-                    is_qa = d.get('qa_id') is not None
-                    # [V68] 모델명이 정확히 일치하면 제조사와 상관없이 무조건 통과
-                    model_hit = target_model and (target_model.replace("-","") in d['model_name'].replace("-","").upper())
-                    mfr_match = (not target_mfr) or (target_mfr in d['manufacturer'])
-                    
-                    if is_qa: # Track 3: 게시판 (연관성 중심)
-                        if model_hit or mfr_match or d['manufacturer'] == "커뮤니티": t3_qa.append(d)
-                    elif model_hit or mfr_match: # Track 1: 현장경험
-                        t1_exp.append(d)
-
-                for d in man_cands: # Track 2: 매뉴얼
-                    model_hit = target_model and (target_model.replace("-","") in d['model_name'].replace("-","").upper())
-                    mfr_match = (not target_mfr) or (target_mfr in d['manufacturer']) or (d['manufacturer'] == "기타")
-                    if model_hit or mfr_match: t2_man.append(d)
-
-                final_results = t3_qa[:5] + t1_exp[:5] + t2_man[:5]
+                final_results = []
                 
+                if is_life:
+                    # [생활 정보 모드] '맛집/정보' 카테고리만 통과
+                    final_results = [d for d in exp_cands if d['category'] == "맛집/정보"]
+                else:
+                    # [업무 지식 모드] 맛집 정보는 원천 차단 + 브랜드/모델 필터링
+                    for d in exp_cands:
+                        if d['category'] == "맛집/정보": continue
+                        mfr_match = (not target_mfr) or (target_mfr in d['manufacturer'])
+                        model_match = target_model and (target_model.replace("-","") in d['model_name'].replace("-","").upper())
+                        if mfr_match or model_match or d.get('qa_id'): final_results.append(d)
+                    
+                    for d in man_cands:
+                        mfr_match = (not target_mfr) or (target_mfr in d['manufacturer']) or (d['manufacturer'] == "기타")
+                        model_match = target_model and (target_model.replace("-","") in d['model_name'].replace("-","").upper())
+                        if mfr_match or model_match: final_results.append(d)
+
                 if final_results:
                     context = ""
                     for d in final_results:
-                        src = "게시판답변" if d.get('qa_id') else ("매뉴얼" if 'content' in d else "현장경험")
+                        src = "게시판" if d.get('qa_id') else ("매뉴얼" if 'content' in d else ("맛집" if d['category'] == "맛집/정보" else "현장경험"))
                         context += f"[{src}/{d['manufacturer']}/{d['model_name']}]: {d.get('solution', d.get('content'))}\n"
                     
-                    ans_p = f"""수질 전문가로서 답변하세요.
-                    1. 질문의 장비({target_model if target_model else target_mfr})와 관련된 정보만 추출하세요.
-                    2. 제조사가 '커뮤니티'나 '기타'여도 모델명이 같으면 금강수계의 정답으로 인정하세요.
-                    3. 다른 브랜드의 해결책은 절대 섞지 마세요. 3줄 요약.
+                    # [V69] AI 지침 수정: 의도에 따른 답변 태도 고정
+                    ans_p = f"""당신은 금강수계 도우미입니다. 
+                    1. 질문의 의도가 {'생활정보' if is_life else '업무지식'}이므로 관련 없는 정보는 답변에서 완전히 제외하세요.
+                    2. 업무 질문 시 동료들의 '게시판' 답변을 최우선 정답으로 제시하세요.
+                    3. 브랜드나 모델이 완벽히 일치하지 않아도 맥락이 비슷하면 '참고용'으로 안내하세요. 3줄 요약.
                     데이터: {context} \n 질문: {user_q}"""
                     st.info(ai_model.generate_content(ans_p).text)
                     st.markdown("---")
                     for d in final_results:
-                        tag_name = "게시판답변" if d.get('qa_id') else ("매뉴얼" if 'content' in d else "현장경험")
+                        is_q, is_m, is_i = d.get('qa_id'), 'content' in d, d['category'] == "맛집/정보"
+                        tag_name = "게시판답변" if is_q else ("매뉴얼" if is_m else ("맛집정보" if is_i else "현장경험"))
                         with st.expander(f"[{tag_name}] {d['manufacturer']} | {d['model_name']}"):
                             st.write(d.get('solution', d.get('content')))
-                else: st.warning("⚠️ 관련 지식을 찾지 못했습니다.")
-            except Exception as e: st.error(f"조회 실패: {e}")
+                else: st.warning("⚠️ 관련 정보를 찾지 못했습니다. 키워드를 바꾸어 검색해 보세요.")
+            except Exception as e: st.error(f"조회 중 오류 발생: {e}")
 
-# --- 2. 현장 노하우 등록 (분류별 UI 분기 보존) ---
+# --- 2. 현장 노하우 등록 (UI 분기 유지) ---
 elif st.session_state.page_mode == "📝 현장 노하우 등록":
     st.subheader("📝 현장 노하우 등록")
     cat_sel = st.selectbox("등록 분류", ["기기점검", "현장꿀팁", "맛집/정보"])
-    with st.form("exp_reg_v68", clear_on_submit=True):
+    with st.form("exp_reg_v69", clear_on_submit=True):
         if cat_sel in ["기기점검", "현장꿀팁"]:
             c1, c2 = st.columns(2)
-            with c1:
-                m_choice = st.selectbox("제조사", ["시마즈", "코비", "백년기술", "케이엔알", "YSI", "직접 입력"])
-                m_input = st.text_input("└ 직접 입력 시")
-            with c2:
-                model_n, item_n = st.text_input("모델명"), st.text_input("측정항목")
-            reg_n, iss_t, sol_d = st.text_input("등록자"), st.text_input("현상 (제목)"), st.text_area("조치 내용")
+            m_choice = c1.selectbox("제조사", ["시마즈", "코비", "백년기술", "케이엔알", "YSI", "직접 입력"])
+            m_input = c1.text_input("└ 직접 입력 시")
+            model_n, item_n = c2.text_input("모델명"), c2.text_input("측정항목")
+            reg_n, iss_t, sol_d = st.text_input("등록자 성함"), st.text_input("현상 (제목)"), st.text_area("조치 내용")
         else:
-            # 맛집 정보 UI
-            st.success("🍴 주변 맛집 정보를 공유해주세요!")
             c1, c2 = st.columns(2)
-            res_n, res_l = c1.text_input("식당 이름"), c2.text_input("위치")
-            res_m = st.text_input("대표 메뉴")
-            reg_n, iss_t, sol_d = st.text_input("등록자"), st.text_input("정보 요약"), st.text_area("상세 정보")
+            res_n, res_l = c1.text_input("식당/장소 이름"), c2.text_input("위치 (지역/주소)")
+            res_m = st.text_input("대표 메뉴/분류")
+            reg_n, iss_t, sol_d = st.text_input("등록자"), st.text_input("정보 요약 (제목)"), st.text_area("상세 내용")
 
         if st.form_submit_button("✅ 저장"):
             final_m = (m_input if m_choice == "직접 입력" else m_choice) if cat_sel != "맛집/정보" else res_n
-            final_mod = model_n if cat_sel != "맛집/정보" else res_l
-            final_it = item_n if cat_sel != "맛집/정보" else res_m
+            final_mod, final_it = (model_n, item_n) if cat_sel != "맛집/정보" else (res_l, res_m)
             if final_m and iss_t and sol_d:
-                supabase.table("knowledge_base").insert({
-                    "category": cat_sel, "manufacturer": clean_text_for_db(final_m), "model_name": clean_text_for_db(final_mod),
-                    "measurement_item": clean_text_for_db(final_it), "issue": clean_text_for_db(iss_t),
-                    "solution": clean_text_for_db(sol_d), "registered_by": clean_text_for_db(reg_n),
-                    "embedding": get_embedding(f"{cat_sel} {final_m} {final_mod} {iss_t} {sol_d}")
-                }).execute()
+                supabase.table("knowledge_base").insert({"category": cat_sel, "manufacturer": clean_text_for_db(final_m), "model_name": clean_text_for_db(final_mod), "measurement_item": clean_text_for_db(final_it), "issue": clean_text_for_db(iss_t), "solution": clean_text_for_db(sol_d), "registered_by": clean_text_for_db(reg_n), "embedding": get_embedding(f"{cat_sel} {final_m} {final_mod} {iss_t} {sol_d}")}).execute()
                 st.success("🎉 등록 완료!")
 
 # --- 3. 문서(매뉴얼) 등록 ---
@@ -205,7 +200,7 @@ elif st.session_state.page_mode == "📄 문서(매뉴얼) 등록":
                 st.session_state.s_m, st.session_state.s_mod, st.session_state.l_f = info.get("mfr", "기타"), info.get("model", "매뉴얼"), up_f.name
         c1, c2 = st.columns(2)
         f_mfr, f_model = st.text_input("🏢 제조사", value=st.session_state.s_m), st.text_input("🏷️ 모델명", value=st.session_state.s_mod)
-        if st.button("🚀 저장 시작"):
+        if st.button("🚀 매뉴얼 저장 시작"):
             with st.status("📑 저장 중...") as status:
                 pdf_reader = PyPDF2.PdfReader(io.BytesIO(up_f.read()))
                 all_t = "\n".join([p.extract_text() for p in pdf_reader.pages if p.extract_text()])
@@ -218,20 +213,19 @@ elif st.session_state.page_mode == "📄 문서(매뉴얼) 등록":
 
 # --- 4. 데이터 전체 관리 ---
 elif st.session_state.page_mode == "🛠️ 데이터 전체 관리":
-    if st.button("🔄 게시판 지식 재동기화 (모델명 태깅 보강)"):
+    if st.button("🔄 게시판 지식 재동기화 (의도 분류 보강)"):
         qa_list = supabase.table("qa_board").select("id").execute().data
         for qa in qa_list: sync_qa_to_knowledge(qa['id'])
-        st.success("✅ 모든 게시판 답변이 정확한 모델명과 함께 갱신되었습니다!")
-    st.markdown("---")
-    t1, t2 = st.tabs(["📝 경험/맛집", "📄 매뉴얼"])
+        st.success("✅ 동기화 완료!")
+    t1, t2 = st.tabs(["📝 경험/맛집 관리", "📄 매뉴얼 관리"])
     with t1:
-        ms = st.text_input("🔍 검색")
+        ms = st.text_input("🔍 경험/맛집 검색")
         if ms:
             res = supabase.table("knowledge_base").select("*").or_(f"manufacturer.ilike.%{ms}%,issue.ilike.%{ms}%,solution.ilike.%{ms}%").execute()
             for r in res.data:
-                tc = "tag-info" if r['category'] == "맛집/정보" else "tag-exp"
+                tag_cls = "tag-info" if r['category'] == "맛집/정보" else "tag-exp"
                 with st.expander(f"[{r['manufacturer']}] {r['issue']}"):
-                    st.markdown(f'<span class="source-tag {tc}">{r["category"]}</span>', unsafe_allow_html=True)
+                    st.markdown(f'<span class="source-tag {tag_cls}">{r["category"]}</span>', unsafe_allow_html=True)
                     st.write(r['solution'])
                     if st.button("🗑️ 삭제", key=f"e_{r['id']}"): supabase.table("knowledge_base").delete().eq("id", r['id']).execute(); st.rerun()
     with t2:
@@ -252,14 +246,14 @@ elif st.session_state.page_mode == "💬 질문 게시판 (Q&A)":
         if st.button(f"👍 {q.get('likes', 0)}", key="q_lk"):
             supabase.table("qa_board").update({"likes": q.get('likes', 0) + 1}).eq("id", q['id']).execute(); sync_qa_to_knowledge(q['id']); st.rerun()
         st.info(q['content'])
-        ans = supabase.table("qa_answers").select("*").eq("question_id", q['id']).order("created_at").execute().data
-        for a in [x for x in ans if not x.get('parent_id')]:
+        ans_data = supabase.table("qa_answers").select("*").eq("question_id", q['id']).order("created_at").execute().data
+        for a in [x for x in ans_data if not x.get('parent_id')]:
             st.markdown(f'<div class="a-card"><b>{a["author"]}</b>: {a["content"]}</div>', unsafe_allow_html=True)
             if st.button(f"👍 {a.get('likes', 0)}", key=f"al_{a['id']}"):
                 supabase.table("qa_answers").update({"likes": a.get('likes', 0) + 1}).eq("id", a['id']).execute(); sync_qa_to_knowledge(q['id']); st.rerun()
-            for r in [x for x in ans if x.get('parent_id') == a['id']]:
+            for r in [x for x in ans_data if x.get('parent_id') == a['id']]:
                 st.markdown(f'<div style="margin-left: 30px; font-size: 0.9rem;">↳ <b>{r["author"]}</b>: {r["content"]}</div>', unsafe_allow_html=True)
-        with st.form("new_ans_v68"):
+        with st.form("new_ans_v69"):
             at, ct = st.text_input("작성자"), st.text_area("답변")
             if st.form_submit_button("등록"):
                 supabase.table("qa_answers").insert({"question_id": q['id'], "author": at, "content": clean_text_for_db(ct)}).execute()
@@ -267,7 +261,7 @@ elif st.session_state.page_mode == "💬 질문 게시판 (Q&A)":
     else:
         st.subheader("💬 질문 게시판")
         with st.popover("➕ 질문하기", use_container_width=True):
-            with st.form("q_form_final"):
+            with st.form("q_form"):
                 cat, auth, tit, cont = st.selectbox("분류", ["기기이상", "일반"]), st.text_input("작성자"), st.text_input("제목"), st.text_area("내용")
                 if st.form_submit_button("등록"):
                     res = supabase.table("qa_board").insert({"author": auth, "title": tit, "content": clean_text_for_db(cont), "category": cat}).execute()
