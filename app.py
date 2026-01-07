@@ -236,4 +236,32 @@ elif st.session_state.page_mode == "💬 질문 게시판 (Q&A)":
         q_data = supabase.table("qa_board").select("*").eq("id", st.session_state.selected_q_id).execute().data[0]
         st.subheader(f"❓ {q_data['title']}"); st.caption(f"👤 {q_data['author']} | 📅 {q_data['created_at'][:10]}")
         if st.button(f"👍 {q_data.get('likes', 0)}", key="q_lk"):
-            supabase.table("qa_board
+            supabase.table("qa_board").update({"likes": q_data.get('likes', 0) + 1}).eq("id", q_data['id']).execute()
+            sync_qa_to_knowledge(q_data['id']); st.rerun()
+        st.info(q_data['content'])
+        ans_data = supabase.table("qa_answers").select("*").eq("question_id", q_data['id']).order("created_at").execute().data
+        for a in [x for x in ans_data if not x.get('parent_id')]:
+            st.markdown(f'<div class="a-card"><b>{a["author"]}</b>: {a["content"]}</div>', unsafe_allow_html=True)
+            if st.button(f"👍 {a.get('likes', 0)}", key=f"al_{a['id']}"):
+                supabase.table("qa_answers").update({"likes": a.get('likes', 0) + 1}).eq("id", a['id']).execute(); sync_qa_to_knowledge(q_data['id']); st.rerun()
+            for r in [x for x in ans_data if x.get('parent_id') == a['id']]:
+                st.markdown(f'<div class="reply-card">↳ <b>{r["author"]}</b>: {r["content"]}</div>', unsafe_allow_html=True)
+        st.write("---")
+        with st.form("new_ans"):
+            a_auth, a_cont = st.text_input("작성자"), st.text_area("내용")
+            if st.form_submit_button("등록"):
+                supabase.table("qa_answers").insert({"question_id": q_data['id'], "author": a_auth, "content": clean_text_for_db(a_cont)}).execute()
+                sync_qa_to_knowledge(q_data['id']); st.rerun()
+    else:
+        st.subheader("💬 질문 게시판")
+        with st.popover("➕ 질문하기", use_container_width=True):
+            with st.form("q_f"):
+                cat, auth, tit, cont = st.selectbox("분류", ["기기이상", "일반"]), st.text_input("작성자"), st.text_input("제목"), st.text_area("내용")
+                if st.form_submit_button("등록"):
+                    res = supabase.table("qa_board").insert({"author": auth, "title": tit, "content": clean_text_for_db(cont), "category": cat}).execute()
+                    if res.data: sync_qa_to_knowledge(res.data[0]['id']); st.rerun()
+        for q in supabase.table("qa_board").select("*").order("created_at", desc=True).execute().data:
+            c1, c2 = st.columns([0.8, 0.2])
+            c1.markdown(f"**[{q['category']}] {q['title']}** (👍 {q.get('likes', 0)})\n👤 {q['author']} | 📅 {q['created_at'][:10]}")
+            if c2.button("보기", key=f"q_{q['id']}"): st.session_state.selected_q_id = q['id']; st.rerun()
+            st.write("---")
