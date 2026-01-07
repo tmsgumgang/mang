@@ -62,7 +62,7 @@ def sync_qa_to_knowledge(q_id):
         }).execute()
     except: pass
 
-# --- UI 설정 ---
+# --- UI 설정 및 CSS ---
 st.set_page_config(page_title="금강수계 AI 챗봇", layout="centered", initial_sidebar_state="collapsed")
 if 'page_mode' not in st.session_state: st.session_state.page_mode = "🔍 통합 지식 검색"
 if 'selected_q_id' not in st.session_state: st.session_state.selected_q_id = None
@@ -90,10 +90,13 @@ menu_options = ["🔍 통합 지식 검색", "📝 현장 노하우 등록", "�
 selected_mode = st.selectbox("☰ 메뉴 이동", options=menu_options, index=menu_options.index(st.session_state.page_mode), label_visibility="collapsed")
 if selected_mode != st.session_state.page_mode:
     st.session_state.page_mode = selected_mode
+    st.session_state.selected_q_id = None
     st.rerun()
 
-# --- 1. 통합 지식 검색 (안정화 버전) ---
-if st.session_state.page_mode == "🔍 통합 지식 검색":
+mode = st.session_state.page_mode
+
+# --- 1. 통합 지식 검색 (오버로딩 방지 버전) ---
+if mode == "🔍 통합 지식 검색":
     col_i, col_b = st.columns([0.8, 0.2])
     with col_i: user_q = st.text_input("상황 입력", label_visibility="collapsed", placeholder="예: 시마즈 TOC 값이 올라가")
     with col_b: search_clicked = st.button("조회", use_container_width=True)
@@ -102,15 +105,16 @@ if st.session_state.page_mode == "🔍 통합 지식 검색":
         with st.spinner("전문 지식 분석 중..."):
             try:
                 query_vec = get_embedding(user_q)
+                # 정해진 3개 파라미터만 정확히 전달
                 exp_res = supabase.rpc("match_knowledge", {"query_embedding": query_vec, "match_threshold": 0.05, "match_count": 8}).execute()
                 man_res = supabase.rpc("match_manual", {"query_embedding": query_vec, "match_threshold": 0.05, "match_count": 8}).execute()
                 combined_data = (exp_res.data or []) + (man_res.data or [])
                 
                 if combined_data:
-                    context = "\n".join([f"[{'경험' if 'solution' in d else '매뉴얼'} / 제조사:{d['manufacturer']} / 모델:{d['model_name']}]: {d['solution'] if 'solution' in d else d['content']}" for d in combined_data])
+                    context = "\n".join([f"[{'경험' if 'solution' in d else '매뉴얼'} / {d['manufacturer']} / {d['model_name']}]: {d['solution'] if 'solution' in d else d['content']}" for d in combined_data])
                     ans_p = f"""당신은 수질 전문가입니다. 
-                    1. 질문에 브랜드(예: 시마즈)가 있다면 해당 브랜드 정보를 우선하여 정확히 답변하세요.
-                    2. 3줄 요약 답변. 데이터: {context} \n 질문: {user_q}"""
+                    1. 질문에 제조사(예: 시마즈)가 있다면 해당 브랜드 정보를 우선하여 정확히 답변하세요.
+                    2. 답변은 3줄 요약. 데이터: {context} \n 질문: {user_q}"""
                     st.info(ai_model.generate_content(ans_p).text)
                     st.markdown("---")
                     for d in combined_data:
@@ -121,7 +125,7 @@ if st.session_state.page_mode == "🔍 통합 지식 검색":
             except Exception as e: st.error(f"조회 실패: {e}")
 
 # --- 2. 현장 노하우 등록 ---
-elif st.session_state.page_mode == "📝 현장 노하우 등록":
+elif mode == "📝 현장 노하우 등록":
     st.subheader("📝 현장 노하우 등록")
     with st.form("exp_reg", clear_on_submit=True):
         cat = st.selectbox("분류", ["기기점검", "현장꿀팁", "맛집/정보"])
@@ -136,7 +140,7 @@ elif st.session_state.page_mode == "📝 현장 노하우 등록":
                 st.success("🎉 등록 완료!")
 
 # --- 3. 문서(매뉴얼) 등록 ---
-elif st.session_state.page_mode == "📄 문서(매뉴얼) 등록":
+elif mode == "📄 문서(매뉴얼) 등록":
     st.subheader("📄 매뉴얼 등록 (768차원)")
     up_file = st.file_uploader("PDF 업로드", type=["pdf"])
     if up_file:
@@ -168,28 +172,28 @@ elif st.session_state.page_mode == "📄 문서(매뉴얼) 등록":
         for m in sorted(list(set([d['file_name'] for d in doc_res.data]))):
             st.markdown(f'<div class="doc-status-card">📄 {m}</div>', unsafe_allow_html=True)
 
-# --- 4. 데이터 전체 관리 ---
-elif st.session_state.page_mode == "🛠️ 데이터 전체 관리":
-    t1, t2 = st.tabs(["📝 경험 관리", "📄 매뉴얼 관리"])
-    with t1:
-        m_s = st.text_input("🔍 경험 검색")
+# --- 4. 데이터 전체 관리 (기능 유지) ---
+elif mode == "🛠️ 데이터 전체 관리":
+    tab1, tab2 = st.tabs(["📝 경험 지식 관리", "📄 매뉴얼 관리"])
+    with tab1:
+        m_s = st.text_input("🔍 경험 검색 (SSR 등)", key="e_search")
         if m_s:
             res = supabase.table("knowledge_base").select("*").or_(f"manufacturer.ilike.%{m_s}%,issue.ilike.%{m_s}%,solution.ilike.%{m_s}%").execute()
-            for r in res.data:
+            for r in (res.data or []):
                 with st.expander(f"{r['manufacturer']} | {r['issue']}"):
                     st.write(r['solution'])
-                    if st.button("🗑️ 삭제", key=f"e_{r['id']}"): supabase.table("knowledge_base").delete().eq("id", r['id']).execute(); st.rerun()
-    with t2:
-        d_s = st.text_input("🔍 매뉴얼 검색")
+                    if st.button("🗑️ 삭제", key=f"e_{row['id']}"): supabase.table("knowledge_base").delete().eq("id", r['id']).execute(); st.rerun()
+    with tab2:
+        d_s = st.text_input("🔍 매뉴얼 검색", key="m_search")
         if d_s:
             res = supabase.table("manual_base").select("*").or_(f"manufacturer.ilike.%{d_s}%,content.ilike.%{d_s}%,file_name.ilike.%{d_s}%").execute()
-            for r in res.data:
-                with st.expander(f"{r['manufacturer']} | {r['file_name']}"):
+            for r in (res.data or []):
+                with st.expander(f"{r['manufacturer']} | {r['file_name']} (일부)"):
                     st.write(r['content'][:300])
                     if st.button("🗑️ 삭제", key=f"m_{r['id']}"): supabase.table("manual_base").delete().eq("id", r['id']).execute(); st.rerun()
 
-# --- 5. 질문 게시판 ---
-elif st.session_state.page_mode == "💬 질문 게시판 (Q&A)":
+# --- 5. 질문 게시판 (메타데이터 표출 유지) ---
+elif mode == "💬 질문 게시판 (Q&A)":
     if st.session_state.get('selected_q_id'):
         if st.button("⬅️ 목록"): st.session_state.selected_q_id = None; st.rerun()
         q = supabase.table("qa_board").select("*").eq("id", st.session_state.selected_q_id).execute().data[0]
