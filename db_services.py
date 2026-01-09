@@ -14,22 +14,29 @@ class DBManager:
             return Counter([r['source_id'] for r in res.data])
         except: return {}
 
-    # [V148] 데이터 교정/분류 로직 (성공 여부 반환 강화)
+    # [V149] 에러 발생 시 구체적인 메시지를 반환하도록 개선
     def update_record_labels(self, table_name, row_id, mfr, model, item):
         try:
             res = self.supabase.table(table_name).update({
                 "manufacturer": mfr, "model_name": model, "measurement_item": item,
                 "semantic_version": 1, "review_required": False
             }).eq("id", row_id).execute()
-            return len(res.data) > 0
-        except: return False
+            
+            # 업데이트된 데이터가 없으면 RLS 정책 문제일 가능성이 큼
+            if not res.data:
+                return False, "대상 데이터를 찾을 수 없거나 RLS 권한이 없습니다."
+            return True, "성공"
+        except Exception as e:
+            return False, str(e)
 
-    # [V148] 데이터 영구 폐기(삭제) 로직
     def delete_record(self, table_name, row_id):
         try:
             res = self.supabase.table(table_name).delete().eq("id", row_id).execute()
-            return len(res.data) > 0
-        except: return False
+            if not res.data:
+                return False, "삭제 권한이 없거나 이미 삭제된 데이터입니다."
+            return True, "성공"
+        except Exception as e:
+            return False, str(e)
 
     def match_filtered_db(self, rpc_name, query_vec, threshold, intent):
         try:
