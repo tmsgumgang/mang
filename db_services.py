@@ -16,7 +16,6 @@ class DBManager:
 
     def update_record_labels(self, table_name, row_id, mfr, model, item):
         try:
-            # [V150] 데이터 형식을 명확히 하여 스키마 불일치 에러 방지
             payload = {
                 "manufacturer": str(mfr).strip(),
                 "model_name": str(model).strip(),
@@ -26,8 +25,27 @@ class DBManager:
             }
             res = self.supabase.table(table_name).update(payload).eq("id", row_id).execute()
             if not res.data:
-                return False, "대상 데이터를 찾을 수 없거나 RLS 정책에 의해 차단되었습니다."
+                return False, "대상 데이터를 찾을 수 없거나 RLS 정책 위반입니다."
             return True, "성공"
+        except Exception as e:
+            return False, str(e)
+
+    # [V151 추가] 동일 파일 미분류 데이터 일괄 라벨링
+    def update_file_labels(self, table_name, file_name, mfr, model, item):
+        try:
+            payload = {
+                "manufacturer": str(mfr).strip(),
+                "model_name": str(model).strip(),
+                "measurement_item": str(item).strip(),
+                "semantic_version": 1,
+                "review_required": False
+            }
+            # 파일명이 일치하고, 아직 분류되지 않은(NULL, 빈값, 미지정) 데이터만 타겟팅
+            res = self.supabase.table(table_name).update(payload)\
+                .eq("file_name", file_name)\
+                .or_(f'manufacturer.eq.미지정,manufacturer.is.null,manufacturer.eq.""')\
+                .execute()
+            return True, f"{len(res.data)}건 일괄 분류 완료"
         except Exception as e:
             return False, str(e)
 
