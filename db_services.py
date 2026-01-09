@@ -25,3 +25,16 @@ class DBManager:
 
     def match_knowledge_db(self, query_vec, threshold):
         return self.supabase.rpc("match_knowledge", {"query_embedding": query_vec, "match_threshold": threshold, "match_count": 40}).execute().data or []
+
+    # [V133 핵심] 파일 단위 일괄 승인 로직
+    def bulk_approve_file(self, table_name, file_name):
+        try:
+            # 해당 파일이면서 제안 상태(version=2)인 데이터를 모두 승인(version=1)으로 전환
+            self.supabase.table(table_name).update({
+                "semantic_version": 1,
+                "review_required": False
+            }).eq("file_name", file_name).eq("semantic_version", 2).execute()
+            return True
+        except Exception as e:
+            print(f"일괄 승인 오류: {e}")
+            return False
