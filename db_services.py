@@ -28,32 +28,19 @@ class DBManager:
             return True, f"{len(res.data)}건 일괄 완료"
         except Exception as e: return False, str(e)
 
-    # [V152] 하드 필터링 적용 검색 로직
     def match_filtered_db(self, rpc_name, query_vec, threshold, intent):
         try:
             target_item = intent.get('target_item')
             target_model = intent.get('target_model')
-            
-            # 1. 기본 벡터 검색 실행
             results = self.supabase.rpc(rpc_name, {"query_embedding": query_vec, "match_threshold": threshold, "match_count": 40}).execute().data or []
-            
-            # 2. 메타데이터 일치 시 강력한 가중치 부여 및 비일치 항목 감점
             filtered_results = []
             for d in results:
                 score_adj = 0
-                # 항목(TOC, TN 등) 일치 시 대폭 가산
-                if target_item and target_item.lower() in str(d.get('measurement_item', '')).lower():
-                    score_adj += 0.5
-                elif target_item: # 항목이 지정되었는데 일치하지 않으면 감점
-                    score_adj -= 0.3
-                
-                # 모델명 일치 시 가산
-                if target_model and target_model.lower() in str(d.get('model_name', '')).lower():
-                    score_adj += 0.4
-                
+                if target_item and target_item.lower() in str(d.get('measurement_item', '')).lower(): score_adj += 0.5
+                elif target_item: score_adj -= 0.3
+                if target_model and target_model.lower() in str(d.get('model_name', '')).lower(): score_adj += 0.4
                 d['similarity'] = (d.get('similarity') or 0) + score_adj
                 filtered_results.append(d)
-                
             return filtered_results
         except: return []
 
