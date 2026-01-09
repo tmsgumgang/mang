@@ -26,6 +26,7 @@ class DBManager:
     def match_knowledge_db(self, query_vec, threshold):
         return self.supabase.rpc("match_knowledge", {"query_embedding": query_vec, "match_threshold": threshold, "match_count": 40}).execute().data or []
 
+    # 파일 단위 일괄 승인 기능
     def bulk_approve_file(self, table_name, file_name):
         try:
             self.supabase.table(table_name).update({
