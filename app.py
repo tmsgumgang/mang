@@ -23,13 +23,13 @@ def get_embedding(text):
     result = genai.embed_content(model="models/text-embedding-004", content=clean_text_for_db(text), task_type="retrieval_document")
     return result['embedding']
 
-st.set_page_config(page_title="금강수계 AI V145", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="금강수계 AI V146", layout="wide", initial_sidebar_state="collapsed")
 st.markdown("""<style>
     .fixed-header { position: fixed; top: 0; left: 0; width: 100%; background-color: #004a99; color: white; padding: 10px 0; z-index: 999; text-align: center; }
     .main .block-container { padding-top: 5.5rem !important; }
     .meta-bar { background-color: rgba(255, 255, 255, 0.1); border-left: 5px solid #004a99; padding: 10px; border-radius: 4px; font-size: 0.8rem; margin-bottom: 10px; color: #ffffff !important; }
     .guide-box { background-color: #f1f5f9; border: 1px solid #cbd5e1; padding: 15px; border-radius: 8px; font-size: 0.85rem; color: #1e293b; margin-bottom: 15px; }
-</style><div class="fixed-header">🌊 금강수계 수질자동측정망 AI V145</div>""", unsafe_allow_html=True)
+</style><div class="fixed-header">🌊 금강수계 수질자동측정망 AI V146</div>""", unsafe_allow_html=True)
 
 _, menu_col, _ = st.columns([1, 2, 1])
 with menu_col:
@@ -95,18 +95,30 @@ elif mode == "🛠️ 데이터 전체 관리":
             c1.metric("전체 경험 지식", f"{k_cnt}건")
             c2.metric("전체 매뉴얼 청크", f"{m_cnt}건")
         
-        with tabs[1]:
+        with tabs[1]: # [V146 강화] 미분류 데이터 필터링 로직 수정
             st.subheader("🚨 제조사 미지정 데이터")
             target = st.radio("조회 대상", ["경험", "매뉴얼"], horizontal=True, key="m_cls")
             t_name = "knowledge_base" if target == "경험" else "manual_base"
-            unclass = db.supabase.table(t_name).select("*").eq("manufacturer", "미지정").limit(5).execute().data
+            
+            # OR 조건을 사용하여 NULL, 빈 문자열, "미지정"을 모두 검색
+            unclass = db.supabase.table(t_name).select("*").or_(f'manufacturer.eq.미지정,manufacturer.is.null,manufacturer.eq.""').limit(5).execute().data
+            
             if unclass:
+                st.warning(f"분류가 필요한 데이터 {len(unclass)}건이 발견되었습니다.")
                 for r in unclass:
                     with st.expander(f"ID {r['id']} 내용 보기"):
-                        st.write(r.get('content') or r.get('solution'))
+                        st.write(r.get('content') or r.get('solution') or r.get('issue'))
+                        with st.form(key=f"m_cls_{t_name}_{r['id']}"):
+                            c1, c2, c3 = st.columns(3)
+                            n_mfr = c1.text_input("제조사", key=f"nm_{r['id']}")
+                            n_mod = c2.text_input("모델명", key=f"no_{r['id']}")
+                            n_itm = c3.text_input("항목", key=f"ni_{r['id']}")
+                            if st.form_submit_button("✅ 즉시 분류 저장"):
+                                if db.update_record_labels(t_name, r['id'], n_mfr, n_mod, n_itm):
+                                    st.toast("분류 완료!"); time.sleep(0.5); st.rerun()
             else: st.success("✅ 미분류 데이터가 없습니다.")
 
-        with tabs[2]: # [V145 구현] 지식 재건축 엔진
+        with tabs[2]:
             st.subheader("🏗️ 벡터 인덱스 전면 재구성")
             st.warning("주의: 이 작업은 모든 지식의 벡터를 다시 생성합니다. 데이터량에 따라 수십 분이 소요될 수 있습니다.")
             target_re = st.selectbox("재건축 대상 선택", ["전체 데이터", "경험 지식만", "매뉴얼 데이터만"])
@@ -114,14 +126,13 @@ elif mode == "🛠️ 데이터 전체 관리":
                 t_list = []
                 if target_re in ["전체 데이터", "경험 지식만"]: t_list.append("knowledge_base")
                 if target_re in ["전체 데이터", "매뉴얼 데이터만"]: t_list.append("manual_base")
-                
                 for t in t_list:
                     rows = db.supabase.table(t).select("id, issue, content, solution").execute().data
                     if rows:
                         st.write(f"📦 {t} 처리 시작 (총 {len(rows)}건)...")
                         pb = st.progress(0)
                         for i, r in enumerate(rows):
-                            text = r.get('issue', '') + " " + (r.get('content') or r.get('solution') or '')
+                            text = (r.get('issue') or '') + " " + (r.get('content') or r.get('solution') or '')
                             new_vec = get_embedding(text)
                             db.update_vector(t, r['id'], new_vec)
                             pb.progress((i + 1) / len(rows))
@@ -166,7 +177,7 @@ elif mode == "📄 문서(매뉴얼) 등록":
 elif mode == "📝 지식 등록":
     _, reg_col, _ = st.columns([1, 2, 1])
     with reg_col:
-        with st.form("reg_v145"):
+        with st.form("reg_v146"):
             f_iss, f_sol = st.text_input("제목"), st.text_area("조치방법")
             if st.form_submit_button("💾 지식 저장"):
                 db.supabase.table("knowledge_base").insert({"domain": "기술지식", "issue": f_iss, "solution": f_sol, "embedding": get_embedding(f_iss), "semantic_version": 1, "is_verified": True}).execute()
