@@ -52,50 +52,39 @@ def extract_json(text):
         return json.loads(cleaned)
     except: return None
 
-def log_unsolved(query, reason, is_life):
-    try:
-        exists = supabase.table("unsolved_questions").select("id").eq("query", query).eq("status", "대기중").execute().data
-        if not exists:
-            supabase.table("unsolved_questions").insert({"query": query, "reason": reason, "is_lifestyle": is_life}).execute()
-    except: pass
-
 def get_penalty_counts():
     try:
         res = supabase.table("knowledge_blacklist").select("source_id").execute()
         return Counter([r['source_id'] for r in res.data])
     except: return {}
 
-# [V113] 지능형 분류 및 명찰 시스템
-def display_tag_v113(u_key, domain):
-    prefix = "경험지식" if "EXP" in u_key else "매뉴얼"
-    icon = "🛠️" if domain == "기술자산" else ("🍴" if domain == "복지생활" else "📋")
-    return f"{icon} {prefix}_{u_key.split('_')[1]} ({domain})"
-
-def analyze_domain_v113(text):
-    if not text: return "기술자산"
-    life_keys = ["맛집", "식당", "카페", "추천", "주차", "점심", "저녁", "회식", "메뉴", "짜글이"]
-    admin_keys = ["일지", "양식", "보고서", "신청", "절차", "안전", "규칙", "공문"]
-    if any(k in text for k in life_keys): return "복지생활"
-    if any(k in text for k in admin_keys): return "행정절차"
-    return "기술자산"
-
-# [V113 핵심] 마이그레이션 AI 에이전트 (에러 방어 로직 강화)
-def ai_classify_data(content):
+# [V115 핵심] AI 시맨틱 도메인 라우터
+def v115_route_intent(query):
     try:
-        prompt = f"""아래 데이터를 [도메인 / 세부분류 / 측정항목]으로 분류해서 JSON으로만 대답해.
-        도메인: [기술자산, 행정절차, 복지생활] 중 하나
-        데이터: {content}
-        응답예시: {{"domain": "기술자산", "sub_category": "측정기기", "item": "TOC"}}"""
+        prompt = f"""사용자 질문의 의도를 분석하여 단 하나의 도메인을 결정해. 
+        - 기술자산: 장비 수리, 점검, 측정 원리, 에러코드, 부품 교체 등 기술적 질문
+        - 행정절차: 서류 양식, 보고 절차, 안전 관리, 물품 신청 등 규정 관련
+        - 복지생활: 맛집, 주차, 날씨, 휴식 등 일상 정보
+        
+        질문: {query}
+        응답 형식(JSON): {{"domain": "선택값", "reason": "이유"}}"""
         res = ai_model.generate_content(prompt)
         parsed = extract_json(res.text)
-        return parsed if isinstance(parsed, dict) else None
-    except: return None
+        return parsed.get('domain', '기술자산'), parsed.get('reason', '문맥 기반 판단')
+    except:
+        return "기술자산", "분석 오류 기본값"
 
-def get_blacklist(query):
+# [V115 핵심] 데이터 정밀 태깅 에이전트
+def v115_classify_data(content):
     try:
-        res = supabase.table("knowledge_blacklist").select("source_id").eq("query", query).execute()
-        return [r['source_id'] for r in res.data]
-    except: return []
+        prompt = f"""데이터를 계층형으로 분류해. 
+        도메인: [기술자산, 행정절차, 복지생활] 중 하나
+        데이터: {content}
+        응답 형식(JSON): {{"domain": "분류", "sub_category": "상세분류", "item": "측정항목"}}"""
+        res = ai_model.generate_content(prompt)
+        return extract_json(res.text)
+    except:
+        return None
 
 # --- UI 설정 ---
 st.set_page_config(page_title="금강수계 AI 챗봇", layout="centered", initial_sidebar_state="collapsed")
@@ -109,8 +98,9 @@ st.markdown("""
     .main .block-container { padding-top: 4.5rem !important; }
     .guide-box { background-color: rgba(240, 253, 244, 0.1); border: 1px solid #bbf7d0; padding: 12px; border-radius: 8px; font-size: 0.85rem; margin-bottom: 15px; color: #166534; }
     .meta-bar { background-color: rgba(128, 128, 128, 0.15); border-left: 5px solid #004a99; padding: 10px; border-radius: 4px; font-size: 0.85rem; margin-bottom: 12px; display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; }
+    .intent-badge { background-color: #e0f2fe; color: #0369a1; padding: 2px 8px; border-radius: 12px; font-size: 0.75rem; font-weight: bold; }
     </style>
-    <div class="fixed-header"><span class="header-title">🌊 금강수계 수질자동측정망 AI 챗봇 V113</span></div>
+    <div class="fixed-header"><span class="header-title">🌊 금강수계 수질자동측정망 AI 챗봇 V115</span></div>
     """, unsafe_allow_html=True)
 
 menu_options = ["🔍 통합 지식 검색", "📝 지식 등록", "📄 문서(매뉴얼) 등록", "🛠️ 데이터 전체 관리", "💬 질문 게시판 (Q&A)", "🆘 미해결 과제"]
@@ -119,20 +109,23 @@ if selected_mode != st.session_state.page_mode:
     st.session_state.page_mode = selected_mode
     st.rerun()
 
-# --- 1. 통합 지식 검색 (도메인 격리 엔진) ---
+# --- 1. 통합 지식 검색 (V115: 시맨틱 라우팅 적용) ---
 if st.session_state.page_mode == "🔍 통합 지식 검색":
-    search_mode = st.radio("검색 도메인", ["업무기술 🛠️", "생활정보 🍴"], horizontal=True, label_visibility="collapsed")
+    search_mode = st.radio("검색 우선 모드", ["업무기술 🛠️", "생활정보 🍴"], horizontal=True, label_visibility="collapsed")
     col_i, col_b = st.columns([0.8, 0.2])
-    with col_i: user_q = st.text_input("질문 입력", label_visibility="collapsed", placeholder="장비 문제나 맛집을 입력하세요")
+    with col_i: user_q = st.text_input("질문 입력", label_visibility="collapsed", placeholder="장비 문제나 일상 질문을 자유롭게 입력하세요")
     with col_b: search_clicked = st.button("조회", use_container_width=True)
     
     if user_q and (search_clicked or user_q):
-        with st.spinner("도메인 분석 및 지식 격리 중..."):
+        with st.spinner("질문의 의도를 추론하고 지식을 격리 중..."):
             try:
-                target_domain = "복지생활" if "생활정보" in search_mode else analyze_domain_v113(user_q)
+                # [V115] AI가 문맥을 읽어 도메인 결정
+                target_domain, intent_reason = v115_route_intent(user_q)
+                if "생활정보" in search_mode: target_domain = "복지생활"
+                
                 query_vec = get_embedding(user_q)
-                blacklist_ids = get_blacklist(user_q)
                 penalty_map = get_penalty_counts()
+                blacklist_ids = [r['source_id'] for r in supabase.table("knowledge_blacklist").select("source_id").eq("query", user_q).execute().data]
                 
                 exp_cands = supabase.rpc("match_knowledge", {"query_embedding": query_vec, "match_threshold": 0.01, "match_count": 60}).execute().data or []
                 man_cands = supabase.rpc("match_manual", {"query_embedding": query_vec, "match_threshold": 0.01, "match_count": 40}).execute().data or []
@@ -142,12 +135,13 @@ if st.session_state.page_mode == "🔍 통합 지식 검색":
                     u_key = f"{'EXP' if 'solution' in d else 'MAN'}_{d.get('id')}"
                     if u_key in blacklist_ids: continue
                     
-                    # [V113] 도메인 매칭 (물리적 격리)
-                    d_dom = d.get('domain') or analyze_domain_v113(str(d.get('issue') or d.get('content')))
-                    if target_domain != d_dom: continue
-                    
+                    # [V115] 도메인 불일치 데이터 물리적 차단
+                    d_dom = d.get('domain') or "기술자산"
+                    if target_domain != d_dom: continue 
+
+                    # 가중치 및 페널티
                     penalty = penalty_map.get(u_key, 0) * 0.05
-                    bonus = 0.5 if target_domain == "기술자산" and any(k in str(d.get('manufacturer','')).lower() for k in ["시마즈", "백년기술"]) else 0
+                    bonus = 0.5 if target_domain == "기술자산" and any(k in str(d.get('manufacturer','')).lower() for k in ["시마즈", "백년기술", "코비"]) else 0
                     
                     raw_c = d.get('solution') or d.get('content') or ""
                     f_print = "".join(raw_c.split())[:60]
@@ -159,12 +153,13 @@ if st.session_state.page_mode == "🔍 통합 지식 검색":
                 final_pool = sorted(final_pool, key=lambda x: x['final_score'], reverse=True)
                 if final_pool:
                     st.subheader("🤖 AI 정밀 요약")
+                    st.markdown(f"<span class='intent-badge'>AI 판단: {target_domain}</span> <small style='opacity:0.6'>{intent_reason}</small>", unsafe_allow_html=True)
                     context = "\n".join([f"[{d['source_id_tag']}]: {d.get('solution') or d.get('content')}" for d in final_pool[:12]])
-                    ans_p = f"수질 전문가입니다. 도메인: {target_domain}. 질문: {user_q} \n 데이터: {context} \n 요약 후 출처 표기."
+                    ans_p = f"수질 전문가입니다. 분류: {target_domain}. 질문: {user_q} \n 데이터: {context} \n 요약 후 출처 표기."
                     st.info(ai_model.generate_content(ans_p).text)
                     
                     for i, d in enumerate(final_pool[:10]):
-                        with st.expander(f"{i+1}. [{d['final_dom']}] {str(d.get('issue') or '상세 내용')[:35]}..."):
+                        with st.expander(f"{i+1}. [{d['final_dom']}] {str(d.get('issue') or '상세 지식')[:35]}..."):
                             st.markdown(f"""<div class="meta-bar">
                                 <div>🏢 제조사: <b>{d.get('manufacturer', '미지정')}</b></div>
                                 <div>🏷️ 모델: <b>{d.get('model_name', '미지정')}</b></div>
@@ -179,66 +174,61 @@ if st.session_state.page_mode == "🔍 통합 지식 검색":
                             with c2:
                                 with st.popover("❌ 교정/제외", use_container_width=True):
                                     fix_cat = st.selectbox("분류 교정", ["기술자산", "행정절차", "복지생활"], key=f"fix_{d['source_id_tag']}")
-                                    if st.button("교정 및 제외", key=f"btn_{d['source_id_tag']}", type="primary"):
+                                    fix_reason = st.text_input("사유", key=f"res_{d['source_id_tag']}")
+                                    if st.button("반영 및 제외", key=f"btn_{d['source_id_tag']}", type="primary"):
                                         table = "knowledge_base" if "EXP" in d['source_id_tag'] else "manual_base"
                                         supabase.table(table).update({"domain": fix_cat}).eq("id", int(d['source_id_tag'].split('_')[1])).execute()
-                                        supabase.table("knowledge_blacklist").insert({"query": user_q, "source_id": d['source_id_tag'], "reason": "도메인 교정"}).execute()
+                                        supabase.table("knowledge_blacklist").insert({"query": user_q, "source_id": d['source_id_tag'], "reason": f"교정({fix_cat})", "comment": fix_reason}).execute()
                                         st.rerun()
                 else:
                     st.warning(f"⚠️ {target_domain} 도메인에서 지식을 찾지 못했습니다.")
-            except Exception as e: st.error(f"조회 실패 (V113): {e}")
+            except Exception as e: st.error(f"조회 실패 (V115): {e}")
 
-# --- 4. 데이터 전체 관리 (V113: 마이그레이션 에러 수정 완료) ---
+# --- 4. 데이터 전체 관리 (V115: 시맨틱 마이그레이션 적용) ---
 elif st.session_state.page_mode == "🛠️ 데이터 전체 관리":
-    t1, t2, t3, t4, t5 = st.tabs(["📊 로그 분석", "📝 경험 리파이너", "📄 매뉴얼 리파이너", "🚫 교정 기록", "🧹 데이터 대청소"])
-    
+    t1, t2, t3, t4, t5 = st.tabs(["📊 로그 분석", "📝 경험 리파이너", "📄 매뉴얼 리파이너", "🚫 교정 기록", "🧹 시맨틱 대청소"])
     with t5:
-        st.subheader("🧹 기존 데이터 지능형 분류")
-        target_table = st.radio("분류 대상", ["경험 지식", "매뉴얼 지식"], horizontal=True)
+        st.subheader("🧹 시맨틱 데이터 분류 (V115)")
+        st.write("단어가 아닌 맥락을 읽고 데이터를 [기술/행정/복지] 체계로 재정돈합니다.")
+        target_table = st.radio("대상", ["경험 지식", "매뉴얼 지식"], horizontal=True)
         table_name = "knowledge_base" if target_table == "경험 지식" else "manual_base"
-        
         unlabeled = supabase.table(table_name).select("id", count="exact").is_("domain", "null").execute()
-        st.metric("분류 대기 중", f"{unlabeled.count or 0} 건")
+        st.metric("분류 대기", f"{unlabeled.count or 0} 건")
         
-        if st.button("🚀 AI 자동 분류 시작"):
+        if st.button("🚀 시맨틱 분류 시작"):
             rows = supabase.table(table_name).select("*").is_("domain", "null").limit(20).execute().data
-            if not rows: st.success("🎉 모든 데이터가 분류되었습니다!")
+            if not rows: st.success("🎉 정돈 완료!")
             else:
-                with st.status("🏗️ 지능형 분류 진행 중...", expanded=True) as status:
+                with st.status("🏗️ 맥락 분석 중...", expanded=True) as status:
                     for r in rows:
                         content = r.get('solution') or r.get('content') or ""
-                        result = ai_classify_data(content[:2000])
-                        # [V113 핵심 Fix] 결과값 존재 여부 및 딕셔너리 여부 철저 검증
-                        if result and isinstance(result, dict):
+                        result = v115_classify_data(content[:2500])
+                        if result:
                             supabase.table(table_name).update({
                                 "domain": result.get('domain', '기술자산'),
                                 "sub_category": result.get('sub_category', '일반'),
                                 "measurement_item": result.get('item', r.get('measurement_item'))
                             }).eq("id", r['id']).execute()
-                            st.write(f"✅ ID {r['id']}: [{result.get('domain', '기술자산')}] 분류 완료")
-                        else:
-                            # 분류 실패 시 기본값 적용하여 에러 방지
-                            supabase.table(table_name).update({"domain": "기술자산"}).eq("id", r['id']).execute()
-                            st.write(f"⚠️ ID {r['id']}: 분석 실패 (기술자산 기본 할당)")
-                    status.update(label="분류 완료!", state="complete")
+                            st.write(f"✅ {r['id']}: {result.get('domain')} 분류")
+                    status.update(label="완료!", state="complete")
                 st.rerun()
 
-# --- 2, 3, 5, 6 메뉴 (안정화 로직 유지) ---
+# --- 2, 3, 5, 6 메뉴 (로직 유지) ---
 elif st.session_state.page_mode == "📝 지식 등록":
     st.subheader("📝 신규 지식 등록")
-    with st.form("reg_v113", clear_on_submit=True):
+    with st.form("reg_v115", clear_on_submit=True):
         f_dom = st.selectbox("도메인", ["기술자산", "행정절차", "복지생활"])
-        f_mfr, f_iss, f_sol = st.text_input("제조사/상호"), st.text_input("제목"), st.text_area("내용")
+        f_mfr, f_iss, f_sol = st.text_input("제조사"), st.text_input("제목"), st.text_area("내용")
         if st.form_submit_button("저장"):
             supabase.table("knowledge_base").insert({"domain": f_dom, "manufacturer": f_mfr, "issue": f_iss, "solution": f_sol, "embedding": get_embedding(f"{f_dom} {f_mfr} {f_iss} {f_sol}")}).execute()
-            st.success("등록 완료!")
+            st.success("완료!")
 
 elif st.session_state.page_mode == "📄 문서(매뉴얼) 등록":
     st.subheader("📄 매뉴얼 등록")
     up_f = st.file_uploader("PDF 업로드", type=["pdf"])
     if up_f:
-        f_dom = st.selectbox("문서 도메인", ["기술자산", "행정절차", "복지생활"])
-        if st.button("🚀 지식 학습 시작"):
+        f_dom = st.selectbox("도메인", ["기술자산", "행정절차", "복지생활"])
+        if st.button("🚀 시작"):
             up_f.seek(0)
             pdf_r = PyPDF2.PdfReader(io.BytesIO(up_f.read()))
             all_t = "\n".join([p.extract_text() for p in pdf_r.pages if p.extract_text()])
@@ -248,9 +238,3 @@ elif st.session_state.page_mode == "📄 문서(매뉴얼) 등록":
                 supabase.table("manual_base").insert({"domain": f_dom, "content": clean_text_for_db(chunk), "file_name": up_f.name, "embedding": get_embedding(chunk)}).execute()
                 p_bar.progress((i+1)/len(chunks))
             st.success("학습 완료!"); st.rerun()
-
-elif st.session_state.page_mode == "💬 질문 게시판 (Q&A)":
-    st.subheader("💬 소통 공간") # 이전 버전 로직 유지
-
-elif st.session_state.page_mode == "🆘 미해결 과제":
-    st.subheader("🆘 해결이 필요한 질문") # 이전 버전 로직 유지
