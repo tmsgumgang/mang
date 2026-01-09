@@ -23,13 +23,13 @@ def get_embedding(text):
     result = genai.embed_content(model="models/text-embedding-004", content=clean_text_for_db(text), task_type="retrieval_document")
     return result['embedding']
 
-st.set_page_config(page_title="금강수계 AI V149", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="금강수계 AI V150", layout="wide", initial_sidebar_state="collapsed")
 st.markdown("""<style>
     .fixed-header { position: fixed; top: 0; left: 0; width: 100%; background-color: #004a99; color: white; padding: 10px 0; z-index: 999; text-align: center; }
     .main .block-container { padding-top: 5.5rem !important; }
     .meta-bar { background-color: rgba(255, 255, 255, 0.1); border-left: 5px solid #004a99; padding: 10px; border-radius: 4px; font-size: 0.8rem; margin-bottom: 10px; color: #ffffff !important; }
     .guide-box { background-color: #f1f5f9; border: 1px solid #cbd5e1; padding: 15px; border-radius: 8px; font-size: 0.9rem; color: #1e293b; margin-bottom: 15px; }
-</style><div class="fixed-header">🌊 금강수계 수질자동측정망 AI V149</div>""", unsafe_allow_html=True)
+</style><div class="fixed-header">🌊 금강수계 수질자동측정망 AI V150</div>""", unsafe_allow_html=True)
 
 _, menu_col, _ = st.columns([1, 2, 1])
 with menu_col:
@@ -80,10 +80,8 @@ if mode == "🔍 통합 지식 검색":
                                 if st.form_submit_button("💾 교정 저장"):
                                     t_name = "knowledge_base" if "EXP" in d['u_key'] else "manual_base"
                                     success, msg = db.update_record_labels(t_name, d['id'], e_mfr, e_mod, e_itm)
-                                    if success:
-                                        st.success("정보 교정 완료!"); time.sleep(0.5); st.rerun()
-                                    else:
-                                        st.error(f"저장 실패: {msg}")
+                                    if success: st.success("교정 완료!"); time.sleep(0.5); st.rerun()
+                                    else: st.error(f"실패: {msg}")
                 else: st.warning("🔍 검색 결과가 없습니다.")
 
 elif mode == "🛠️ 데이터 전체 관리":
@@ -95,12 +93,11 @@ elif mode == "🛠️ 데이터 전체 관리":
             target = st.radio("조회 대상", ["경험", "매뉴얼"], horizontal=True, key="m_cls_target")
             t_name = "knowledge_base" if target == "경험" else "manual_base"
             unclass = db.supabase.table(t_name).select("*").or_(f'manufacturer.eq.미지정,manufacturer.is.null,manufacturer.eq.""').limit(5).execute().data
-            
             if unclass:
                 for r in unclass:
                     with st.expander(f"ID {r['id']} 상세 내용"):
                         st.write(r.get('content') or r.get('solution') or r.get('issue'))
-                        with st.form(key=f"v149_cls_{t_name}_{r['id']}"):
+                        with st.form(key=f"v150_cls_{t_name}_{r['id']}"):
                             c1, c2, c3 = st.columns(3)
                             n_mfr = c1.text_input("제조사 (필수)", key=f"nm_{t_name}_{r['id']}")
                             n_mod = c2.text_input("모델명", key=f"no_{t_name}_{r['id']}")
@@ -117,51 +114,38 @@ elif mode == "🛠️ 데이터 전체 관리":
                                 if success: st.warning("삭제 완료!"); time.sleep(0.5); st.rerun()
                                 else: st.error(f"삭제 실패: {msg}")
             else: st.success("✅ 모든 데이터가 정상적으로 분류되어 있습니다.")
-        # ... (시맨틱 최신화, 지식 재건축, 라벨 승인 탭 로직은 이전 버전과 동일하게 유지)
         with tabs[0]:
             st.subheader("🧹 데이터 현황")
             c1, c2 = st.columns(2)
             k_cnt = db.supabase.table("knowledge_base").select("id", count="exact").execute().count
             m_cnt = db.supabase.table("manual_base").select("id", count="exact").execute().count
-            c1.metric("전체 경험 지식", f"{k_cnt}건")
-            c2.metric("전체 매뉴얼 청크", f"{m_cnt}건")
+            c1.metric("경험 지식", f"{k_cnt}건")
+            c2.metric("매뉴얼 청크", f"{m_cnt}건")
         with tabs[2]:
             st.subheader("🏗️ 벡터 인덱스 재구성")
-            re_target = st.selectbox("대상", ["경험 지식", "매뉴얼 데이터"])
             if st.button("🛠️ 재인덱싱 시작", type="primary"):
-                t_name = "knowledge_base" if re_target == "경험 지식" else "manual_base"
-                rows = db.supabase.table(t_name).select("id, issue, content, solution").execute().data
+                rows = db.supabase.table("manual_base").select("id, content").execute().data
                 if rows:
                     pb = st.progress(0)
                     for i, r in enumerate(rows):
-                        text = (r.get('issue') or '') + " " + (r.get('content') or r.get('solution') or '')
-                        db.update_vector(t_name, r['id'], get_embedding(text))
+                        db.update_vector("manual_base", r['id'], get_embedding(r['content']))
                         pb.progress((i+1)/len(rows))
                     st.success("완료!"); st.balloons()
         with tabs[3]:
             st.subheader("🏷️ AI 라벨링 승인 대기")
-            t_sel = st.radio("승인 대상", ["경험", "매뉴얼"], horizontal=True, key="ap_v149")
-            t_name = "knowledge_base" if t_sel == "경험" else "manual_base"
-            if t_name == "manual_base":
-                all_s = db.supabase.table(t_name).select("file_name").eq("semantic_version", 2).execute().data
-                files = sorted(list(set([r['file_name'] for r in all_s if r.get('file_name')])))
-                if files:
-                    c1, c2 = st.columns([0.7, 0.3]); tf = c1.selectbox("파일", files)
-                    if c2.button("🚀 일괄 승인", use_container_width=True):
-                        db.bulk_approve_file(t_name, tf); st.rerun()
-            staging = db.supabase.table(t_name).select("*").eq("semantic_version", 2).limit(3).execute().data
+            staging = db.supabase.table("manual_base").select("*").eq("semantic_version", 2).limit(3).execute().data
             for r in staging:
-                with st.form(key=f"aprv_v149_{r['id']}"):
-                    st.write(f"ID {r['id']}: {r.get('content') or r.get('solution')[:300]}...")
+                with st.form(key=f"aprv_v150_{r['id']}"):
+                    st.write(f"ID {r['id']}: {r.get('content')[:300]}...")
                     c1, c2, c3 = st.columns(3)
                     mfr, mod, itm = c1.text_input("제조사", r.get('manufacturer','')), c2.text_input("모델명", r.get('model_name','')), c3.text_input("항목", r.get('measurement_item',''))
                     if st.form_submit_button("✅ 승인"):
-                        db.update_record_labels(t_name, r['id'], mfr, mod, itm); st.rerun()
+                        db.update_record_labels("manual_base", r['id'], mfr, mod, itm); st.rerun()
 
 elif mode == "📄 문서(매뉴얼) 등록":
     _, up_col, _ = st.columns([1, 2, 1])
     with up_col:
-        up_f = st.file_uploader("PDF 매뉴얼 업로드", type=["pdf"])
+        up_f = st.file_uploader("PDF 업로드", type=["pdf"])
         if up_f and st.button("🚀 학습 시작", use_container_width=True):
             with st.status("학습 중...") as s:
                 pdf_r = PyPDF2.PdfReader(io.BytesIO(up_f.read()))
@@ -176,7 +160,7 @@ elif mode == "📄 문서(매뉴얼) 등록":
 elif mode == "📝 지식 등록":
     _, reg_col, _ = st.columns([1, 2, 1])
     with reg_col:
-        with st.form("reg_v149"):
+        with st.form("reg_v150"):
             f_iss, f_sol = st.text_input("제목"), st.text_area("해결방법", height=200)
             if st.form_submit_button("💾 지식 저장"):
                 db.supabase.table("knowledge_base").insert({"domain": "기술지식", "issue": f_iss, "solution": f_sol, "embedding": get_embedding(f_iss), "semantic_version": 1, "is_verified": True}).execute()
