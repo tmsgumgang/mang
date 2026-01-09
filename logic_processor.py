@@ -3,8 +3,8 @@ import json
 import google.generativeai as genai
 import streamlit as st
 
-# [V134] 고밀도 맥락 보존 분할 (600자 병합 유지)
-def semantic_split_v134(text, target_size=1200, min_size=600):
+# [V135] 고밀도 맥락 보존 분할 (600자 병합 로직)
+def semantic_split_v135(text, target_size=1200, min_size=600):
     flat_text = " ".join(text.split())
     sentences = re.split(r'(?<=[.!?])\s+', flat_text)
     chunks, current_chunk = [], ""
@@ -15,8 +15,10 @@ def semantic_split_v134(text, target_size=1200, min_size=600):
             if current_chunk: chunks.append(current_chunk.strip())
             current_chunk = sentence
     if current_chunk:
-        if len(current_chunk) < min_size and chunks: chunks[-1] = chunks[-1] + " " + current_chunk.strip()
-        else: chunks.append(current_chunk.strip())
+        if len(current_chunk) < min_size and chunks:
+            chunks[-1] = chunks[-1] + " " + current_chunk.strip()
+        else:
+            chunks.append(current_chunk.strip())
     return chunks
 
 def clean_text_for_db(text):
