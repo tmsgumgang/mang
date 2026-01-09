@@ -14,7 +14,7 @@ class DBManager:
             return Counter([r['source_id'] for r in res.data])
         except: return {}
 
-    # [V142] 현장 라벨 수정 및 저장
+    # [V144] 현장 데이터 교정 및 라벨 업데이트 기능
     def update_record_labels(self, table_name, row_id, mfr, model, item):
         try:
             self.supabase.table(table_name).update({
@@ -24,7 +24,7 @@ class DBManager:
             return True
         except: return False
 
-    # [V142] 모델명 매칭 가중치 필터링
+    # [V144] 모델명 일치 시 가중치 부여 (+0.3)
     def match_filtered_db(self, rpc_name, query_vec, threshold, intent):
         results = self.supabase.rpc(rpc_name, {"query_embedding": query_vec, "match_threshold": threshold, "match_count": 40}).execute().data or []
         target_m = intent.get('target_model')
