@@ -3,7 +3,6 @@ import json
 import google.generativeai as genai
 import streamlit as st
 
-# [V148] 시맨틱 분할 알고리즘: 문맥 보존 로직 유지
 def semantic_split_v143(text, target_size=1200, min_size=600):
     flat_text = " ".join(text.split())
     sentences = re.split(r'(?<=[.!?])\s+', flat_text)
