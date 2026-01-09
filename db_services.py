@@ -16,16 +16,22 @@ class DBManager:
 
     def update_record_labels(self, table_name, row_id, mfr, model, item):
         try:
-            payload = {"manufacturer": str(mfr).strip(), "model_name": str(model).strip(), "measurement_item": str(item).strip(), "semantic_version": 1, "review_required": False}
+            payload = {
+                "manufacturer": str(mfr).strip(),
+                "model_name": str(model).strip(),
+                "measurement_item": str(item).strip(),
+                "semantic_version": 1,
+                "review_required": False
+            }
             res = self.supabase.table(table_name).update(payload).eq("id", row_id).execute()
-            return (True, "성공") if res.data else (False, "실패")
+            return (True, "성공") if res.data else (False, "실패: 권한이 없거나 대상이 없습니다.")
         except Exception as e: return (False, str(e))
 
     def update_file_labels(self, table_name, file_name, mfr, model, item):
         try:
             payload = {"manufacturer": str(mfr).strip(), "model_name": str(model).strip(), "measurement_item": str(item).strip(), "semantic_version": 1, "review_required": False}
             res = self.supabase.table(table_name).update(payload).eq("file_name", file_name).or_(f'manufacturer.eq.미지정,manufacturer.is.null,manufacturer.eq.""').execute()
-            return True, f"{len(res.data)}건 일괄 완료"
+            return True, f"{len(res.data)}건 일괄 분류 완료"
         except Exception as e: return False, str(e)
 
     def match_filtered_db(self, rpc_name, query_vec, threshold, intent):
@@ -53,5 +59,11 @@ class DBManager:
     def update_vector(self, table_name, row_id, vec):
         try:
             self.supabase.table(table_name).update({"embedding": vec}).eq("id", row_id).execute()
+            return True
+        except: return False
+
+    def bulk_approve_file(self, table_name, file_name):
+        try:
+            self.supabase.table(table_name).update({"semantic_version": 1, "review_required": False}).eq("file_name", file_name).eq("semantic_version", 2).execute()
             return True
         except: return False
