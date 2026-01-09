@@ -74,15 +74,14 @@ def rerank_results_ai(ai_model, query, results):
         return sorted(results, key=lambda x: x['rerank_score'], reverse=True)
     except: return results
 
-# [V160-Patch1] 문장 길이를 극도로 제한한 3줄 요약 프롬프트
+# [V160-Patch2] 3줄 요약 길이 2배 상향 및 명확성 확보
 def generate_3line_summary(ai_model, query, data):
     prompt = f"""질문: {query} 데이터: {data}
     현장 작업자를 위해 가장 중요한 조치 사항 3가지를 '3줄'로 요약해.
     [조건]
-    1. 각 줄은 반드시 25자 이내의 단문으로 작성할 것.
-    2. 불필요한 수식어(~를 확인하시고, ~를 시도하여 등)를 모두 제거할 것.
-    3. '~함', '~임', '~것' 등 명사형 종결 어미를 권장함.
-    예시: 1. 가스 라인 누출 확인 및 조임 / 2. 펌프 소모품 교체 및 세척 / 3. 전극 세정액 보충"""
+    1. 각 줄은 50자 내외로 구성하여 충분한 정보를 전달할 것.
+    2. 조치 방법과 그 이유를 포함할 것. (예: ~를 점검하여 ~를 방지함)
+    3. 명사형 또는 종결어미를 자유롭게 사용하되 신뢰감 있는 문체로 작성할 것."""
     res = ai_model.generate_content(prompt)
     return res.text
 
