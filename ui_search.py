@@ -3,11 +3,13 @@ import time
 from logic_ai import *
 
 def show_search_ui(ai_model, db):
-    # 시인성 강화를 위한 추가 CSS
+    # [V160-Patch2] 가독성 강화를 위한 CSS (배경-폰트 대비 극대화)
     st.markdown("""<style>
-        .summary-box { background-color: #ffffff; border: 2px solid #166534; padding: 20px; border-radius: 12px; color: #1e293b; margin-bottom: 25px; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1); }
-        .report-box { background-color: #f8fafc; border: 1px solid #004a99; padding: 20px; border-radius: 12px; color: #1e293b; box-shadow: inset 0 2px 4px 0 rgba(0, 0, 0, 0.05); }
-        .edit-section { background-color: #ffffff; border: 1px solid #cbd5e1; padding: 15px; border-radius: 10px; margin-top: 15px; }
+        .summary-box { background-color: #ffffff; border: 2px solid #166534; padding: 20px; border-radius: 12px; color: #1e293b !important; margin-bottom: 25px; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1); }
+        .summary-box b, .summary-box span, .summary-box p { color: #1e293b !important; }
+        .report-box { background-color: #f8fafc; border: 1px solid #004a99; padding: 20px; border-radius: 12px; color: #1e293b !important; box-shadow: inset 0 2px 4px 0 rgba(0, 0, 0, 0.05); }
+        .edit-section { background-color: #ffffff; border: 1px solid #cbd5e1; padding: 15px; border-radius: 10px; margin-top: 15px; color: #1e293b !important; }
+        .meta-bar { background-color: rgba(0, 74, 153, 0.1); border-left: 5px solid #004a99; padding: 10px; border-radius: 4px; font-size: 0.85rem; margin-bottom: 10px; color: #ffffff !important; }
     </style>""", unsafe_allow_html=True)
 
     _, main_col, _ = st.columns([1, 2, 1])
@@ -47,12 +49,12 @@ def show_search_ui(ai_model, db):
                 _, res_col, _ = st.columns([0.5, 3, 0.5])
                 with res_col:
                     st.subheader("⚡ 즉각 대응 핵심 요약 (3줄)")
-                    st.markdown(f'<div class="summary-box"><b>{top_summary_3line}</b></div>', unsafe_allow_html=True)
+                    st.markdown(f'<div class="summary-box">{top_summary_3line}</div>', unsafe_allow_html=True)
                     
                     st.subheader("🔍 AI 전문가 정밀 분석")
                     if "full_report" not in st.session_state:
                         if st.button("📋 심층 기술 리포트 생성 및 확인", use_container_width=True):
-                            with st.spinner("리포트 작성 중..."):
+                            with st.spinner("분석 중..."):
                                 st.session_state.full_report = generate_relevant_summary(ai_model, user_q, final[:5])
                                 st.rerun()
                     else:
@@ -69,10 +71,9 @@ def show_search_ui(ai_model, db):
                             st.markdown(f'<div class="meta-bar"><span>🏢 제조사: <b>{d.get("manufacturer","미지정")}</b></span><span>🧪 항목: <b>{d.get("measurement_item","공통")}</b></span><span>🏷️ 모델: <b>{d.get("model_name","공통")}</b></span></div>', unsafe_allow_html=True)
                             st.write(d.get('content') or d.get('solution'))
                             
-                            # [기능 유지 확약] 현장 라벨 교정 폼 복구 상태 유지
                             st.markdown('<div class="edit-section">', unsafe_allow_html=True)
                             st.markdown("🔧 **데이터 품질 관리 (현장 라벨 교정)**")
-                            with st.form(key=f"edit_v160p1_{d['u_key']}"):
+                            with st.form(key=f"edit_v160p2_{d['u_key']}"):
                                 c1, c2, c3 = st.columns(3)
                                 e_mfr = c1.text_input("제조사", d.get('manufacturer',''), key=f"m_{d['u_key']}")
                                 e_mod = c2.text_input("모델명", d.get('model_name',''), key=f"o_{d['u_key']}")
