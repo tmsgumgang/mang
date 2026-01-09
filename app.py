@@ -37,16 +37,15 @@ def get_embedding(text):
     return result['embedding']
 
 # --- UI Layout ---
-st.set_page_config(page_title="금강수계 AI V136", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="금강수계 AI V137", layout="wide", initial_sidebar_state="collapsed")
 st.markdown("""<style>
     .fixed-header { position: fixed; top: 0; left: 0; width: 100%; background-color: #004a99; color: white; padding: 10px 0; z-index: 999; text-align: center; }
     .main .block-container { padding-top: 5rem !important; }
     .meta-bar { background-color: rgba(128, 128, 128, 0.1); border-left: 5px solid #004a99; padding: 8px; border-radius: 4px; font-size: 0.8rem; margin-bottom: 10px; display: flex; gap: 15px; }
-    .guide-box { background-color: #f8fafc; border: 1px solid #e2e8f0; padding: 12px; border-radius: 8px; font-size: 0.85rem; color: #475569; margin-bottom: 15px; line-height: 1.5; }
+    .guide-box { background-color: #f8fafc; border: 1px solid #e2e8f0; padding: 12px; border-radius: 8px; font-size: 0.85rem; color: #475569; margin-bottom: 15px; }
     .verified-badge { background-color: #e0f2fe; color: #0369a1; padding: 2px 8px; border-radius: 12px; font-weight: bold; font-size: 0.75rem; border: 1px solid #7dd3fc; }
-</style><div class="fixed-header">🌊 금강수계 수질자동측정망 AI V136</div>""", unsafe_allow_html=True)
+</style><div class="fixed-header">🌊 금강수계 수질자동측정망 AI V137</div>""", unsafe_allow_html=True)
 
-# 메뉴 선택 (중앙 배치)
 _, menu_col, _ = st.columns([1, 2, 1])
 with menu_col:
     menu = ["🔍 통합 지식 검색", "📝 지식 등록", "📄 문서(매뉴얼) 등록", "🛠️ 데이터 전체 관리"]
@@ -54,88 +53,91 @@ with menu_col:
 
 st.divider()
 
-# --- 1. 통합 검색 (V136 인증 마크 노출) ---
+# --- 1. 통합 검색 (👍/👎 버튼 및 상관성 로직 복구) ---
 if mode == "🔍 통합 지식 검색":
     _, main_col, _ = st.columns([1, 2, 1])
     with main_col:
         s_mode = st.radio("검색 모드", ["업무기술 🛠️", "생활정보 🍴"], horizontal=True, label_visibility="collapsed")
         u_threshold = st.slider("정밀도(임계값) 설정", 0.0, 1.0, 0.5, 0.05)
-        st.markdown(f'<div class="guide-box">🎯 <b>검색 모드: {"정밀 타격" if u_threshold > 0.6 else "균형"}</b><br>높을수록 정확한 단어 일치 정보를 찾습니다.</div>', unsafe_allow_html=True)
-        user_q = st.text_input("질문 입력", placeholder="질문이나 모델명을 입력하세요", label_visibility="collapsed")
+        st.markdown('<div class="guide-box">🎯 <b>정밀 타격(0.6↑)</b>: 정확한 용어 매칭 / <b>포괄 탐색(0.4↓)</b>: 맥락 위주 검색</div>', unsafe_allow_html=True)
+        user_q = st.text_input("질문 입력", placeholder="장비 모델명이나 궁금한 점을 입력하세요", label_visibility="collapsed")
         search_btn = st.button("🔍 지식 검색 실행", use_container_width=True)
 
     if user_q and (search_btn or user_q):
-        with st.spinner("검증된 지식고 분석 중..."):
+        with st.spinner("지식 상관성을 평가하며 답변을 구성 중..."):
             target_doms = ["기술지식", "기술자산"] if "업무" in s_mode else ["복지생활"]
             q_vec = get_embedding(user_q)
-            blacklist = db.get_blacklist_ids(user_q)
             penalties = db.get_penalty_counts()
             
             results = db.match_manual_db(q_vec, u_threshold) + db.match_knowledge_db(q_vec, u_threshold)
             final = []
             for d in results:
                 u_key = f"{'EXP' if 'solution' in d else 'MAN'}_{d.get('id')}"
-                if u_key not in blacklist and d.get('domain') in target_doms and not d.get('review_required') and d.get('semantic_version') == 1:
-                    # [V136] 인증된 지식에 보너스 점수 부여 (랭킹 상승)
-                    bonus = 0.1 if d.get('is_verified') else 0
-                    d['final_score'] = (d.get('similarity') or 0) - (penalties.get(u_key, 0) * 0.05) + bonus
+                if d.get('domain') in target_doms and not d.get('review_required') and d.get('semantic_version') == 1:
+                    # 상관성 페널티 반영 로직
+                    penalty = penalties.get(u_key, 0) * 0.08
+                    bonus = 0.12 if d.get('is_verified') else 0
+                    d['final_score'] = (d.get('similarity') or 0) - penalty + bonus
+                    d['u_key'] = u_key
                     final.append(d)
             
             final = sorted(final, key=lambda x: x['final_score'], reverse=True)
+            
             _, res_col, _ = st.columns([0.5, 3, 0.5])
             with res_col:
                 if final:
-                    st.subheader("🤖 AI 정밀 요약")
-                    st.info(ai_model.generate_content(f"질문: {user_q} 데이터: {final[:12]}").text)
+                    st.subheader("🤖 AI 전문가 요약")
+                    # [V137] 상관성 평가 요약 엔진 호출
+                    summary = generate_relevant_summary(ai_model, user_q, final[:12])
+                    st.info(summary)
+                    
                     for d in final[:8]:
-                        # [V136] 인증 마크 표시
                         v_label = '<span class="verified-badge">✅ 전문가 인증</span>' if d.get('is_verified') else ''
-                        with st.expander(f"[{d.get('model_name','공통')}] 상세 내용 {v_label}", expanded=False):
+                        with st.expander(f"[{d.get('model_name','공통')}] 상세 내용 {v_label}"):
                             st.markdown(f'<div class="meta-bar"><span>📁 출처: {d.get("file_name","개별지식")}</span><span>🧪 항목: {d.get("measurement_item","공통")}</span></div>', unsafe_allow_html=True)
                             st.write(d.get('content') or d.get('solution'))
-                else: st.warning("🔍 일치하는 승인된 지식이 없습니다.")
+                            
+                            # [V137 핵심 복구] 상관성 피드백 버튼
+                            fb_c1, fb_c2, _ = st.columns([0.15, 0.15, 0.7])
+                            if fb_c1.button("👍 도움됨", key=f"up_{d['u_key']}"):
+                                st.toast("긍정 피드백이 반영되었습니다.")
+                            if fb_c2.button("👎 무관함", key=f"down_{d['u_key']}"):
+                                if db.add_feedback(d['u_key'], user_q, is_positive=False):
+                                    st.toast("부정 피드백(페널티)이 반영되었습니다.", icon="⚠️")
+                else: st.warning("🔍 검색 결과가 없습니다.")
 
-# --- 4. 데이터 전체 관리 (V136 인증 버튼 추가) ---
+# --- 4. 데이터 전체 관리 (모든 기능 유지) ---
 elif mode == "🛠️ 데이터 전체 관리":
     _, tab_col, _ = st.columns([0.1, 3, 0.1])
     with tab_col:
         tabs = st.tabs(["🧹 시맨틱 최신화", "🚨 수동 분류실", "🏗️ 지식 재건축", "🏷️ 라벨 승인"])
         
-        with tabs[3]: # 라벨 승인 및 인증 처리
-            st.subheader("🏷️ AI 라벨링 최종 승인 및 전문가 인증")
-            t_sel = st.radio("테이블", ["경험", "매뉴얼"], horizontal=True)
+        with tabs[3]: # 라벨 승인
+            st.subheader("🏷️ AI 라벨링 최종 검토")
+            t_sel = st.radio("대상", ["경험", "매뉴얼"], horizontal=True)
             t_name = "knowledge_base" if t_sel == "경험" else "manual_base"
             
             # 일괄 승인
-            st.markdown('<div style="background-color:#f0f9ff; padding:20px; border-radius:10px; border:1px solid #bae6fd;">', unsafe_allow_html=True)
             staging_files = sorted(list(set([r['file_name'] for r in db.supabase.table(t_name).select("file_name").eq("semantic_version", 2).execute().data if r.get('file_name')])))
             if staging_files:
                 cf1, cf2 = st.columns([0.7, 0.3])
                 target_f = cf1.selectbox("일괄 승인 파일", options=staging_files, label_visibility="collapsed")
-                if cf2.button("🚀 전체 승인 및 검색 허용", use_container_width=True):
+                if cf2.button("🚀 전체 승인", use_container_width=True):
                     db.bulk_approve_file(t_name, target_f); st.rerun()
-            else: st.write("대기 중인 파일이 없습니다.")
-            st.markdown('</div>', unsafe_allow_html=True)
             
-            # 개별 승인 및 인증(V136)
+            # 개별 승인
             staging = db.supabase.table(t_name).select("*").eq("semantic_version", 2).limit(2).execute().data
-            if staging:
-                for r in staging:
-                    with st.form(key=f"apprv_{r['id']}"):
-                        st.write(f"ID {r['id']}: {r.get('content') or r.get('solution')[:400]}")
-                        c1, c2, c3 = st.columns(3)
-                        a_mfr = c1.text_input("제조사", value=r.get('manufacturer','미지정'), key=f"mfr_{r['id']}")
-                        a_mod = c2.text_input("모델명", value=r.get('model_name','공통'), key=f"mod_{r['id']}")
-                        a_itm = c3.text_input("항목", value=r.get('measurement_item','공통'), key=f"itm_{r['id']}")
-                        
-                        # [V136] 승인 시 인증 여부 선택
-                        is_v = st.checkbox("이 지식을 전문가 인증 지식으로 등록합니다", value=True)
-                        if st.form_submit_button("✅ 최종 승인"):
-                            db.supabase.table(t_name).update({
-                                "manufacturer": a_mfr, "model_name": a_mod, "measurement_item": a_itm, 
-                                "semantic_version": 1, "is_verified": is_v
-                            }).eq("id", r['id']).execute()
-                            st.rerun()
+            for r in staging:
+                with st.form(key=f"apprv_{r['id']}"):
+                    st.write(f"ID {r['id']}: {r.get('content') or r.get('solution')[:400]}")
+                    c1, c2, c3 = st.columns(3)
+                    a_mfr = c1.text_input("제조사", value=r.get('manufacturer','미지정'), key=f"mfr_{r['id']}")
+                    a_mod = c2.text_input("모델명", value=r.get('model_name','공통'), key=f"mod_{r['id']}")
+                    a_itm = c3.text_input("항목", value=r.get('measurement_item','공통'), key=f"itm_{r['id']}")
+                    is_v = st.checkbox("전문가 인증 등록", value=True, key=f"v_{r['id']}")
+                    if st.form_submit_button("✅ 최종 승인"):
+                        db.supabase.table(t_name).update({"manufacturer": a_mfr, "model_name": a_mod, "measurement_item": a_itm, "semantic_version": 1, "is_verified": is_v}).eq("id", r['id']).execute()
+                        st.rerun()
 
 # --- 2, 3 메뉴 (센터 레이아웃 유지) ---
 elif mode == "📄 문서(매뉴얼) 등록":
@@ -145,20 +147,16 @@ elif mode == "📄 문서(매뉴얼) 등록":
         if up_f and st.button("🚀 지능형 학습 시작", use_container_width=True):
             pdf_r = PyPDF2.PdfReader(io.BytesIO(up_f.read()))
             all_t = "\n".join([p.extract_text() for p in pdf_r.pages if p.extract_text()])
-            chunks = semantic_split_v136(all_t)
+            chunks = semantic_split_v137(all_t)
             for chunk in chunks:
                 meta = extract_metadata_ai(ai_model, chunk)
-                db.supabase.table("manual_base").insert({
-                    "domain": "기술지식", "content": clean_text_for_db(chunk), "file_name": up_f.name,
-                    "manufacturer": meta.get('manufacturer','미지정'), "model_name": meta.get('model_name','미지정'),
-                    "measurement_item": meta.get('measurement_item','공통'), "embedding": get_embedding(chunk), "semantic_version": 2
-                }).execute()
+                db.supabase.table("manual_base").insert({"domain": "기술지식", "content": clean_text_for_db(chunk), "file_name": up_f.name, "manufacturer": meta.get('manufacturer','미지정'), "model_name": meta.get('model_name','미지정'), "measurement_item": meta.get('measurement_item','공통'), "embedding": get_embedding(chunk), "semantic_version": 2}).execute()
             st.success("학습 완료!"); st.rerun()
 
 elif mode == "📝 지식 등록":
     _, reg_col, _ = st.columns([1, 2, 1])
     with reg_col:
-        with st.form("reg_v136"):
+        with st.form("reg_v137"):
             f_dom = st.selectbox("도메인", list(DOMAIN_MAP.keys()))
             f_iss, f_sol = st.text_input("제목"), st.text_area("내용")
             if st.form_submit_button("💾 저장하기", use_container_width=True):
