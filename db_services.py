@@ -26,7 +26,6 @@ class DBManager:
     def match_knowledge_db(self, query_vec, threshold):
         return self.supabase.rpc("match_knowledge", {"query_embedding": query_vec, "match_threshold": threshold, "match_count": 40}).execute().data or []
 
-    # 파일 단위 일괄 승인 기능
     def bulk_approve_file(self, table_name, file_name):
         try:
             self.supabase.table(table_name).update({
@@ -36,4 +35,12 @@ class DBManager:
             return True
         except Exception as e:
             print(f"일괄 승인 오류: {e}")
+            return False
+
+    # [V136] 전문가 인증 상태 변경 (is_verified 컬럼 활용)
+    def update_verification(self, table_name, row_id, status=True):
+        try:
+            self.supabase.table(table_name).update({"is_verified": status}).eq("id", row_id).execute()
+            return True
+        except:
             return False
