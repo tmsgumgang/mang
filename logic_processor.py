@@ -3,6 +3,7 @@ import json
 import google.generativeai as genai
 import streamlit as st
 
+# [V144] 시맨틱 분할 로직: 문맥 보존을 위한 600자 강제 병합 및 타겟 사이즈 최적화
 def semantic_split_v143(text, target_size=1200, min_size=600):
     flat_text = " ".join(text.split())
     sentences = re.split(r'(?<=[.!?])\s+', flat_text)
@@ -30,6 +31,7 @@ def extract_json(text):
         return json.loads(cleaned)
     except: return None
 
+# [V144] AI 심층 메타데이터 추출 엔진
 def extract_metadata_ai(ai_model, content):
     try:
         prompt = f"""텍스트에서 정보를 정밀하게 추출해 JSON으로 응답해.
@@ -42,6 +44,7 @@ def extract_metadata_ai(ai_model, content):
         return extract_json(res.text)
     except: return None
 
+# [V144] 검색 의도 분석 및 장비 타겟팅 로직
 def analyze_search_intent(ai_model, query):
     try:
         prompt = f"""사용자의 질문에서 '타겟 모델명'과 '측정 항목'을 추출해.
