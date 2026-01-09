@@ -14,30 +14,26 @@ class DBManager:
             return Counter([r['source_id'] for r in res.data])
         except: return {}
 
-    # [V139 핵심] 현장 라벨 수정 및 저장 기능
+    # 라벨 정보 현장 교정 및 저장
     def update_record_labels(self, table_name, row_id, mfr, model, item):
         try:
             self.supabase.table(table_name).update({
-                "manufacturer": mfr,
-                "model_name": model,
-                "measurement_item": item,
-                "semantic_version": 1, # 수정 즉시 정식 지식으로 승인
-                "review_required": False
+                "manufacturer": mfr, "model_name": model, "measurement_item": item,
+                "semantic_version": 1, "review_required": False
             }).eq("id", row_id).execute()
             return True
         except: return False
 
-    # [V139] 필터링이 강화된 통합 검색
+    # [V140] 모델명 일치 시 가중치 부여 및 필터링 강화
     def match_filtered_db(self, rpc_name, query_vec, threshold, intent):
-        res = self.supabase.rpc(rpc_name, {"query_embedding": query_vec, "match_threshold": threshold, "match_count": 50}).execute().data or []
-        
+        results = self.supabase.rpc(rpc_name, {"query_embedding": query_vec, "match_threshold": threshold, "match_count": 50}).execute().data or []
         target_m = intent.get('target_model')
         if target_m:
-            # 질문 속 모델명이 데이터 라벨에 포함되어 있으면 가산점 부여
-            for d in res:
+            # 질문 속 모델명이 라벨에 포함된 데이터에 파격적인 가산점(+0.3) 부여
+            for d in results:
                 if target_m.lower() in str(d.get('model_name','')).lower():
-                    d['similarity'] = (d.get('similarity') or 0) + 0.2
-        return res
+                    d['similarity'] = (d.get('similarity') or 0) + 0.3
+        return results
 
     def bulk_approve_file(self, table_name, file_name):
         try:
