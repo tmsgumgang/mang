@@ -44,7 +44,7 @@ def extract_metadata_ai(ai_model, content):
 
 def analyze_search_intent(ai_model, query):
     try:
-        prompt = f"""사용자의 질문에서 '타겟 모델명'과 '측정 항목'을 추출해.
+        prompt = f"""사용자의 질문에서 '타겟 모델명'과 '측정 항목'을 추출해. 특히 TOC, TN, TP 등의 항목을 잘 구분해.
         질문: {query}
         응답형식(JSON): {{"target_model": "모델명", "target_item": "측정항목"}}"""
         res = ai_model.generate_content(prompt)
