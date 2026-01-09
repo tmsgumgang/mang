@@ -3,6 +3,13 @@ import time
 from logic_ai import *
 
 def show_search_ui(ai_model, db):
+    # 시인성 강화를 위한 추가 CSS
+    st.markdown("""<style>
+        .summary-box { background-color: #ffffff; border: 2px solid #166534; padding: 20px; border-radius: 12px; color: #1e293b; margin-bottom: 25px; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1); }
+        .report-box { background-color: #f8fafc; border: 1px solid #004a99; padding: 20px; border-radius: 12px; color: #1e293b; box-shadow: inset 0 2px 4px 0 rgba(0, 0, 0, 0.05); }
+        .edit-section { background-color: #ffffff; border: 1px solid #cbd5e1; padding: 15px; border-radius: 10px; margin-top: 15px; }
+    </style>""", unsafe_allow_html=True)
+
     _, main_col, _ = st.columns([1, 2, 1])
     with main_col:
         s_mode = st.radio("검색 모드", ["업무기술 🛠️", "생활정보 🍴"], horizontal=True, label_visibility="collapsed")
@@ -39,20 +46,22 @@ def show_search_ui(ai_model, db):
                 
                 _, res_col, _ = st.columns([0.5, 3, 0.5])
                 with res_col:
-                    st.subheader("⚡ 즉각 대응 3줄 요약")
+                    st.subheader("⚡ 즉각 대응 핵심 요약 (3줄)")
                     st.markdown(f'<div class="summary-box"><b>{top_summary_3line}</b></div>', unsafe_allow_html=True)
                     
                     st.subheader("🔍 AI 전문가 정밀 분석")
                     if "full_report" not in st.session_state:
                         if st.button("📋 심층 기술 리포트 생성 및 확인", use_container_width=True):
-                            with st.spinner("분석 중..."):
+                            with st.spinner("리포트 작성 중..."):
                                 st.session_state.full_report = generate_relevant_summary(ai_model, user_q, final[:5])
                                 st.rerun()
                     else:
-                        st.info(st.session_state.full_report)
+                        st.markdown('<div class="report-box">', unsafe_allow_html=True)
+                        st.write(st.session_state.full_report)
+                        st.markdown('</div>', unsafe_allow_html=True)
                         if st.button("🔄 리포트 다시 읽기"): del st.session_state.full_report; st.rerun()
                     
-                    st.subheader("📋 정밀 검증된 근거 데이터 및 품질 관리")
+                    st.subheader("📋 근거 지식 및 라벨링 관리")
                     for d in final[:6]:
                         v_mark = ' ✅ 인증' if d.get('is_verified') else ''
                         score = d.get('rerank_score', 0)
@@ -60,10 +69,10 @@ def show_search_ui(ai_model, db):
                             st.markdown(f'<div class="meta-bar"><span>🏢 제조사: <b>{d.get("manufacturer","미지정")}</b></span><span>🧪 항목: <b>{d.get("measurement_item","공통")}</b></span><span>🏷️ 모델: <b>{d.get("model_name","공통")}</b></span></div>', unsafe_allow_html=True)
                             st.write(d.get('content') or d.get('solution'))
                             
-                            # [V160 복구] 검색 결과 내 라벨링 폼 (절대 누락 금지 지침 준수)
-                            st.markdown("---")
+                            # [기능 유지 확약] 현장 라벨 교정 폼 복구 상태 유지
+                            st.markdown('<div class="edit-section">', unsafe_allow_html=True)
                             st.markdown("🔧 **데이터 품질 관리 (현장 라벨 교정)**")
-                            with st.form(key=f"edit_v160_{d['u_key']}"):
+                            with st.form(key=f"edit_v160p1_{d['u_key']}"):
                                 c1, c2, c3 = st.columns(3)
                                 e_mfr = c1.text_input("제조사", d.get('manufacturer',''), key=f"m_{d['u_key']}")
                                 e_mod = c2.text_input("모델명", d.get('model_name',''), key=f"o_{d['u_key']}")
@@ -73,4 +82,5 @@ def show_search_ui(ai_model, db):
                                     success, msg = db.update_record_labels(t_name, d['id'], e_mfr, e_mod, e_itm)
                                     if success: st.success("데이터 품질 교정 완료!"); time.sleep(0.5); st.rerun()
                                     else: st.error(msg)
+                            st.markdown('</div>', unsafe_allow_html=True)
             else: st.warning("🔍 검색 결과가 없습니다.")
