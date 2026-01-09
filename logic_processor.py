@@ -3,7 +3,6 @@ import json
 import google.generativeai as genai
 import streamlit as st
 
-# [V144] 시맨틱 분할 알고리즘: 문맥 보존을 위한 600자 강제 병합 로직
 def semantic_split_v143(text, target_size=1200, min_size=600):
     flat_text = " ".join(text.split())
     sentences = re.split(r'(?<=[.!?])\s+', flat_text)
@@ -31,20 +30,18 @@ def extract_json(text):
         return json.loads(cleaned)
     except: return None
 
-# [V144] AI 심층 메타데이터 추출 (제조사, 모델, 항목)
 def extract_metadata_ai(ai_model, content):
     try:
         prompt = f"""텍스트에서 정보를 정밀하게 추출해 JSON으로 응답해.
-        - manufacturer: 제조사 (예: 백년기술)
-        - model_name: 모델명 (예: TN-2060)
-        - measurement_item: 측정항목 (예: TN)
+        - manufacturer: 제조사
+        - model_name: 모델명
+        - measurement_item: 측정항목
         텍스트: {content[:2000]}
         응답형식(JSON): {{"manufacturer": "값", "model_name": "값", "measurement_item": "값"}}"""
         res = ai_model.generate_content(prompt)
         return extract_json(res.text)
     except: return None
 
-# [V144] 검색 의도 분석 엔진
 def analyze_search_intent(ai_model, query):
     try:
         prompt = f"""사용자의 질문에서 '타겟 모델명'과 '측정 항목'을 추출해.
