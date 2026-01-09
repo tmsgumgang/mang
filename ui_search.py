@@ -3,13 +3,14 @@ import time
 from logic_ai import *
 
 def show_search_ui(ai_model, db):
-    # [V160-Patch2] 가독성 강화를 위한 CSS (배경-폰트 대비 극대화)
+    # [V160-Patch3] 박스 시인성 강화 및 폰트 색상 강제 지정
     st.markdown("""<style>
-        .summary-box { background-color: #ffffff; border: 2px solid #166534; padding: 20px; border-radius: 12px; color: #1e293b !important; margin-bottom: 25px; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1); }
-        .summary-box b, .summary-box span, .summary-box p { color: #1e293b !important; }
-        .report-box { background-color: #f8fafc; border: 1px solid #004a99; padding: 20px; border-radius: 12px; color: #1e293b !important; box-shadow: inset 0 2px 4px 0 rgba(0, 0, 0, 0.05); }
-        .edit-section { background-color: #ffffff; border: 1px solid #cbd5e1; padding: 15px; border-radius: 10px; margin-top: 15px; color: #1e293b !important; }
-        .meta-bar { background-color: rgba(0, 74, 153, 0.1); border-left: 5px solid #004a99; padding: 10px; border-radius: 4px; font-size: 0.85rem; margin-bottom: 10px; color: #ffffff !important; }
+        .summary-box { background-color: #f8fafc; border: 2px solid #166534; padding: 20px; border-radius: 12px; color: #0f172a !important; margin-bottom: 25px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); line-height: 1.6; }
+        .summary-box b, .summary-box div { color: #0f172a !important; }
+        .report-box { background-color: #ffffff; border: 1px solid #004a99; padding: 25px; border-radius: 12px; color: #0f172a !important; box-shadow: inset 0 2px 4px 0 rgba(0, 0, 0, 0.05); line-height: 1.8; }
+        .meta-bar { background-color: rgba(0, 74, 153, 0.1); border-left: 5px solid #004a99; padding: 10px; border-radius: 4px; font-size: 0.85rem; margin-bottom: 10px; color: #1e293b !important; }
+        /* 폼 테두리 스타일링 */
+        div[data-testid="stForm"] { border: 1px solid #e2e8f0; background-color: #f1f5f9; padding: 20px; border-radius: 10px; }
     </style>""", unsafe_allow_html=True)
 
     _, main_col, _ = st.columns([1, 2, 1])
@@ -49,7 +50,8 @@ def show_search_ui(ai_model, db):
                 _, res_col, _ = st.columns([0.5, 3, 0.5])
                 with res_col:
                     st.subheader("⚡ 즉각 대응 핵심 요약 (3줄)")
-                    st.markdown(f'<div class="summary-box">{top_summary_3line}</div>', unsafe_allow_html=True)
+                    # 줄바꿈 적용을 위해 markdown 내 개행 처리
+                    st.markdown(f'<div class="summary-box">{top_summary_3line.replace("\\n", "<br>")}</div>', unsafe_allow_html=True)
                     
                     st.subheader("🔍 AI 전문가 정밀 분석")
                     if "full_report" not in st.session_state:
@@ -71,9 +73,10 @@ def show_search_ui(ai_model, db):
                             st.markdown(f'<div class="meta-bar"><span>🏢 제조사: <b>{d.get("manufacturer","미지정")}</b></span><span>🧪 항목: <b>{d.get("measurement_item","공통")}</b></span><span>🏷️ 모델: <b>{d.get("model_name","공통")}</b></span></div>', unsafe_allow_html=True)
                             st.write(d.get('content') or d.get('solution'))
                             
-                            st.markdown('<div class="edit-section">', unsafe_allow_html=True)
+                            # [기능 보존] 현장 라벨 교정 폼 (흰 줄 박스 제거됨)
+                            st.markdown("---")
                             st.markdown("🔧 **데이터 품질 관리 (현장 라벨 교정)**")
-                            with st.form(key=f"edit_v160p2_{d['u_key']}"):
+                            with st.form(key=f"edit_v160p3_{d['u_key']}"):
                                 c1, c2, c3 = st.columns(3)
                                 e_mfr = c1.text_input("제조사", d.get('manufacturer',''), key=f"m_{d['u_key']}")
                                 e_mod = c2.text_input("모델명", d.get('model_name',''), key=f"o_{d['u_key']}")
@@ -83,5 +86,4 @@ def show_search_ui(ai_model, db):
                                     success, msg = db.update_record_labels(t_name, d['id'], e_mfr, e_mod, e_itm)
                                     if success: st.success("데이터 품질 교정 완료!"); time.sleep(0.5); st.rerun()
                                     else: st.error(msg)
-                            st.markdown('</div>', unsafe_allow_html=True)
             else: st.warning("🔍 검색 결과가 없습니다.")
