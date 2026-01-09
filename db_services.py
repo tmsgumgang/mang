@@ -14,17 +14,19 @@ class DBManager:
             return Counter([r['source_id'] for r in res.data])
         except: return {}
 
-    # [V149] 에러 발생 시 구체적인 메시지를 반환하도록 개선
     def update_record_labels(self, table_name, row_id, mfr, model, item):
         try:
-            res = self.supabase.table(table_name).update({
-                "manufacturer": mfr, "model_name": model, "measurement_item": item,
-                "semantic_version": 1, "review_required": False
-            }).eq("id", row_id).execute()
-            
-            # 업데이트된 데이터가 없으면 RLS 정책 문제일 가능성이 큼
+            # [V150] 데이터 형식을 명확히 하여 스키마 불일치 에러 방지
+            payload = {
+                "manufacturer": str(mfr).strip(),
+                "model_name": str(model).strip(),
+                "measurement_item": str(item).strip(),
+                "semantic_version": 1,
+                "review_required": False
+            }
+            res = self.supabase.table(table_name).update(payload).eq("id", row_id).execute()
             if not res.data:
-                return False, "대상 데이터를 찾을 수 없거나 RLS 권한이 없습니다."
+                return False, "대상 데이터를 찾을 수 없거나 RLS 정책에 의해 차단되었습니다."
             return True, "성공"
         except Exception as e:
             return False, str(e)
