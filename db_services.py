@@ -40,7 +40,6 @@ class DBManager:
             return True
         except: return False
 
-    # [V145 추가] 벡터 업데이트 전용 메서드
     def update_vector(self, table_name, row_id, vec):
         try:
             self.supabase.table(table_name).update({"embedding": vec}).eq("id", row_id).execute()
