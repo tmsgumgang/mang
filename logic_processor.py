@@ -3,7 +3,7 @@ import json
 import google.generativeai as genai
 import streamlit as st
 
-# [V156] 시맨틱 분할 알고리즘
+# [V158] 시맨틱 분할 알고리즘
 def semantic_split_v143(text, target_size=1200, min_size=600):
     flat_text = " ".join(text.split())
     sentences = re.split(r'(?<=[.!?])\s+', flat_text)
@@ -52,26 +52,21 @@ def analyze_search_intent(ai_model, query):
         return extract_json(res.text)
     except: return {"target_model": None, "target_item": None}
 
-# [V156 최적화] 리랭킹 후보군 정보 압축 및 판단 로직 강화
 def rerank_results_ai(ai_model, query, results):
     if not results: return []
-    
-    # 토큰 절약을 위해 리랭킹 후보군을 핵심 정보로 압축
     candidates = []
     for r in results:
         candidates.append({
             "id": r.get('id'),
             "item": r.get('measurement_item'),
             "model": r.get('model_name'),
-            "summary": (r.get('content') or r.get('solution'))[:150] # 150자로 단축
+            "summary": (r.get('content') or r.get('solution'))[:150]
         })
-    
     prompt = f"""질문: "{query}"
     후보 지식들입니다. 질문과의 기술적 정합성을 0-100점으로 평가해 JSON으로 응답해.
     항목(Item) 불일치 시 감점을 대폭 적용하고, 모델명 일치 시 가점을 부여해.
     후보: {json.dumps(candidates, ensure_ascii=False)}
     응답형식: [{{"id": 1, "score": 95}}, ...]"""
-    
     try:
         res = ai_model.generate_content(prompt)
         scores = extract_json(res.text)
@@ -79,17 +74,19 @@ def rerank_results_ai(ai_model, query, results):
         for r in results:
             r['rerank_score'] = score_map.get(r['id'], 0)
         return sorted(results, key=lambda x: x['rerank_score'], reverse=True)
-    except:
-        return results
+    except: return results
 
+# [V158] 초기 로딩을 줄이기 위한 초간결 3줄 요약 생성
 def generate_3line_summary(ai_model, query, data):
     prompt = f"""질문: {query} 데이터: {data}
-    위 내용을 바탕으로 현장 작업자를 위해 가장 중요한 조치 사항 3가지를 '3줄' 내외로 매우 간결하게 번호 붙여 요약해줘."""
+    현장 작업자를 위해 가장 중요한 조치 사항 3가지를 '3줄'로 매우 간결하게 번호 붙여 작성해줘. 
+    전문 용어보다는 즉각 실행 가능한 행동 위주로 써야 해."""
     res = ai_model.generate_content(prompt)
     return res.text
 
+# [V158] 사용자가 상세보기를 클릭했을 때만 호출될 심층 분석 엔진
 def generate_relevant_summary(ai_model, query, data):
     prompt = f"""질문: {query} 데이터: {data}
-    당신은 수질자동측정망 기술 전문가입니다. 상세한 기술 리포트를 작성해줘."""
+    당신은 수질자동측정망 기술 전문가입니다. 위 데이터를 바탕으로 고장 원인 분석 및 단계별 정밀 해결 방안을 포함한 기술 리포트를 작성해줘."""
     res = ai_model.generate_content(prompt)
     return res.text
