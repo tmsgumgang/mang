@@ -3,6 +3,7 @@ import json
 import google.generativeai as genai
 import streamlit as st
 
+# [V153] 시맨틱 분할 알고리즘
 def semantic_split_v143(text, target_size=1200, min_size=600):
     flat_text = " ".join(text.split())
     sentences = re.split(r'(?<=[.!?])\s+', flat_text)
@@ -50,6 +51,13 @@ def analyze_search_intent(ai_model, query):
         res = ai_model.generate_content(prompt)
         return extract_json(res.text)
     except: return {"target_model": None, "target_item": None}
+
+# [V153 추가] 현장 대응용 3줄 핵심 요약 생성
+def generate_3line_summary(ai_model, query, data):
+    prompt = f"""질문: {query} 데이터: {data}
+    위 내용을 바탕으로 현장 작업자를 위해 가장 중요한 조치 사항 3가지를 '3줄' 내외로 매우 간결하게 번호 붙여 요약해줘."""
+    res = ai_model.generate_content(prompt)
+    return res.text
 
 def generate_relevant_summary(ai_model, query, data):
     prompt = f"질문: {query} 데이터: {data}\n위 내용을 바탕으로 전문가용 기술 답변을 작성해줘."
