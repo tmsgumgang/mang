@@ -3,8 +3,8 @@ import json
 import google.generativeai as genai
 import streamlit as st
 
-# [V132] 고밀도 맥락 보존 분할 (600자 병합 유지)
-def semantic_split_v132(text, target_size=1200, min_size=600):
+# [V134] 고밀도 맥락 보존 분할 (600자 병합 유지)
+def semantic_split_v134(text, target_size=1200, min_size=600):
     flat_text = " ".join(text.split())
     sentences = re.split(r'(?<=[.!?])\s+', flat_text)
     chunks, current_chunk = [], ""
@@ -30,7 +30,6 @@ def extract_json(text):
         return json.loads(cleaned)
     except: return None
 
-# AI 메타데이터 추출 엔진 (V130/131 로직 복구)
 def extract_metadata_ai(ai_model, content):
     try:
         prompt = f"""텍스트에서 장비 정보를 추출해 JSON 응답해.
@@ -43,7 +42,6 @@ def extract_metadata_ai(ai_model, content):
         return extract_json(res.text)
     except: return None
 
-# 도메인 판단 엔진 (V126 로직 복구)
 def route_intent_ai(ai_model, query):
     try:
         prompt = f"질문 도메인 판단 [기술지식, 행정절차, 복지생활]. 질문: {query}\nJSON: {{\"domain\": \"도메인\"}}"
