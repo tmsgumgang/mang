@@ -14,13 +14,21 @@ class DBManager:
             return Counter([r['source_id'] for r in res.data])
         except: return {}
 
+    # [V148] 데이터 교정/분류 로직 (성공 여부 반환 강화)
     def update_record_labels(self, table_name, row_id, mfr, model, item):
         try:
-            self.supabase.table(table_name).update({
+            res = self.supabase.table(table_name).update({
                 "manufacturer": mfr, "model_name": model, "measurement_item": item,
                 "semantic_version": 1, "review_required": False
             }).eq("id", row_id).execute()
-            return True
+            return len(res.data) > 0
+        except: return False
+
+    # [V148] 데이터 영구 폐기(삭제) 로직
+    def delete_record(self, table_name, row_id):
+        try:
+            res = self.supabase.table(table_name).delete().eq("id", row_id).execute()
+            return len(res.data) > 0
         except: return False
 
     def match_filtered_db(self, rpc_name, query_vec, threshold, intent):
