@@ -23,13 +23,14 @@ def get_embedding(text):
     result = genai.embed_content(model="models/text-embedding-004", content=clean_text_for_db(text), task_type="retrieval_document")
     return result['embedding']
 
-st.set_page_config(page_title="금강수계 AI V150", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="금강수계 AI V151", layout="wide", initial_sidebar_state="collapsed")
 st.markdown("""<style>
     .fixed-header { position: fixed; top: 0; left: 0; width: 100%; background-color: #004a99; color: white; padding: 10px 0; z-index: 999; text-align: center; }
     .main .block-container { padding-top: 5.5rem !important; }
     .meta-bar { background-color: rgba(255, 255, 255, 0.1); border-left: 5px solid #004a99; padding: 10px; border-radius: 4px; font-size: 0.8rem; margin-bottom: 10px; color: #ffffff !important; }
     .guide-box { background-color: #f1f5f9; border: 1px solid #cbd5e1; padding: 15px; border-radius: 8px; font-size: 0.9rem; color: #1e293b; margin-bottom: 15px; }
-</style><div class="fixed-header">🌊 금강수계 수질자동측정망 AI V150</div>""", unsafe_allow_html=True)
+    .batch-box { background-color: rgba(0, 74, 153, 0.1); border: 1px dashed #004a99; padding: 10px; border-radius: 8px; margin-top: 5px; }
+</style><div class="fixed-header">🌊 금강수계 수질자동측정망 AI V151</div>""", unsafe_allow_html=True)
 
 _, menu_col, _ = st.columns([1, 2, 1])
 with menu_col:
@@ -88,32 +89,48 @@ elif mode == "🛠️ 데이터 전체 관리":
     _, tab_col, _ = st.columns([0.1, 3, 0.1])
     with tab_col:
         tabs = st.tabs(["🧹 시맨틱 최신화", "🚨 수동 분류실", "🏗️ 지식 재건축", "🏷️ 라벨 승인"])
-        with tabs[1]:
+        with tabs[1]: # [V151] 수동 분류실 일괄 적용 기능 탑재
             st.subheader("🚨 제조사 미지정 데이터 정제")
             target = st.radio("조회 대상", ["경험", "매뉴얼"], horizontal=True, key="m_cls_target")
             t_name = "knowledge_base" if target == "경험" else "manual_base"
             unclass = db.supabase.table(t_name).select("*").or_(f'manufacturer.eq.미지정,manufacturer.is.null,manufacturer.eq.""').limit(5).execute().data
+            
             if unclass:
+                st.info("데이터를 분류하고 저장하세요. 단일 모델 매뉴얼이라면 '일괄 적용'을 활용하세요.")
                 for r in unclass:
-                    with st.expander(f"ID {r['id']} 상세 내용"):
+                    with st.expander(f"ID {r['id']} 상세 (출처: {r.get('file_name', '직접등록')})"):
                         st.write(r.get('content') or r.get('solution') or r.get('issue'))
-                        with st.form(key=f"v150_cls_{t_name}_{r['id']}"):
+                        with st.form(key=f"v151_cls_{t_name}_{r['id']}"):
                             c1, c2, c3 = st.columns(3)
                             n_mfr = c1.text_input("제조사 (필수)", key=f"nm_{t_name}_{r['id']}")
                             n_mod = c2.text_input("모델명", key=f"no_{t_name}_{r['id']}")
                             n_itm = c3.text_input("항목", key=f"ni_{t_name}_{r['id']}")
+                            
+                            # [V151] 일괄 적용 옵션
+                            batch_apply = False
+                            if t_name == "manual_base" and r.get('file_name'):
+                                st.markdown('<div class="batch-box">', unsafe_allow_html=True)
+                                batch_apply = st.checkbox(f"이 파일({r.get('file_name')})의 모든 미분류 데이터에 동일 적용", key=f"batch_{r['id']}")
+                                st.markdown('</div>', unsafe_allow_html=True)
+                            
                             b1, b2 = st.columns(2)
                             if b1.form_submit_button("✅ 분류 완료 및 저장", use_container_width=True):
                                 if not n_mfr.strip(): st.error("제조사를 입력해주세요.")
                                 else:
-                                    success, msg = db.update_record_labels(t_name, r['id'], n_mfr, n_mod, n_itm)
-                                    if success: st.success("저장 성공!"); time.sleep(0.5); st.rerun()
+                                    if batch_apply:
+                                        success, msg = db.update_file_labels(t_name, r['file_name'], n_mfr, n_mod, n_itm)
+                                    else:
+                                        success, msg = db.update_record_labels(t_name, r['id'], n_mfr, n_mod, n_itm)
+                                    
+                                    if success: st.success(f"{msg}!"); time.sleep(0.5); st.rerun()
                                     else: st.error(f"저장 실패: {msg}")
+                                    
                             if b2.form_submit_button("🗑️ 무의미한 지식 폐기", use_container_width=True):
                                 success, msg = db.delete_record(t_name, r['id'])
                                 if success: st.warning("삭제 완료!"); time.sleep(0.5); st.rerun()
                                 else: st.error(f"삭제 실패: {msg}")
             else: st.success("✅ 모든 데이터가 정상적으로 분류되어 있습니다.")
+        
         with tabs[0]:
             st.subheader("🧹 데이터 현황")
             c1, c2 = st.columns(2)
@@ -135,7 +152,7 @@ elif mode == "🛠️ 데이터 전체 관리":
             st.subheader("🏷️ AI 라벨링 승인 대기")
             staging = db.supabase.table("manual_base").select("*").eq("semantic_version", 2).limit(3).execute().data
             for r in staging:
-                with st.form(key=f"aprv_v150_{r['id']}"):
+                with st.form(key=f"aprv_v151_{r['id']}"):
                     st.write(f"ID {r['id']}: {r.get('content')[:300]}...")
                     c1, c2, c3 = st.columns(3)
                     mfr, mod, itm = c1.text_input("제조사", r.get('manufacturer','')), c2.text_input("모델명", r.get('model_name','')), c3.text_input("항목", r.get('measurement_item',''))
@@ -160,7 +177,7 @@ elif mode == "📄 문서(매뉴얼) 등록":
 elif mode == "📝 지식 등록":
     _, reg_col, _ = st.columns([1, 2, 1])
     with reg_col:
-        with st.form("reg_v150"):
+        with st.form("reg_v151"):
             f_iss, f_sol = st.text_input("제목"), st.text_area("해결방법", height=200)
             if st.form_submit_button("💾 지식 저장"):
                 db.supabase.table("knowledge_base").insert({"domain": "기술지식", "issue": f_iss, "solution": f_sol, "embedding": get_embedding(f_iss), "semantic_version": 1, "is_verified": True}).execute()
