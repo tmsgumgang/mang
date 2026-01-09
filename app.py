@@ -23,14 +23,15 @@ def get_embedding(text):
     result = genai.embed_content(model="models/text-embedding-004", content=clean_text_for_db(text), task_type="retrieval_document")
     return result['embedding']
 
-st.set_page_config(page_title="금강수계 AI V152", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="금강수계 AI V153", layout="wide", initial_sidebar_state="collapsed")
 st.markdown("""<style>
     .fixed-header { position: fixed; top: 0; left: 0; width: 100%; background-color: #004a99; color: white; padding: 10px 0; z-index: 999; text-align: center; }
     .main .block-container { padding-top: 5.5rem !important; }
     .meta-bar { background-color: rgba(255, 255, 255, 0.1); border-left: 5px solid #004a99; padding: 10px; border-radius: 4px; font-size: 0.8rem; margin-bottom: 10px; color: #ffffff !important; }
     .guide-box { background-color: #f1f5f9; border: 1px solid #cbd5e1; padding: 15px; border-radius: 8px; font-size: 0.9rem; color: #1e293b; margin-bottom: 15px; }
+    .summary-box { background-color: #e0f2fe; border: 1px solid #0369a1; padding: 15px; border-radius: 10px; color: #0369a1; margin-bottom: 20px; font-size: 1rem; }
     .intent-badge { background-color: #e0f2fe; color: #0369a1; padding: 4px 10px; border-radius: 20px; font-size: 0.8rem; font-weight: bold; margin-bottom: 10px; display: inline-block; border: 1px solid #7dd3fc; }
-</style><div class="fixed-header">🌊 금강수계 수질자동측정망 AI V152</div>""", unsafe_allow_html=True)
+</style><div class="fixed-header">🌊 금강수계 수질자동측정망 AI V153</div>""", unsafe_allow_html=True)
 
 _, menu_col, _ = st.columns([1, 2, 1])
 with menu_col:
@@ -48,10 +49,8 @@ if mode == "🔍 통합 지식 검색":
         search_btn = st.button("🔍 지능형 검색 실행", use_container_width=True)
 
     if user_q and (search_btn or user_q):
-        with st.spinner("의도 분석 및 필터링 검색 중..."):
+        with st.spinner("의도 분석 및 요약 리포트 생성 중..."):
             intent = analyze_search_intent(ai_model, user_q)
-            
-            # 분석된 의도 표시 (디버깅용)
             if intent.get('target_item') or intent.get('target_model'):
                 st.markdown(f"<div class='intent-badge'>🎯 감지된 타겟: {intent.get('target_item','')} {intent.get('target_model','')}</div>", unsafe_allow_html=True)
             
@@ -64,7 +63,6 @@ if mode == "🔍 통합 지식 검색":
             for d in (m_res + k_res):
                 u_key = f"{'EXP' if 'solution' in d else 'MAN'}_{d.get('id')}"
                 if d.get('semantic_version') == 1:
-                    # 최종 점수 계산
                     score = (d.get('similarity') or 0) - (penalties.get(u_key, 0) * 0.1)
                     if d.get('is_verified'): score += 0.15
                     final.append({**d, 'final_score': score, 'u_key': u_key})
@@ -73,27 +71,29 @@ if mode == "🔍 통합 지식 검색":
             _, res_col, _ = st.columns([0.5, 3, 0.5])
             with res_col:
                 if final:
-                    st.subheader("🤖 AI 전문가 분석 요약")
-                    st.info(generate_relevant_summary(ai_model, user_q, final[:10]))
+                    # [V153] 3줄 핵심 요약 상단 배치
+                    st.subheader("⚡ 즉각 대응 핵심 요약")
+                    st.markdown(f'<div class="summary-box"><b>{generate_3line_summary(ai_model, user_q, final[:10])}</b></div>', unsafe_allow_html=True)
+                    
+                    # [V153] 전체 분석 내용을 expander로 숨김
+                    with st.expander("🔍 AI 전문가 심층 분석 및 조치 방안 전체 보기"):
+                        st.info(generate_relevant_summary(ai_model, user_q, final[:10]))
+                    
+                    st.subheader("📋 관련 근거 지식")
                     for d in final[:8]:
                         v_mark = ' ✅ 인증됨' if d.get('is_verified') else ''
-                        with st.expander(f"[{d.get('measurement_item','-')}] {d.get('model_name','공통')} - {d.get('issue', '매뉴얼 데이터')} {v_mark}"):
+                        with st.expander(f"[{d.get('measurement_item','-')}] {d.get('model_name','공통')} - {d.get('issue', '매뉴얼 정보')} {v_mark}"):
                             st.markdown(f'<div class="meta-bar"><span>🏢 제조사: <b>{d.get("manufacturer","미지정")}</b></span><span>🧪 항목: <b>{d.get("measurement_item","공통")}</b></span><span>🏷️ 모델: <b>{d.get("model_name","공통")}</b></span></div>', unsafe_allow_html=True)
                             st.write(d.get('content') or d.get('solution'))
                             with st.form(key=f"edit_{d['u_key']}"):
-                                st.markdown("🔧 **장비 정보 교정**")
                                 c1, c2, c3 = st.columns(3)
-                                e_mfr = c1.text_input("제조사", value=d.get('manufacturer',''), key=f"m_{d['u_key']}")
-                                e_mod = c2.text_input("모델명", value=d.get('model_name',''), key=f"o_{d['u_key']}")
-                                e_itm = c3.text_input("항목", value=d.get('measurement_item',''), key=f"i_{d['u_key']}")
-                                if st.form_submit_button("💾 교정 저장"):
+                                e_mfr, e_mod, e_itm = c1.text_input("제조사", d.get('manufacturer',''), key=f"m_{d['u_key']}"), c2.text_input("모델명", d.get('model_name',''), key=f"o_{d['u_key']}"), c3.text_input("항목", d.get('measurement_item',''), key=f"i_{d['u_key']}")
+                                if st.form_submit_button("💾 정보 교정"):
                                     t_name = "knowledge_base" if "EXP" in d['u_key'] else "manual_base"
-                                    success, msg = db.update_record_labels(t_name, d['id'], e_mfr, e_mod, e_itm)
-                                    if success: st.success("교정 완료!"); time.sleep(0.5); st.rerun()
-                                    else: st.error(f"실패: {msg}")
-                else: st.warning("🔍 검색 결과가 없습니다. 정밀도를 낮추거나 검색어를 바꿔보세요.")
+                                    if db.update_record_labels(t_name, d['id'], e_mfr, e_mod, e_itm)[0]: st.success("완료!"); time.sleep(0.5); st.rerun()
+                else: st.warning("🔍 검색 결과가 없습니다.")
 
-# --- 관리 메뉴 (생략 없이 V151 기능 유지) ---
+# --- 관리 메뉴 (생략 없이 V152 기능 유지) ---
 elif mode == "🛠️ 데이터 전체 관리":
     _, tab_col, _ = st.columns([0.1, 3, 0.1])
     with tab_col:
@@ -105,27 +105,22 @@ elif mode == "🛠️ 데이터 전체 관리":
             unclass = db.supabase.table(t_name).select("*").or_(f'manufacturer.eq.미지정,manufacturer.is.null,manufacturer.eq.""').limit(5).execute().data
             if unclass:
                 for r in unclass:
-                    with st.expander(f"ID {r['id']} 상세 (출처: {r.get('file_name', '직접등록')})"):
+                    with st.expander(f"ID {r['id']} 상세"):
                         st.write(r.get('content') or r.get('solution') or r.get('issue'))
-                        with st.form(key=f"v152_cls_{t_name}_{r['id']}"):
+                        with st.form(key=f"v153_cls_{t_name}_{r['id']}"):
                             c1, c2, c3 = st.columns(3)
-                            n_mfr = c1.text_input("제조사 (필수)", key=f"nm_{t_name}_{r['id']}")
-                            n_mod = c2.text_input("모델명", key=f"no_{t_name}_{r['id']}")
-                            n_itm = c3.text_input("항목", key=f"ni_{t_name}_{r['id']}")
-                            batch_apply = st.checkbox("이 파일의 모든 미분류 데이터에 동일 적용", key=f"batch_{r['id']}") if r.get('file_name') else False
+                            n_mfr, n_mod, n_itm = c1.text_input("제조사", key=f"nm_{r['id']}"), c2.text_input("모델명", key=f"no_{r['id']}"), c3.text_input("항목", key=f"ni_{r['id']}")
+                            batch_apply = st.checkbox("이 파일 일괄 적용", key=f"batch_{r['id']}") if r.get('file_name') else False
                             b1, b2 = st.columns(2)
-                            if b1.form_submit_button("✅ 저장", use_container_width=True):
-                                if not n_mfr.strip(): st.error("제조사를 입력하세요.")
+                            if b1.form_submit_button("✅ 저장"):
+                                if not n_mfr.strip(): st.error("제조사 입력 필수")
                                 else:
-                                    success, msg = db.update_file_labels(t_name, r['file_name'], n_mfr, n_mod, n_itm) if batch_apply else db.update_record_labels(t_name, r['id'], n_mfr, n_mod, n_itm)
-                                    if success: st.success(f"{msg}!"); time.sleep(0.5); st.rerun()
-                            if b2.form_submit_button("🗑️ 폐기", use_container_width=True):
+                                    res = db.update_file_labels(t_name, r['file_name'], n_mfr, n_mod, n_itm) if batch_apply else db.update_record_labels(t_name, r['id'], n_mfr, n_mod, n_itm)
+                                    if res[0]: st.success(f"{res[1]}!"); time.sleep(0.5); st.rerun()
+                            if b2.form_submit_button("🗑️ 폐기"):
                                 if db.delete_record(t_name, r['id'])[0]: st.warning("삭제됨"); time.sleep(0.5); st.rerun()
-            else: st.success("✅ 미분류 데이터 없음")
-        # (기타 탭 생략 없이 로직 유지...)
         with tabs[0]:
-            k_cnt = db.supabase.table("knowledge_base").select("id", count="exact").execute().count
-            m_cnt = db.supabase.table("manual_base").select("id", count="exact").execute().count
+            k_cnt, m_cnt = db.supabase.table("knowledge_base").select("id", count="exact").execute().count, db.supabase.table("manual_base").select("id", count="exact").execute().count
             st.metric("경험", f"{k_cnt}건"); st.metric("매뉴얼", f"{m_cnt}건")
         with tabs[2]:
             if st.button("🛠️ 재인덱싱 시작"):
@@ -156,7 +151,7 @@ elif mode == "📄 문서(매뉴얼) 등록":
         st.rerun()
 
 elif mode == "📝 지식 등록":
-    with st.form("reg_v152"):
+    with st.form("reg_v153"):
         f_iss, f_sol = st.text_input("제목"), st.text_area("해결방법")
         if st.form_submit_button("💾 저장"):
             db.supabase.table("knowledge_base").insert({"domain": "기술지식", "issue": f_iss, "solution": f_sol, "embedding": get_embedding(f_iss), "semantic_version": 1, "is_verified": True}).execute()
