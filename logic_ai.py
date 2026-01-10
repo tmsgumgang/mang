@@ -49,6 +49,7 @@ def extract_metadata_ai(ai_model, content):
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def analyze_search_intent(_ai_model, query):
+    # [V180] 어떠한 경우에도 None을 반환하지 않도록 기본 객체 선언
     default_intent = {"target_mfr": "미지정", "target_model": "미지정", "target_item": "공통"}
     try:
         prompt = f"""사용자의 질문에서 '타겟 모델명', '측정 항목', '제조사'를 완벽하게 추출해.
@@ -59,19 +60,20 @@ def analyze_search_intent(_ai_model, query):
         if intent_res and isinstance(intent_res, dict):
             return intent_res
         return default_intent
-    except: return default_intent
+    except:
+        return default_intent
 
-# [V179 혁신] 통합 엔진: 리랭킹과 3줄 요약을 단 한 번의 AI 호출로 처리
 @st.cache_data(ttl=3600, show_spinner=False)
 def unified_rerank_and_summary_ai(_ai_model, query, results, intent):
+    # [V180] intent 인자 무결성 확인
+    safe_intent = intent if (intent and isinstance(intent, dict)) else {"target_mfr": "미지정", "target_item": "공통"}
     if not results: return [], "관련 지식을 찾지 못했습니다."
     
-    safe_intent = intent if intent else {"target_mfr": "미지정", "target_item": "공통"}
-    target_mfr = safe_intent.get('target_mfr')
-    target_item = safe_intent.get('target_item')
+    target_mfr = safe_intent.get('target_mfr', '미지정')
+    target_item = safe_intent.get('target_item', '공통')
     
     candidates = []
-    for r in results[:5]: # 최상위 5개 집중 분석
+    for r in results[:5]:
         candidates.append({
             "id": r.get('id'), 
             "mfr": r.get('manufacturer'),
@@ -103,8 +105,6 @@ def unified_rerank_and_summary_ai(_ai_model, query, results, intent):
     try:
         res = _ai_model.generate_content(prompt)
         parsed = extract_json(res.text)
-        
-        # 신뢰도 점수 매핑
         score_map = {item['id']: item['score'] for item in parsed.get('scores', [])}
         for r in results:
             r['rerank_score'] = score_map.get(r['id'], 0)
@@ -114,7 +114,6 @@ def unified_rerank_and_summary_ai(_ai_model, query, results, intent):
     except:
         return results, "연산 중 오류가 발생했습니다."
 
-# 기존 함수들 유지 (지침 준수)
 def generate_relevant_summary(ai_model, query, data):
     prompt = f"질문: {query} 데이터: {data}\n문장 단위로 줄바꿈하여 정밀 기술 리포트를 작성해줘."
     res = ai_model.generate_content(prompt)
