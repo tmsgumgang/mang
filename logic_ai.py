@@ -47,20 +47,29 @@ def extract_metadata_ai(ai_model, content):
         return extract_json(res.text)
     except: return None
 
+# [V176] 의도 분석 안정화: JSON 파싱 실패 시에도 기본 딕셔너리를 반환하여 AttributeError 방지
 @st.cache_data(show_spinner=False)
 def analyze_search_intent(_ai_model, query):
+    default_intent = {"target_mfr": "미지정", "target_model": "미지정", "target_item": "공통"}
     try:
         prompt = f"""사용자의 질문에서 '타겟 모델명', '측정 항목', '제조사'를 완벽하게 추출해.
         질문: {query}
         응답형식(JSON): {{"target_mfr": "제조사", "target_model": "모델명", "target_item": "측정항목"}}"""
         res = _ai_model.generate_content(prompt)
-        return extract_json(res.text)
-    except: return {"target_mfr": None, "target_model": None, "target_item": None}
+        intent_res = extract_json(res.text)
+        # 결과가 None이거나 형식이 다를 경우 기본값 반환
+        if intent_res and isinstance(intent_res, dict):
+            return intent_res
+        return default_intent
+    except: 
+        return default_intent
 
-# [V175] 리랭커 결과 캐싱: 동일한 후보군에 대한 재평가 시간 제거
 @st.cache_data(show_spinner=False)
 def rerank_results_ai(_ai_model, query, results, intent):
     if not results: return []
+    # intent가 None일 경우를 대비한 방어 로직 추가
+    safe_intent = intent if intent else {"target_mfr": "미지정", "target_item": "공통"}
+    
     candidates = []
     for r in results:
         candidates.append({
@@ -71,10 +80,9 @@ def rerank_results_ai(_ai_model, query, results, intent):
             "content": (r.get('content') or r.get('solution'))[:250]
         })
     
-    target_mfr = intent.get('target_mfr')
-    target_item = intent.get('target_item')
+    target_mfr = safe_intent.get('target_mfr')
+    target_item = safe_intent.get('target_item')
     
-    # 리랭커 프롬프트 유지 (V174 지능 보존)
     prompt = f"""사용자 질문: "{query}"
     필수 조건 -> 제조사: {target_mfr}, 측정항목: {target_item}
     각 후보 지식의 정합성을 0-100점으로 평가해.
@@ -93,7 +101,6 @@ def rerank_results_ai(_ai_model, query, results, intent):
         return sorted(results, key=lambda x: x['rerank_score'], reverse=True)
     except: return results
 
-# [V174 복구/V175 보존] 3줄 요약 리스트 형식
 def generate_3line_summary(ai_model, query, data):
     prompt = f"""질문: {query} 데이터: {data}
     현장 대원을 위한 조치 사항 3가지를 '반드시 3개의 번호가 붙은 리스트'로 요약해.
