@@ -70,10 +70,21 @@ def show_manual_upload_ui(ai_model, db):
                 db.supabase.table("manual_base").insert({"domain": "기술지식", "content": clean_text_for_db(chunk), "file_name": up_f.name, "manufacturer": meta.get('manufacturer','미지정'), "model_name": meta.get('model_name','미지정'), "measurement_item": meta.get('measurement_item','공통'), "embedding": get_embedding(chunk), "semantic_version": 2}).execute()
         st.success("업로드 및 학습 완료!"); st.rerun()
 
+# [V164] 직접 등록 시에도 라벨링 필수화
 def show_knowledge_reg_ui(ai_model, db):
-    with st.form("admin_reg_knowledge"):
+    with st.form("admin_reg_knowledge_v164"):
+        st.info("💡 본 데이터는 지식 베이스의 질적 향상을 위한 라벨링 수집용입니다. 정확한 장비 정보를 입력해 주세요.")
         f_iss = st.text_input("제목(이슈)")
         f_sol = st.text_area("해결방법/경험지식", height=200)
+        c1, c2, c3 = st.columns(3)
+        mfr = c1.text_input("제조사")
+        mod = c2.text_input("모델명")
+        itm = c3.text_input("측정항목")
+        
         if st.form_submit_button("💾 지식 저장"):
-            db.supabase.table("knowledge_base").insert({"domain": "기술지식", "issue": f_iss, "solution": f_sol, "embedding": get_embedding(f_iss), "semantic_version": 1, "is_verified": True}).execute()
-            st.success("저장 완료!")
+            if f_iss and f_sol and mfr:
+                success, msg = db.promote_to_knowledge(f_iss, f_sol, mfr, mod, itm)
+                if success: st.success("저장 완료!"); time.sleep(0.5); st.rerun()
+                else: st.error(f"저장 실패: {msg}")
+            else:
+                st.error("제목, 해결방법, 제조사는 필수 입력 항목입니다.")
