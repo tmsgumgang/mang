@@ -4,8 +4,8 @@ from logic_ai import *
 
 def show_search_ui(ai_model, db):
     st.markdown("""<style>
-        .summary-box { background-color: #f8fafc; border: 2px solid #166534; padding: 20px; border-radius: 12px; color: #0f172a !important; margin-bottom: 25px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); line-height: 1.6; }
-        .report-box { background-color: #ffffff; border: 1px solid #004a99; padding: 25px; border-radius: 12px; color: #0f172a !important; box-shadow: inset 0 2px 4px 0 rgba(0, 0, 0, 0.05); line-height: 1.8; }
+        .summary-box { background-color: #f8fafc; border: 2px solid #166534; padding: 25 padding: 20px; border-radius: 12px; color: #0f172a !important; margin-bottom: 25px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); line-height: 1.8; }
+        .summary-box div, .summary-box p { color: #0f172a !important; font-weight: 500; }
         .meta-bar { background-color: #004a99 !important; padding: 12px; border-radius: 6px; font-size: 0.9rem; margin-bottom: 12px; color: #ffffff !important; display: flex; gap: 15px; flex-wrap: wrap; }
         .meta-bar b { color: #ffd700 !important; }
         div[data-testid="stForm"] { border: 1px solid #e2e8f0; background-color: rgba(241, 245, 249, 0.1); padding: 20px; border-radius: 10px; }
@@ -23,40 +23,49 @@ def show_search_ui(ai_model, db):
             st.session_state.last_query = user_q
             if "full_report" in st.session_state: del st.session_state.full_report
 
-        progress_bar = st.progress(0, text="AI가 질문의 의도를 분석 중입니다...")
+        progress_bar = st.progress(0, text="질문 의도 분석 및 제조사 필터링 중...")
         
-        # 1. 의도 분석 및 벡터 생성
         intent = analyze_search_intent(ai_model, user_q)
         q_vec = get_embedding(user_q)
-        progress_bar.progress(40, text=f"검색 조건 식별: {intent.get('target_mfr','미지정')} / {intent.get('target_item','미지정')}")
+        progress_bar.progress(35, text=f"타겟 인식: {intent.get('target_mfr','미지정')} / {intent.get('target_item','미지정')}")
 
-        # 2. 하이브리드 검색
         penalties = db.get_penalty_counts()
         m_res = db.match_filtered_db("match_manual", q_vec, u_threshold, intent, user_q)
         k_res = db.match_filtered_db("match_knowledge", q_vec, u_threshold, intent, user_q)
         
-        progress_bar.progress(70, text="지식 후보군 정밀 리랭킹 중...")
+        progress_bar.progress(70, text="브랜드 및 항목 정밀 검증 중...")
         
         raw_candidates = []
         for d in (m_res + k_res):
             u_key = f"{'EXP' if 'solution' in d else 'MAN'}_{d.get('id')}"
             if d.get('semantic_version') == 1:
-                score = (d.get('similarity') or 0) - (penalties.get(u_key, 0) * 0.1)
+                # [V174] 브랜드/항목 매칭 시 파격적인 가중치 부여 (불일치 시 강제 하락)
+                score = (d.get('similarity') or 0)
+                
+                # 의도한 제조사/항목과 다르면 점수를 대폭 깎음
+                if intent.get('target_mfr') and intent.get('target_mfr').lower() not in str(d.get('manufacturer','')).lower():
+                    score -= 5.0
+                if intent.get('target_item') and intent.get('target_item').lower() not in str(d.get('measurement_item','')).lower():
+                    score -= 3.0
+                
+                score -= (penalties.get(u_key, 0) * 0.1)
                 if d.get('is_verified'): score += 0.15
                 raw_candidates.append({**d, 'final_score': score, 'u_key': u_key})
         
         raw_candidates = sorted(raw_candidates, key=lambda x: x['final_score'], reverse=True)[:8]
         
-        # 3. [V173] 의도(intent)를 리랭커에 전달하여 신뢰도 0% 현상 해결
+        # [V174] 리랭커에 의도를 명확히 전달하여 신뢰도 0% 현상 제거
         final = rerank_results_ai(ai_model, user_q, raw_candidates, intent)
-        progress_bar.progress(100, text="분석 완료!")
+        progress_bar.progress(100, text="지식 재구성 완료!")
         time.sleep(0.3); progress_bar.empty()
 
         if final:
+            # [V174 복구] 3줄 요약 생성
             top_summary_3line = generate_3line_summary(ai_model, user_q, final[:3])
             _, res_col, _ = st.columns([0.5, 3, 0.5])
             with res_col:
                 st.subheader("⚡ 즉각 대응 핵심 요약 (3줄)")
+                # 리스트 포맷 유지를 위한 처리
                 st.markdown(f'<div class="summary-box">{top_summary_3line.replace("\\n", "<br>")}</div>', unsafe_allow_html=True)
                 
                 st.subheader("🔍 AI 전문가 정밀 분석")
@@ -73,7 +82,6 @@ def show_search_ui(ai_model, db):
                 st.subheader("📋 정밀 검색 결과 및 연관성 평가")
                 for d in final[:6]:
                     v_mark = ' ✅ 인증' if d.get('is_verified') else ''
-                    # 신뢰도가 0%로 나오지 않도록 보정값 확인
                     score = d.get('rerank_score', 0)
                     with st.expander(f"[{d.get('measurement_item','-')}] {d.get('model_name','공통')} (신뢰도: {score}%) {v_mark}"):
                         st.markdown(f'''<div class="meta-bar">
@@ -85,13 +93,13 @@ def show_search_ui(ai_model, db):
                         
                         t_name = "knowledge_base" if "EXP" in d['u_key'] else "manual_base"
                         c1, c2, _ = st.columns([0.25, 0.25, 0.5])
-                        if c1.button("✅ 질문과 연관있음", key=f"v173_up_{d['u_key']}"):
+                        if c1.button("✅ 질문과 연관있음", key=f"v174_up_{d['u_key']}"):
                             if db.save_relevance_feedback(user_q, d['id'], t_name, 1): st.rerun()
-                        if c2.button("❌ 질문과 무관함", key=f"v173_down_{d['u_key']}"):
+                        if c2.button("❌ 질문과 무관함", key=f"v174_down_{d['u_key']}"):
                             if db.save_relevance_feedback(user_q, d['id'], t_name, -1): st.rerun()
                         
                         st.markdown("---")
-                        with st.form(key=f"edit_v173_{d['u_key']}"):
+                        with st.form(key=f"edit_v174_{d['u_key']}"):
                             c1, c2, c3 = st.columns(3)
                             e_mfr = c1.text_input("제조사", d.get('manufacturer',''), key=f"m_{d['u_key']}")
                             e_mod = c2.text_input("모델명", d.get('model_name',''), key=f"o_{d['u_key']}")
