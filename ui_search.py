@@ -3,18 +3,13 @@ import time
 from logic_ai import *
 
 def show_search_ui(ai_model, db):
-    # [V162] 다크모드 대응 고대비 디자인 적용
     st.markdown("""<style>
         .summary-box { background-color: #f8fafc; border: 2px solid #166534; padding: 20px; border-radius: 12px; color: #0f172a !important; margin-bottom: 25px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); line-height: 1.6; }
-        .summary-box b, .summary-box div { color: #0f172a !important; }
         .report-box { background-color: #ffffff; border: 1px solid #004a99; padding: 25px; border-radius: 12px; color: #0f172a !important; box-shadow: inset 0 2px 4px 0 rgba(0, 0, 0, 0.05); line-height: 1.8; }
-        /* 메타데이터 바 시인성: 배경 다크모드 무관하게 고정색 적용 */
         .meta-bar { background-color: #004a99 !important; padding: 12px; border-radius: 6px; font-size: 0.9rem; margin-bottom: 12px; color: #ffffff !important; display: flex; gap: 15px; flex-wrap: wrap; }
-        .meta-bar span { color: #ffffff !important; font-weight: 500; }
         .meta-bar b { color: #ffd700 !important; }
-        div[data-testid="stForm"] { border: 1px solid #e2e8f0; background-color: rgba(241, 245, 249, 0.1); padding: 20px; border-radius: 10px; }
-        /* 다크모드에서의 입력창 가시성 확보 */
-        input { color: #ffffff !important; }
+        .feedback-bar { background-color: rgba(226, 232, 240, 0.3); padding: 12px; border-radius: 8px; margin-top: 15px; border: 1px solid #e2e8f0; }
+        .feedback-text { font-size: 0.85rem; font-weight: bold; color: #475569; margin-bottom: 8px; }
     </style>""", unsafe_allow_html=True)
 
     _, main_col, _ = st.columns([1, 2, 1])
@@ -22,19 +17,21 @@ def show_search_ui(ai_model, db):
         s_mode = st.radio("검색 모드", ["업무기술 🛠️", "생활정보 🍴"], horizontal=True, label_visibility="collapsed")
         u_threshold = st.slider("정밀도 설정", 0.0, 1.0, 0.6, 0.05)
         user_q = st.text_input("질문 입력", placeholder="예: 시마즈 TOC 고장 조치", label_visibility="collapsed")
-        search_btn = st.button("🔍 초정밀 지능 검색 실행", use_container_width=True, type="primary")
+        search_btn = st.button("🔍 하이브리드 지능 검색 실행", use_container_width=True, type="primary")
 
     if user_q and (search_btn or user_q):
         if "last_query" not in st.session_state or st.session_state.last_query != user_q:
             st.session_state.last_query = user_q
             if "full_report" in st.session_state: del st.session_state.full_report
 
-        with st.spinner("의도 분석 및 정밀 검색 중..."):
+        with st.spinner("의도 분석 및 하이브리드 검색 중..."):
             intent = analyze_search_intent(ai_model, user_q)
             q_vec = get_embedding(user_q)
             penalties = db.get_penalty_counts()
-            m_res = db.match_filtered_db("match_manual", q_vec, u_threshold, intent)
-            k_res = db.match_filtered_db("match_knowledge", q_vec, u_threshold, intent)
+            
+            # [V170] 질문 원문을 전달하여 키워드 매칭 및 과거 연관성 피드백 반영
+            m_res = db.match_filtered_db("match_manual", q_vec, u_threshold, intent, user_q)
+            k_res = db.match_filtered_db("match_knowledge", q_vec, u_threshold, intent, user_q)
             
             raw_candidates = []
             for d in (m_res + k_res):
@@ -66,7 +63,7 @@ def show_search_ui(ai_model, db):
                         st.markdown('</div>', unsafe_allow_html=True)
                         if st.button("🔄 리포트 다시 읽기"): del st.session_state.full_report; st.rerun()
                     
-                    st.subheader("📋 근거 지식 및 라벨링 관리")
+                    st.subheader("📋 정밀 검색 결과 및 연관성 평가")
                     for d in final[:6]:
                         v_mark = ' ✅ 인증' if d.get('is_verified') else ''
                         score = d.get('rerank_score', 0)
@@ -78,15 +75,27 @@ def show_search_ui(ai_model, db):
                             </div>''', unsafe_allow_html=True)
                             st.write(d.get('content') or d.get('solution'))
                             
+                            # [V170 핵심] 질문-답변 맥락 연관성 평가 인터페이스
+                            t_name = "knowledge_base" if "EXP" in d['u_key'] else "manual_base"
+                            st.markdown('<div class="feedback-bar">', unsafe_allow_html=True)
+                            st.markdown(f'<div class="feedback-text">🎯 질문 "{user_q}"에 대한 연관성 평가</div>', unsafe_allow_html=True)
+                            c1, c2, _ = st.columns([0.25, 0.25, 0.5])
+                            if c1.button("✅ 질문과 연관있음", key=f"rel_up_{d['u_key']}"):
+                                if db.save_relevance_feedback(user_q, d['id'], t_name, 1):
+                                    st.success("연관 가중치가 확보되었습니다."); time.sleep(0.5); st.rerun()
+                            if c2.button("❌ 질문과 무관함", key=f"rel_down_{d['u_key']}"):
+                                if db.save_relevance_feedback(user_q, d['id'], t_name, -1):
+                                    st.warning("이 질문에서 우선순위가 낮아집니다."); time.sleep(0.5); st.rerun()
+                            st.markdown('</div>', unsafe_allow_html=True)
+                            
                             st.markdown("---")
                             st.markdown("🔧 **데이터 품질 관리 (현장 라벨 교정)**")
-                            with st.form(key=f"edit_v162_{d['u_key']}"):
+                            with st.form(key=f"edit_v170_{d['u_key']}"):
                                 c1, c2, c3 = st.columns(3)
                                 e_mfr = c1.text_input("제조사", d.get('manufacturer',''), key=f"m_{d['u_key']}")
                                 e_mod = c2.text_input("모델명", d.get('model_name',''), key=f"o_{d['u_key']}")
                                 e_itm = c3.text_input("항목", d.get('measurement_item',''), key=f"i_{d['u_key']}")
                                 if st.form_submit_button("💾 정보 교정 및 DB 반영"):
-                                    t_name = "knowledge_base" if "EXP" in d['u_key'] else "manual_base"
                                     if db.update_record_labels(t_name, d['id'], e_mfr, e_mod, e_itm)[0]:
                                         st.success("데이터 품질 교정 완료!"); time.sleep(0.5); st.rerun()
             else: st.warning("🔍 검색 결과가 없습니다.")
