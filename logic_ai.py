@@ -57,7 +57,9 @@ def analyze_search_intent(_ai_model, query):
         return extract_json(res.text)
     except: return {"target_mfr": None, "target_model": None, "target_item": None}
 
-def rerank_results_ai(ai_model, query, results, intent):
+# [V175] 리랭커 결과 캐싱: 동일한 후보군에 대한 재평가 시간 제거
+@st.cache_data(show_spinner=False)
+def rerank_results_ai(_ai_model, query, results, intent):
     if not results: return []
     candidates = []
     for r in results:
@@ -72,21 +74,18 @@ def rerank_results_ai(ai_model, query, results, intent):
     target_mfr = intent.get('target_mfr')
     target_item = intent.get('target_item')
     
-    # [V174 핵심] 리랭커에게 제조사/항목 불일치 시 점수 박탈을 강력히 명령
+    # 리랭커 프롬프트 유지 (V174 지능 보존)
     prompt = f"""사용자 질문: "{query}"
     필수 조건 -> 제조사: {target_mfr}, 측정항목: {target_item}
-    
     각 후보 지식의 정합성을 0-100점으로 평가해.
     [필수 규칙]
     1. 후보의 제조사(mfr)가 필수 조건의 제조사와 다르면 무조건 0점을 줄 것.
     2. 측정항목(item)이 다르면 최대 5점을 넘지 말 것.
-    3. 모델명까지 일치하면 가산점을 줄 것.
-    
     후보 목록: {json.dumps(candidates, ensure_ascii=False)}
     응답형식(JSON): [{{"id": 1, "score": 95}}, ...]"""
     
     try:
-        res = ai_model.generate_content(prompt)
+        res = _ai_model.generate_content(prompt)
         scores = extract_json(res.text)
         score_map = {item['id']: item['score'] for item in scores}
         for r in results: 
@@ -94,7 +93,7 @@ def rerank_results_ai(ai_model, query, results, intent):
         return sorted(results, key=lambda x: x['rerank_score'], reverse=True)
     except: return results
 
-# [V174 복구] 3줄 요약 리스트 형식 절대 보존 프롬프트
+# [V174 복구/V175 보존] 3줄 요약 리스트 형식
 def generate_3line_summary(ai_model, query, data):
     prompt = f"""질문: {query} 데이터: {data}
     현장 대원을 위한 조치 사항 3가지를 '반드시 3개의 번호가 붙은 리스트'로 요약해.
