@@ -50,35 +50,40 @@ def extract_metadata_ai(ai_model, content):
 @st.cache_data(show_spinner=False)
 def analyze_search_intent(_ai_model, query):
     try:
-        prompt = f"""사용자의 질문에서 '타겟 모델명'과 '측정 항목', '제조사'를 추출해.
+        prompt = f"""사용자의 질문에서 '타겟 모델명', '측정 항목', '제조사'를 완벽하게 추출해.
         질문: {query}
         응답형식(JSON): {{"target_mfr": "제조사", "target_model": "모델명", "target_item": "측정항목"}}"""
         res = _ai_model.generate_content(prompt)
         return extract_json(res.text)
     except: return {"target_mfr": None, "target_model": None, "target_item": None}
 
-# [V173] 의도(Intent) 기반 고정밀 리랭커로 수정
 def rerank_results_ai(ai_model, query, results, intent):
     if not results: return []
     candidates = []
     for r in results:
         candidates.append({
             "id": r.get('id'), 
-            "manufacturer": r.get('manufacturer'),
+            "mfr": r.get('manufacturer'),
             "item": r.get('measurement_item'),
             "model": r.get('model_name'), 
-            "summary": (r.get('content') or r.get('solution'))[:200]
+            "content": (r.get('content') or r.get('solution'))[:250]
         })
     
-    # AI에게 찾아야 할 대상을 명확히 지시
-    target_info = f"찾아야 할 대상 -> 제조사: {intent.get('target_mfr')}, 모델: {intent.get('target_model')}, 항목: {intent.get('target_item')}"
+    target_mfr = intent.get('target_mfr')
+    target_item = intent.get('target_item')
     
-    prompt = f"""질문: "{query}"
-    {target_info}
-    위 정보를 바탕으로 후보 지식들이 얼마나 정답에 가까운지 0-100점으로 평가해.
-    [중요] 제조사나 모델명이 다르면 무조건 10점 미만으로 평가할 것.
-    후보: {json.dumps(candidates, ensure_ascii=False)}
-    응답형식: [{{"id": 1, "score": 95}}, ...]"""
+    # [V174 핵심] 리랭커에게 제조사/항목 불일치 시 점수 박탈을 강력히 명령
+    prompt = f"""사용자 질문: "{query}"
+    필수 조건 -> 제조사: {target_mfr}, 측정항목: {target_item}
+    
+    각 후보 지식의 정합성을 0-100점으로 평가해.
+    [필수 규칙]
+    1. 후보의 제조사(mfr)가 필수 조건의 제조사와 다르면 무조건 0점을 줄 것.
+    2. 측정항목(item)이 다르면 최대 5점을 넘지 말 것.
+    3. 모델명까지 일치하면 가산점을 줄 것.
+    
+    후보 목록: {json.dumps(candidates, ensure_ascii=False)}
+    응답형식(JSON): [{{"id": 1, "score": 95}}, ...]"""
     
     try:
         res = ai_model.generate_content(prompt)
@@ -89,8 +94,15 @@ def rerank_results_ai(ai_model, query, results, intent):
         return sorted(results, key=lambda x: x['rerank_score'], reverse=True)
     except: return results
 
+# [V174 복구] 3줄 요약 리스트 형식 절대 보존 프롬프트
 def generate_3line_summary(ai_model, query, data):
-    prompt = f"질문: {query} 데이터: {data}\n문장 단위로 줄바꿈하여 핵심 조치 사항 3가지를 3줄로 요약해."
+    prompt = f"""질문: {query} 데이터: {data}
+    현장 대원을 위한 조치 사항 3가지를 '반드시 3개의 번호가 붙은 리스트'로 요약해.
+    [포맷 규칙]
+    1. (핵심 조치 내용) - (기대 효과)
+    2. (핵심 조치 내용) - (기대 효과)
+    3. (핵심 조치 내용) - (기대 효과)
+    - 문장 끝마다 반드시 줄바꿈(\\n\\n)을 두 번 넣을 것."""
     res = ai_model.generate_content(prompt)
     return res.text
 
