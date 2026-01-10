@@ -61,48 +61,60 @@ def analyze_search_intent(_ai_model, query):
         return default_intent
     except: return default_intent
 
+# [V179 혁신] 통합 엔진: 리랭킹과 3줄 요약을 단 한 번의 AI 호출로 처리
 @st.cache_data(ttl=3600, show_spinner=False)
-def rerank_results_ai(_ai_model, query, results, intent):
-    if not results: return []
+def unified_rerank_and_summary_ai(_ai_model, query, results, intent):
+    if not results: return [], "관련 지식을 찾지 못했습니다."
+    
     safe_intent = intent if intent else {"target_mfr": "미지정", "target_item": "공통"}
-    # 속도를 위해 최상위 후보 4개만 집중 분석 (V177 유지)
-    top_candidates = results[:4]
+    target_mfr = safe_intent.get('target_mfr')
+    target_item = safe_intent.get('target_item')
+    
     candidates = []
-    for r in top_candidates:
+    for r in results[:5]: # 최상위 5개 집중 분석
         candidates.append({
             "id": r.get('id'), 
             "mfr": r.get('manufacturer'),
             "item": r.get('measurement_item'),
             "model": r.get('model_name'), 
-            "content": (r.get('content') or r.get('solution'))[:250]
+            "content": (r.get('content') or r.get('solution'))[:300]
         })
-    target_mfr = safe_intent.get('target_mfr')
-    target_item = safe_intent.get('target_item')
-    prompt = f"""사용자 질문: "{query}"
-    필수 조건 -> 제조사: {target_mfr}, 측정항목: {target_item}
-    각 후보 지식의 정합성을 0-100점으로 평가해. 불일치 시 0점.
-    후보 목록: {json.dumps(candidates, ensure_ascii=False)}
-    응답형식(JSON): [{{"id": 1, "score": 95}}, ...]"""
+
+    prompt = f"""[지시] 사용자 질문 "{query}"에 대해 후보들을 평가하고 핵심 조치를 요약해.
+    필수 타겟 -> 제조사: {target_mfr}, 항목: {target_item}
+    
+    1. 각 후보의 신뢰도(0-100)를 평가해. (제조사 다르면 무조건 0점)
+    2. 상위권 후보를 기반으로 '3줄 조치 가이드'를 작성해.
+    
+    [요약 포맷 규칙]
+    1. (내용) - (효과)
+    2. (내용) - (효과)
+    3. (내용) - (효과)
+    (문장 끝마다 \\n\\n 필수)
+    
+    후보: {json.dumps(candidates, ensure_ascii=False)}
+    
+    응답형식(JSON):
+    {{
+      "scores": [{{"id": 1, "score": 95}}, ...],
+      "summary": "1. ...\\n\\n2. ...\\n\\n3. ..."
+    }}"""
+    
     try:
         res = _ai_model.generate_content(prompt)
-        scores = extract_json(res.text)
-        score_map = {item['id']: item['score'] for item in scores}
-        for r in results: r['rerank_score'] = score_map.get(r['id'], 0)
-        return sorted(results, key=lambda x: x['rerank_score'], reverse=True)
-    except: return results
+        parsed = extract_json(res.text)
+        
+        # 신뢰도 점수 매핑
+        score_map = {item['id']: item['score'] for item in parsed.get('scores', [])}
+        for r in results:
+            r['rerank_score'] = score_map.get(r['id'], 0)
+            
+        final_results = sorted(results, key=lambda x: x['rerank_score'], reverse=True)
+        return final_results, parsed.get('summary', "요약을 생성할 수 없습니다.")
+    except:
+        return results, "연산 중 오류가 발생했습니다."
 
-@st.cache_data(ttl=3600, show_spinner=False)
-def generate_3line_summary(_ai_model, query, data_json):
-    # [V178] 요약문 생성이 가장 오래 걸리므로, 캐싱 시간을 넉넉히 잡고 명확한 구조 강제
-    prompt = f"""질문: {query} 데이터: {data_json}
-    현장 대원을 위한 조치 사항 3가지를 '반드시 3개의 번호가 붙은 리스트'로 요약해.
-    1. (핵심 조치 내용) - (기대 효과)
-    2. (핵심 조치 내용) - (기대 효과)
-    3. (핵심 조치 내용) - (기대 효과)
-    - 문장 끝마다 줄바꿈(\\n\\n) 필수."""
-    res = _ai_model.generate_content(prompt)
-    return res.text
-
+# 기존 함수들 유지 (지침 준수)
 def generate_relevant_summary(ai_model, query, data):
     prompt = f"질문: {query} 데이터: {data}\n문장 단위로 줄바꿈하여 정밀 기술 리포트를 작성해줘."
     res = ai_model.generate_content(prompt)
