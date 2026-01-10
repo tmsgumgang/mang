@@ -4,7 +4,6 @@ class DBManager:
     def __init__(self, supabase_client):
         self.supabase = supabase_client
 
-    # [기본 관리 로직]
     def keep_alive(self):
         try: self.supabase.table("knowledge_base").select("id").limit(1).execute()
         except: pass
@@ -44,22 +43,17 @@ class DBManager:
             return (True, "성공") if res.data else (False, "실패")
         except Exception as e: return (False, str(e))
 
-    # [커뮤니티 로직: 예외 처리 강화]
     def get_community_posts(self):
         try:
             res = self.supabase.table("community_posts").select("*").order("created_at", desc=True).execute()
             return res.data if res.data else []
-        except Exception as e:
-            print(f"Post retrieval error: {e}")
-            return []
+        except: return []
 
     def add_community_post(self, author, title, content):
         try:
             res = self.supabase.table("community_posts").insert({"author": author, "title": title, "content": content}).execute()
             return True if res.data else False
-        except Exception as e:
-            print(f"Post insert error: {e}")
-            return False
+        except: return False
 
     def get_comments(self, post_id):
         try:
@@ -73,13 +67,26 @@ class DBManager:
             return True if res.data else False
         except: return False
 
-    def promote_to_knowledge(self, issue, solution):
+    # [V164] 수집된 라벨링 데이터를 지식 베이스에 정밀 반영
+    def promote_to_knowledge(self, issue, solution, mfr, model, item):
         try:
             from logic_ai import get_embedding
-            payload = {"domain": "기술지식", "issue": issue, "solution": solution, "embedding": get_embedding(issue), "semantic_version": 1, "is_verified": True}
-            self.supabase.table("knowledge_base").insert(payload).execute()
-            return True
-        except: return False
+            payload = {
+                "domain": "기술지식",
+                "issue": issue,
+                "solution": solution,
+                "embedding": get_embedding(issue),
+                "semantic_version": 1,
+                "is_verified": True,
+                "manufacturer": str(mfr).strip() or "미지정",
+                "model_name": str(model).strip() or "미지정",
+                "measurement_item": str(item).strip() or "공통"
+            }
+            res = self.supabase.table("knowledge_base").insert(payload).execute()
+            if res.data: return True, "성공"
+            else: return False, "DB 저장 실패"
+        except Exception as e:
+            return False, str(e)
 
     def update_file_labels(self, table_name, file_name, mfr, model, item):
         try:
