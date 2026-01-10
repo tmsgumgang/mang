@@ -49,11 +49,22 @@ class DBManager:
             return res.data if res.data else []
         except: return []
 
-    def add_community_post(self, author, title, content):
+    # [V165] 질문자가 직접 라벨링한 정보를 포함하여 저장
+    def add_community_post(self, author, title, content, mfr, model, item):
         try:
-            res = self.supabase.table("community_posts").insert({"author": author, "title": title, "content": content}).execute()
+            payload = {
+                "author": author, 
+                "title": title, 
+                "content": content,
+                "manufacturer": mfr,
+                "model_name": model,
+                "measurement_item": item
+            }
+            res = self.supabase.table("community_posts").insert(payload).execute()
             return True if res.data else False
-        except: return False
+        except Exception as e:
+            print(f"Error: {e}")
+            return False
 
     def get_comments(self, post_id):
         try:
@@ -67,7 +78,7 @@ class DBManager:
             return True if res.data else False
         except: return False
 
-    # [V164] 수집된 라벨링 데이터를 지식 베이스에 정밀 반영
+    # [V165] 이미 수집된 라벨링 정보를 활용하여 지식베이스로 즉시 승격
     def promote_to_knowledge(self, issue, solution, mfr, model, item):
         try:
             from logic_ai import get_embedding
@@ -84,7 +95,7 @@ class DBManager:
             }
             res = self.supabase.table("knowledge_base").insert(payload).execute()
             if res.data: return True, "성공"
-            else: return False, "DB 저장 실패"
+            else: return False, "DB 저장 응답 없음"
         except Exception as e:
             return False, str(e)
 
@@ -98,11 +109,5 @@ class DBManager:
     def update_vector(self, table_name, row_id, vec):
         try:
             self.supabase.table(table_name).update({"embedding": vec}).eq("id", row_id).execute()
-            return True
-        except: return False
-
-    def bulk_approve_file(self, table_name, file_name):
-        try:
-            self.supabase.table(table_name).update({"semantic_version": 1, "review_required": False}).eq("file_name", file_name).eq("semantic_version", 2).execute()
             return True
         except: return False
