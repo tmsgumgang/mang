@@ -47,7 +47,6 @@ def extract_metadata_ai(ai_model, content):
         return extract_json(res.text)
     except: return None
 
-# [V177] 의도 분석 결과는 1시간 동안 메모리에 캐싱
 @st.cache_data(ttl=3600, show_spinner=False)
 def analyze_search_intent(_ai_model, query):
     default_intent = {"target_mfr": "미지정", "target_model": "미지정", "target_item": "공통"}
@@ -62,13 +61,11 @@ def analyze_search_intent(_ai_model, query):
         return default_intent
     except: return default_intent
 
-# [V177] 리랭킹 연산 부하 축소: 후보군을 8개에서 4개로 줄여 AI 연산 속도 2배 향상
 @st.cache_data(ttl=3600, show_spinner=False)
 def rerank_results_ai(_ai_model, query, results, intent):
     if not results: return []
     safe_intent = intent if intent else {"target_mfr": "미지정", "target_item": "공통"}
-    
-    # 상위 4개 핵심 후보만 AI에게 전달하여 속도 최적화
+    # 속도를 위해 최상위 후보 4개만 집중 분석 (V177 유지)
     top_candidates = results[:4]
     candidates = []
     for r in top_candidates:
@@ -79,35 +76,30 @@ def rerank_results_ai(_ai_model, query, results, intent):
             "model": r.get('model_name'), 
             "content": (r.get('content') or r.get('solution'))[:250]
         })
-    
     target_mfr = safe_intent.get('target_mfr')
     target_item = safe_intent.get('target_item')
-    
     prompt = f"""사용자 질문: "{query}"
     필수 조건 -> 제조사: {target_mfr}, 측정항목: {target_item}
     각 후보 지식의 정합성을 0-100점으로 평가해. 불일치 시 0점.
     후보 목록: {json.dumps(candidates, ensure_ascii=False)}
     응답형식(JSON): [{{"id": 1, "score": 95}}, ...]"""
-    
     try:
         res = _ai_model.generate_content(prompt)
         scores = extract_json(res.text)
         score_map = {item['id']: item['score'] for item in scores}
-        for r in results: 
-            r['rerank_score'] = score_map.get(r['id'], 0)
+        for r in results: r['rerank_score'] = score_map.get(r['id'], 0)
         return sorted(results, key=lambda x: x['rerank_score'], reverse=True)
     except: return results
 
-# [V177] 최종 요약문 캐싱: 동일 질문에 대해 즉시 답변 반환 (0초대 응답 핵심)
 @st.cache_data(ttl=3600, show_spinner=False)
 def generate_3line_summary(_ai_model, query, data_json):
+    # [V178] 요약문 생성이 가장 오래 걸리므로, 캐싱 시간을 넉넉히 잡고 명확한 구조 강제
     prompt = f"""질문: {query} 데이터: {data_json}
     현장 대원을 위한 조치 사항 3가지를 '반드시 3개의 번호가 붙은 리스트'로 요약해.
-    [포맷 규칙]
     1. (핵심 조치 내용) - (기대 효과)
     2. (핵심 조치 내용) - (기대 효과)
     3. (핵심 조치 내용) - (기대 효과)
-    - 문장 끝마다 반드시 줄바꿈(\\n\\n)을 두 번 넣을 것."""
+    - 문장 끝마다 줄바꿈(\\n\\n) 필수."""
     res = _ai_model.generate_content(prompt)
     return res.text
 
