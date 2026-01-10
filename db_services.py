@@ -44,33 +44,43 @@ class DBManager:
             return (True, "성공") if res.data else (False, "실패")
         except Exception as e: return (False, str(e))
 
-    # [커뮤니티 및 지식화 로직 복구]
+    # [커뮤니티 로직: 예외 처리 강화]
     def get_community_posts(self):
-        try: return self.supabase.table("community_posts").select("*").order("created_at", desc=True).execute().data
-        except: return []
+        try:
+            res = self.supabase.table("community_posts").select("*").order("created_at", desc=True).execute()
+            return res.data if res.data else []
+        except Exception as e:
+            print(f"Post retrieval error: {e}")
+            return []
 
     def add_community_post(self, author, title, content):
-        try: return self.supabase.table("community_posts").insert({"author": author, "title": title, "content": content}).execute()
-        except: return None
+        try:
+            res = self.supabase.table("community_posts").insert({"author": author, "title": title, "content": content}).execute()
+            return True if res.data else False
+        except Exception as e:
+            print(f"Post insert error: {e}")
+            return False
 
     def get_comments(self, post_id):
-        try: return self.supabase.table("community_comments").select("*").eq("post_id", post_id).order("created_at").execute().data
+        try:
+            res = self.supabase.table("community_comments").select("*").eq("post_id", post_id).order("created_at").execute()
+            return res.data if res.data else []
         except: return []
 
     def add_comment(self, post_id, author, content):
-        try: return self.supabase.table("community_comments").insert({"post_id": post_id, "author": author, "content": content}).execute()
-        except: return None
+        try:
+            res = self.supabase.table("community_comments").insert({"post_id": post_id, "author": author, "content": content}).execute()
+            return True if res.data else False
+        except: return False
 
     def promote_to_knowledge(self, issue, solution):
         try:
-            # 커뮤니티 답변을 경험 지식으로 등록
             from logic_ai import get_embedding
             payload = {"domain": "기술지식", "issue": issue, "solution": solution, "embedding": get_embedding(issue), "semantic_version": 1, "is_verified": True}
             self.supabase.table("knowledge_base").insert(payload).execute()
             return True
         except: return False
 
-    # [매뉴얼 관리 로직]
     def update_file_labels(self, table_name, file_name, mfr, model, item):
         try:
             payload = {"manufacturer": str(mfr).strip(), "model_name": str(model).strip(), "measurement_item": str(item).strip(), "semantic_version": 1, "review_required": False}
@@ -81,5 +91,11 @@ class DBManager:
     def update_vector(self, table_name, row_id, vec):
         try:
             self.supabase.table(table_name).update({"embedding": vec}).eq("id", row_id).execute()
+            return True
+        except: return False
+
+    def bulk_approve_file(self, table_name, file_name):
+        try:
+            self.supabase.table(table_name).update({"semantic_version": 1, "review_required": False}).eq("file_name", file_name).eq("semantic_version", 2).execute()
             return True
         except: return False
