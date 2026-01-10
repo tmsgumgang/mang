@@ -3,16 +3,18 @@ import time
 from logic_ai import *
 
 def show_search_ui(ai_model, db):
-    # [V161] 다크모드 완벽 대응 컬러 스키마
+    # [V162] 다크모드 대응 고대비 디자인 적용
     st.markdown("""<style>
         .summary-box { background-color: #f8fafc; border: 2px solid #166534; padding: 20px; border-radius: 12px; color: #0f172a !important; margin-bottom: 25px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); line-height: 1.6; }
         .summary-box b, .summary-box div { color: #0f172a !important; }
         .report-box { background-color: #ffffff; border: 1px solid #004a99; padding: 25px; border-radius: 12px; color: #0f172a !important; box-shadow: inset 0 2px 4px 0 rgba(0, 0, 0, 0.05); line-height: 1.8; }
-        /* 메타바 시인성 강화: 어떤 테마에서도 흰색 글씨 + 파란 배경 고정 */
+        /* 메타데이터 바 시인성: 배경 다크모드 무관하게 고정색 적용 */
         .meta-bar { background-color: #004a99 !important; padding: 12px; border-radius: 6px; font-size: 0.9rem; margin-bottom: 12px; color: #ffffff !important; display: flex; gap: 15px; flex-wrap: wrap; }
         .meta-bar span { color: #ffffff !important; font-weight: 500; }
-        .meta-bar b { color: #ffd700 !important; } /* 중요 정보(모델명 등)는 골드색 강조 */
+        .meta-bar b { color: #ffd700 !important; }
         div[data-testid="stForm"] { border: 1px solid #e2e8f0; background-color: rgba(241, 245, 249, 0.1); padding: 20px; border-radius: 10px; }
+        /* 다크모드에서의 입력창 가시성 확보 */
+        input { color: #ffffff !important; }
     </style>""", unsafe_allow_html=True)
 
     _, main_col, _ = st.columns([1, 2, 1])
@@ -55,8 +57,9 @@ def show_search_ui(ai_model, db):
                     st.subheader("🔍 AI 전문가 정밀 분석")
                     if "full_report" not in st.session_state:
                         if st.button("📋 심층 기술 리포트 생성 및 확인", use_container_width=True):
-                            st.session_state.full_report = generate_relevant_summary(ai_model, user_q, final[:5])
-                            st.rerun()
+                            with st.spinner("분석 중..."):
+                                st.session_state.full_report = generate_relevant_summary(ai_model, user_q, final[:5])
+                                st.rerun()
                     else:
                         st.markdown('<div class="report-box">', unsafe_allow_html=True)
                         st.write(st.session_state.full_report)
@@ -68,7 +71,6 @@ def show_search_ui(ai_model, db):
                         v_mark = ' ✅ 인증' if d.get('is_verified') else ''
                         score = d.get('rerank_score', 0)
                         with st.expander(f"[{d.get('measurement_item','-')}] {d.get('model_name','공통')} (신뢰도: {score}%) {v_mark}"):
-                            # 시인성이 강화된 메타바
                             st.markdown(f'''<div class="meta-bar">
                                 <span>🏢 제조사: <b>{d.get("manufacturer","미지정")}</b></span>
                                 <span>🧪 항목: <b>{d.get("measurement_item","공통")}</b></span>
@@ -78,7 +80,7 @@ def show_search_ui(ai_model, db):
                             
                             st.markdown("---")
                             st.markdown("🔧 **데이터 품질 관리 (현장 라벨 교정)**")
-                            with st.form(key=f"edit_v161_{d['u_key']}"):
+                            with st.form(key=f"edit_v162_{d['u_key']}"):
                                 c1, c2, c3 = st.columns(3)
                                 e_mfr = c1.text_input("제조사", d.get('manufacturer',''), key=f"m_{d['u_key']}")
                                 e_mod = c2.text_input("모델명", d.get('model_name',''), key=f"o_{d['u_key']}")
