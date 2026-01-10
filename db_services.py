@@ -8,15 +8,14 @@ class DBManager:
         try: self.supabase.table("knowledge_base").select("id").limit(1).execute()
         except: pass
 
-    # [복구] 기존 시스템에서 사용되던 블랙리스트 페널티 카운트 함수
     def get_penalty_counts(self):
         try:
             res = self.supabase.table("knowledge_blacklist").select("source_id").execute()
             return Counter([r['source_id'] for r in res.data])
         except: return {}
 
-    # [V170] 특정 질문과 특정 지식 사이의 연관성 평가 저장
-    def save_relevance_feedback(self, query, doc_id, t_name, score):
+    # [V183] 세맨틱 피드백 저장: 질문 텍스트와 벡터를 함께 기록하여 맥락 학습 기반 마련
+    def save_relevance_feedback(self, query, doc_id, t_name, score, query_vec=None):
         try:
             payload = {
                 "query_text": query.strip(),
@@ -24,21 +23,28 @@ class DBManager:
                 "table_name": t_name,
                 "relevance_score": score
             }
+            if query_vec:
+                payload["query_embedding"] = query_vec
+            
             self.supabase.table("relevance_feedback").insert(payload).execute()
             return True
         except: return False
 
-    # [V170] 현재 질문에 대해 과거에 누적된 연관성 가중치 합산 추출
-    def get_query_relevance_boost(self, query, doc_id, t_name):
+    # [V183 핵심] 고속 맥락 필터링을 위한 배치 조회 함수
+    # 질문 벡터를 이용해 과거에 '무관함' 판정을 받은 지식 ID들을 한꺼번에 가져옵니다.
+    def get_semantic_context_blacklist(self, query_vec):
         try:
-            res = self.supabase.table("relevance_feedback")\
-                .select("relevance_score")\
-                .eq("query_text", query.strip())\
-                .eq("doc_id", doc_id)\
-                .eq("table_name", t_name)\
-                .execute()
-            return sum([item['relevance_score'] for item in res.data]) if res.data else 0
-        except: return 0
+            # Supabase RPC 호출: 현재 질문과 95% 이상 유사한 과거 질문의 부정적 피드백 수집
+            res = self.supabase.rpc("match_relevance_feedback_batch", {
+                "input_embedding": query_vec,
+                "match_threshold": 0.95
+            }).execute()
+            
+            if res.data:
+                # 무관함(-1) 평가를 받은 (테이블명, ID) 조합을 Set으로 반환하여 O(1) 검색 보장
+                return {(item['table_name'], item['doc_id']) for item in res.data if item['relevance_score'] < 0}
+            return set()
+        except: return set()
 
     def update_record_labels(self, table_name, row_id, mfr, model, item):
         try:
@@ -47,11 +53,11 @@ class DBManager:
             return (True, "성공") if res.data else (False, "실패")
         except Exception as e: return (False, str(e))
 
-    # [V170/171] 하이브리드 검색 + 맥락적 연관성 가중치 결합 로직
-    def match_filtered_db(self, rpc_name, query_vec, threshold, intent, query_text):
+    # [V183 고속화] 배치 블랙리스트를 인자로 받아 메모리 상에서 즉시 필터링 수행
+    def match_filtered_db(self, rpc_name, query_vec, threshold, intent, query_text, context_blacklist=None):
         try:
-            target_item = intent.get('target_item')
-            target_model = intent.get('target_model')
+            target_item = intent.get('target_item', '공통')
+            target_model = intent.get('target_model', '미지정')
             results = self.supabase.rpc(rpc_name, {"query_embedding": query_vec, "match_threshold": threshold, "match_count": 40}).execute().data or []
             
             filtered_results = []
@@ -59,7 +65,10 @@ class DBManager:
             t_name = "manual_base" if "manual" in rpc_name else "knowledge_base"
 
             for d in results:
-                # 1. 기본 벡터 유사도
+                # 1. [맥락 지능] 배치 블랙리스트에 포함된 지식은 0.0001초 만에 스킵
+                if context_blacklist and (t_name, d['id']) in context_blacklist:
+                    continue
+                
                 final_score = d.get('similarity') or 0
                 
                 # 2. 키워드 매칭 가산점 (Hybrid Component)
@@ -67,13 +76,8 @@ class DBManager:
                 for kw in keywords:
                     if kw.lower() in content: final_score += 0.1
                 
-                # 3. 맥락적 연관성 가중치 (Contextual Feedback Component)
-                rel_boost = self.get_query_relevance_boost(query_text, d['id'], t_name)
-                final_score += (rel_boost * 0.1) 
-                
-                # 4. 메타데이터 필터링 가중치
+                # 3. 메타데이터 가중치 (Hard Meta Component)
                 if target_item and target_item.lower() in str(d.get('measurement_item', '')).lower(): final_score += 0.5
-                elif target_item: final_score -= 0.3
                 if target_model and target_model.lower() in str(d.get('model_name', '')).lower(): final_score += 0.4
                 
                 d['similarity'] = final_score
