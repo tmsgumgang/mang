@@ -8,7 +8,14 @@ class DBManager:
         try: self.supabase.table("knowledge_base").select("id").limit(1).execute()
         except: pass
 
-    # [V170 핵심] 특정 질문과 특정 지식 사이의 연관성 평가 저장
+    # [복구] 기존 시스템에서 사용되던 블랙리스트 페널티 카운트 함수
+    def get_penalty_counts(self):
+        try:
+            res = self.supabase.table("knowledge_blacklist").select("source_id").execute()
+            return Counter([r['source_id'] for r in res.data])
+        except: return {}
+
+    # [V170] 특정 질문과 특정 지식 사이의 연관성 평가 저장
     def save_relevance_feedback(self, query, doc_id, t_name, score):
         try:
             payload = {
@@ -21,7 +28,7 @@ class DBManager:
             return True
         except: return False
 
-    # [V170 핵심] 현재 질문에 대해 과거에 누적된 연관성 가중치 합산 추출
+    # [V170] 현재 질문에 대해 과거에 누적된 연관성 가중치 합산 추출
     def get_query_relevance_boost(self, query, doc_id, t_name):
         try:
             res = self.supabase.table("relevance_feedback")\
@@ -40,7 +47,7 @@ class DBManager:
             return (True, "성공") if res.data else (False, "실패")
         except Exception as e: return (False, str(e))
 
-    # [V170] 하이브리드 검색 + 맥락적 연관성 가중치 결합 로직
+    # [V170/171] 하이브리드 검색 + 맥락적 연관성 가중치 결합 로직
     def match_filtered_db(self, rpc_name, query_vec, threshold, intent, query_text):
         try:
             target_item = intent.get('target_item')
@@ -55,15 +62,14 @@ class DBManager:
                 # 1. 기본 벡터 유사도
                 final_score = d.get('similarity') or 0
                 
-                # 2. 키워드 매칭 가산점 (Hybrid)
+                # 2. 키워드 매칭 가산점 (Hybrid Component)
                 content = (d.get('content') or d.get('solution') or "").lower()
                 for kw in keywords:
                     if kw.lower() in content: final_score += 0.1
                 
-                # 3. [V170] 맥락적 연관성 가중치 (Feedback)
-                # 이 질문에 대해 이 문서가 과거에 얻은 연관성 점수를 합산 반영
+                # 3. 맥락적 연관성 가중치 (Contextual Feedback Component)
                 rel_boost = self.get_query_relevance_boost(query_text, d['id'], t_name)
-                final_score += (rel_boost * 0.1) # 추천 1건당 10% 가산 또는 감점
+                final_score += (rel_boost * 0.1) 
                 
                 # 4. 메타데이터 필터링 가중치
                 if target_item and target_item.lower() in str(d.get('measurement_item', '')).lower(): final_score += 0.5
@@ -128,3 +134,9 @@ class DBManager:
     def update_vector(self, table_name, row_id, vec):
         try: self.supabase.table(table_name).update({"embedding": vec}).eq("id", row_id).execute(); return True
         except: return False
+
+    def delete_record(self, table_name, row_id):
+        try:
+            res = self.supabase.table(table_name).delete().eq("id", row_id).execute()
+            return (True, "성공") if res.data else (False, "실패")
+        except Exception as e: return (False, str(e))
