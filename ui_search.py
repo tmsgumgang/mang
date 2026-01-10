@@ -3,7 +3,7 @@ import time
 from logic_ai import *
 
 def show_search_ui(ai_model, db):
-    # [V175] 최적화된 고대비 및 가독성 전용 CSS
+    # [V175/176] 최적화된 고대비 및 가독성 전용 CSS 유지
     st.markdown("""<style>
         .summary-box { 
             background-color: #f8fafc; 
@@ -59,17 +59,21 @@ def show_search_ui(ai_model, db):
             st.session_state.last_query = user_q
             if "full_report" in st.session_state: del st.session_state.full_report
 
-        # [V175] 사용자 경험을 위한 상세 프로그레스 바
         progress_bar = st.progress(0, text="질문 분석 및 검색 엔진 가동 중...")
         
         # 1. 의도 분석 및 벡터 생성 (캐싱 적용됨)
         intent = analyze_search_intent(ai_model, user_q)
+        
+        # [V176] AttributeError 방지용 방어 코드 추가
+        if not intent or not isinstance(intent, dict):
+            intent = {"target_mfr": "미지정", "target_model": "미지정", "target_item": "공통"}
+            
         q_vec = get_embedding(user_q)
+        # 이제 intent.get() 호출 시 에러가 발생하지 않습니다.
         progress_bar.progress(30, text=f"인식된 대상: {intent.get('target_mfr','미지정')} / {intent.get('target_item','미지정')}")
 
-        # 2. 하이브리드 검색 수행 (병렬적 처리 구조)
+        # 2. 하이브리드 검색 수행
         penalties = db.get_penalty_counts()
-        # [V174 지능 유지] 매칭 시 질문 텍스트와 인텐트 함께 전달
         m_res = db.match_filtered_db("match_manual", q_vec, u_threshold, intent, user_q)
         k_res = db.match_filtered_db("match_knowledge", q_vec, u_threshold, intent, user_q)
         
@@ -79,7 +83,7 @@ def show_search_ui(ai_model, db):
         for d in (m_res + k_res):
             u_key = f"{'EXP' if 'solution' in d else 'MAN'}_{d.get('id')}"
             if d.get('semantic_version') == 1:
-                # [V174/175] 브랜드 하드 필터링 로직 유지
+                # [V174/175/176] 브랜드 하드 필터링 로직 유지
                 score = (d.get('similarity') or 0)
                 
                 # 브랜드/항목 불일치 시 강력한 페널티 부여
@@ -94,18 +98,17 @@ def show_search_ui(ai_model, db):
         
         raw_candidates = sorted(raw_candidates, key=lambda x: x['final_score'], reverse=True)[:8]
         
-        # 3. AI 리랭킹 (V175 캐싱 적용)
+        # 3. AI 리랭킹 (V175 캐싱 및 V176 안정성 강화)
         final = rerank_results_ai(ai_model, user_q, raw_candidates, intent)
         progress_bar.progress(100, text="검색 완료!")
         time.sleep(0.2); progress_bar.empty()
 
         if final:
-            # [V174/175 복구] 3줄 요약 생성 및 렌더링
+            # [V174/176 복구] 3줄 요약 생성 및 렌더링
             top_summary_3line = generate_3line_summary(ai_model, user_q, final[:3])
             _, res_col, _ = st.columns([0.5, 3, 0.5])
             with res_col:
                 st.subheader("⚡ 즉각 대응 핵심 요약 (3줄)")
-                # 줄바꿈 및 리스트 형식 유지를 위해 마크다운 처리
                 st.markdown(f'<div class="summary-box">{top_summary_3line.replace("\\n", "<br>")}</div>', unsafe_allow_html=True)
                 
                 st.subheader("🔍 AI 전문가 정밀 분석")
@@ -123,10 +126,8 @@ def show_search_ui(ai_model, db):
                 st.subheader("📋 정밀 검색 결과 및 연관성 평가")
                 for d in final[:6]:
                     v_mark = ' ✅ 인증' if d.get('is_verified') else ''
-                    # [V174] 리랭커 지능 보강으로 신뢰도 정상화
                     score = d.get('rerank_score', 0)
                     with st.expander(f"[{d.get('measurement_item','-')}] {d.get('model_name','공통')} (신뢰도: {score}%) {v_mark}"):
-                        # 고대비 메타바
                         st.markdown(f'''<div class="meta-bar">
                             <span>🏢 제조사: <b>{d.get("manufacturer","미지정")}</b></span>
                             <span>🧪 항목: <b>{d.get("measurement_item","공통")}</b></span>
@@ -134,22 +135,20 @@ def show_search_ui(ai_model, db):
                         </div>''', unsafe_allow_html=True)
                         st.write(d.get('content') or d.get('solution'))
                         
-                        # [V170/175] 맥락적 연관성 평가 시스템
                         t_name = "knowledge_base" if "EXP" in d['u_key'] else "manual_base"
                         st.markdown('<div class="feedback-bar">', unsafe_allow_html=True)
                         st.markdown(f'<div class="feedback-text">🎯 질문 "{user_q}"에 대한 연관성 평가</div>', unsafe_allow_html=True)
                         c1, c2, _ = st.columns([0.25, 0.25, 0.5])
-                        if c1.button("✅ 질문과 연관있음", key=f"v175_up_{d['u_key']}"):
+                        if c1.button("✅ 질문과 연관있음", key=f"v176_up_{d['u_key']}"):
                             if db.save_relevance_feedback(user_q, d['id'], t_name, 1):
                                 st.success("평가 반영됨!"); time.sleep(0.5); st.rerun()
-                        if c2.button("❌ 질문과 무관함", key=f"v175_down_{d['u_key']}"):
+                        if c2.button("❌ 질문과 무관함", key=f"v176_down_{d['u_key']}"):
                             if db.save_relevance_feedback(user_q, d['id'], t_name, -1):
                                 st.warning("반영 완료!"); time.sleep(0.5); st.rerun()
                         st.markdown('</div>', unsafe_allow_html=True)
                         
                         st.markdown("---")
-                        # [V160/175] 데이터 품질 관리 폼
-                        with st.form(key=f"edit_v175_{d['u_key']}"):
+                        with st.form(key=f"edit_v176_{d['u_key']}"):
                             c1, c2, c3 = st.columns(3)
                             e_mfr = c1.text_input("제조사", d.get('manufacturer',''), key=f"m_{d['u_key']}")
                             e_mod = c2.text_input("모델명", d.get('model_name',''), key=f"o_{d['u_key']}")
