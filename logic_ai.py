@@ -47,9 +47,9 @@ def extract_metadata_ai(ai_model, content):
         return extract_json(res.text)
     except: return None
 
+# [V180/183] 인텐트 분석 안정화 및 캐싱 유지
 @st.cache_data(ttl=3600, show_spinner=False)
 def analyze_search_intent(_ai_model, query):
-    # [V180] 어떠한 경우에도 None을 반환하지 않도록 기본 객체 선언
     default_intent = {"target_mfr": "미지정", "target_model": "미지정", "target_item": "공통"}
     try:
         prompt = f"""사용자의 질문에서 '타겟 모델명', '측정 항목', '제조사'를 완벽하게 추출해.
@@ -63,15 +63,17 @@ def analyze_search_intent(_ai_model, query):
     except:
         return default_intent
 
+# [V183 핵심] 통합 엔진: 리랭킹과 3줄 요약을 단 한 번의 AI 호출로 처리하여 네트워크 지연 최소화
 @st.cache_data(ttl=3600, show_spinner=False)
 def unified_rerank_and_summary_ai(_ai_model, query, results, intent):
-    # [V180] intent 인자 무결성 확인
-    safe_intent = intent if (intent and isinstance(intent, dict)) else {"target_mfr": "미지정", "target_item": "공통"}
     if not results: return [], "관련 지식을 찾지 못했습니다."
     
+    # [V180 안전장치] intent 무결성 확인
+    safe_intent = intent if (intent and isinstance(intent, dict)) else {"target_mfr": "미지정", "target_item": "공통"}
     target_mfr = safe_intent.get('target_mfr', '미지정')
     target_item = safe_intent.get('target_item', '공통')
     
+    # 상위 5개 핵심 후보 데이터 직렬화
     candidates = []
     for r in results[:5]:
         candidates.append({
@@ -82,19 +84,21 @@ def unified_rerank_and_summary_ai(_ai_model, query, results, intent):
             "content": (r.get('content') or r.get('solution'))[:300]
         })
 
-    prompt = f"""[지시] 사용자 질문 "{query}"에 대해 후보들을 평가하고 핵심 조치를 요약해.
+    # 통합 엔진 전용 프롬프트 (V179/183)
+    prompt = f"""[지시] 사용자 질문 "{query}"에 대해 후보 지식을 평가하고 현장 조치를 요약해.
     필수 타겟 -> 제조사: {target_mfr}, 항목: {target_item}
     
-    1. 각 후보의 신뢰도(0-100)를 평가해. (제조사 다르면 무조건 0점)
-    2. 상위권 후보를 기반으로 '3줄 조치 가이드'를 작성해.
+    [평가 규칙]
+    1. 각 후보의 신뢰도(0-100)를 평가해. 제조사/모델 불일치 시 대폭 감점.
+    2. 상위 지식을 기반으로 '3줄 조치 가이드'를 작성해.
     
     [요약 포맷 규칙]
-    1. (내용) - (효과)
-    2. (내용) - (효과)
-    3. (내용) - (효과)
+    1. (핵심 조치) - (기대 효과)
+    2. (핵심 조치) - (기대 효과)
+    3. (핵심 조치) - (기대 효과)
     (문장 끝마다 \\n\\n 필수)
     
-    후보: {json.dumps(candidates, ensure_ascii=False)}
+    후보 목록: {json.dumps(candidates, ensure_ascii=False)}
     
     응답형식(JSON):
     {{
@@ -105,6 +109,8 @@ def unified_rerank_and_summary_ai(_ai_model, query, results, intent):
     try:
         res = _ai_model.generate_content(prompt)
         parsed = extract_json(res.text)
+        
+        # 신뢰도 점수 맵핑 및 정렬
         score_map = {item['id']: item['score'] for item in parsed.get('scores', [])}
         for r in results:
             r['rerank_score'] = score_map.get(r['id'], 0)
@@ -112,7 +118,7 @@ def unified_rerank_and_summary_ai(_ai_model, query, results, intent):
         final_results = sorted(results, key=lambda x: x['rerank_score'], reverse=True)
         return final_results, parsed.get('summary', "요약을 생성할 수 없습니다.")
     except:
-        return results, "연산 중 오류가 발생했습니다."
+        return results, "지능 연산 중 오류가 발생했습니다."
 
 def generate_relevant_summary(ai_model, query, data):
     prompt = f"질문: {query} 데이터: {data}\n문장 단위로 줄바꿈하여 정밀 기술 리포트를 작성해줘."
