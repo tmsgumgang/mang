@@ -3,6 +3,8 @@ import json
 import google.generativeai as genai
 import streamlit as st
 
+# [V172] 세맨틱 캐싱: 동일 텍스트의 벡터는 다시 생성하지 않음
+@st.cache_data(show_spinner=False)
 def get_embedding(text):
     result = genai.embed_content(model="models/text-embedding-004", content=clean_text_for_db(text), task_type="retrieval_document")
     return result['embedding']
@@ -46,12 +48,14 @@ def extract_metadata_ai(ai_model, content):
         return extract_json(res.text)
     except: return None
 
-def analyze_search_intent(ai_model, query):
+# [V172] 의도 분석 캐싱: 반복되는 질문의 검색 조건 분석 속도 향상
+@st.cache_data(show_spinner=False)
+def analyze_search_intent(_ai_model, query):
     try:
         prompt = f"""사용자의 질문에서 '타겟 모델명'과 '측정 항목'을 추출해. 특히 TOC, TN, TP 등의 항목을 잘 구분해.
         질문: {query}
         응답형식(JSON): {{"target_model": "모델명", "target_item": "측정항목"}}"""
-        res = ai_model.generate_content(prompt)
+        res = _ai_model.generate_content(prompt)
         return extract_json(res.text)
     except: return {"target_model": None, "target_item": None}
 
@@ -74,22 +78,16 @@ def rerank_results_ai(ai_model, query, results):
         return sorted(results, key=lambda x: x['rerank_score'], reverse=True)
     except: return results
 
-# [V160-Patch3] 줄바꿈 강제 및 50자 요약
 def generate_3line_summary(ai_model, query, data):
     prompt = f"""질문: {query} 데이터: {data}
     현장 작업자를 위해 가장 중요한 조치 사항 3가지를 '3줄'로 요약해.
     [필수 지시]
     1. 각 문장이 끝날 때마다 반드시 줄바꿈(\\n)을 두 번 할 것.
-    2. 각 줄은 50자 내외로 작성할 것.
-    3. 조치 방법과 이유를 포함할 것."""
+    2. 각 줄은 50자 내외로 작성할 것."""
     res = ai_model.generate_content(prompt)
     return res.text
 
-# [V160-Patch3] 리포트 내 문장 줄바꿈 강화
 def generate_relevant_summary(ai_model, query, data):
-    prompt = f"""질문: {query} 데이터: {data}
-    당신은 수질전문가입니다. 고장 원인 및 정밀 해결 방안 기술 리포트를 작성해줘.
-    [가독성 지시]
-    - 모든 문장이 끝나면 줄바꿈(\\n)을 하여 문장 단위로 읽기 좋게 구성할 것."""
+    prompt = f"질문: {query} 데이터: {data}\n문장 단위로 줄바꿈하여 정밀 기술 리포트를 작성해줘."
     res = ai_model.generate_content(prompt)
     return res.text
