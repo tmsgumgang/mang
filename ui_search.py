@@ -3,14 +3,16 @@ import time
 from logic_ai import *
 
 def show_search_ui(ai_model, db):
-    # [V160-Patch3] 박스 시인성 강화 및 폰트 색상 강제 지정
+    # [V161] 다크모드 완벽 대응 컬러 스키마
     st.markdown("""<style>
         .summary-box { background-color: #f8fafc; border: 2px solid #166534; padding: 20px; border-radius: 12px; color: #0f172a !important; margin-bottom: 25px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); line-height: 1.6; }
         .summary-box b, .summary-box div { color: #0f172a !important; }
         .report-box { background-color: #ffffff; border: 1px solid #004a99; padding: 25px; border-radius: 12px; color: #0f172a !important; box-shadow: inset 0 2px 4px 0 rgba(0, 0, 0, 0.05); line-height: 1.8; }
-        .meta-bar { background-color: rgba(0, 74, 153, 0.1); border-left: 5px solid #004a99; padding: 10px; border-radius: 4px; font-size: 0.85rem; margin-bottom: 10px; color: #1e293b !important; }
-        /* 폼 테두리 스타일링 */
-        div[data-testid="stForm"] { border: 1px solid #e2e8f0; background-color: #f1f5f9; padding: 20px; border-radius: 10px; }
+        /* 메타바 시인성 강화: 어떤 테마에서도 흰색 글씨 + 파란 배경 고정 */
+        .meta-bar { background-color: #004a99 !important; padding: 12px; border-radius: 6px; font-size: 0.9rem; margin-bottom: 12px; color: #ffffff !important; display: flex; gap: 15px; flex-wrap: wrap; }
+        .meta-bar span { color: #ffffff !important; font-weight: 500; }
+        .meta-bar b { color: #ffd700 !important; } /* 중요 정보(모델명 등)는 골드색 강조 */
+        div[data-testid="stForm"] { border: 1px solid #e2e8f0; background-color: rgba(241, 245, 249, 0.1); padding: 20px; border-radius: 10px; }
     </style>""", unsafe_allow_html=True)
 
     _, main_col, _ = st.columns([1, 2, 1])
@@ -29,7 +31,6 @@ def show_search_ui(ai_model, db):
             intent = analyze_search_intent(ai_model, user_q)
             q_vec = get_embedding(user_q)
             penalties = db.get_penalty_counts()
-            
             m_res = db.match_filtered_db("match_manual", q_vec, u_threshold, intent)
             k_res = db.match_filtered_db("match_knowledge", q_vec, u_threshold, intent)
             
@@ -46,19 +47,16 @@ def show_search_ui(ai_model, db):
             
             if final:
                 top_summary_3line = generate_3line_summary(ai_model, user_q, final[:3])
-                
                 _, res_col, _ = st.columns([0.5, 3, 0.5])
                 with res_col:
                     st.subheader("⚡ 즉각 대응 핵심 요약 (3줄)")
-                    # 줄바꿈 적용을 위해 markdown 내 개행 처리
                     st.markdown(f'<div class="summary-box">{top_summary_3line.replace("\\n", "<br>")}</div>', unsafe_allow_html=True)
                     
                     st.subheader("🔍 AI 전문가 정밀 분석")
                     if "full_report" not in st.session_state:
                         if st.button("📋 심층 기술 리포트 생성 및 확인", use_container_width=True):
-                            with st.spinner("분석 중..."):
-                                st.session_state.full_report = generate_relevant_summary(ai_model, user_q, final[:5])
-                                st.rerun()
+                            st.session_state.full_report = generate_relevant_summary(ai_model, user_q, final[:5])
+                            st.rerun()
                     else:
                         st.markdown('<div class="report-box">', unsafe_allow_html=True)
                         st.write(st.session_state.full_report)
@@ -70,20 +68,23 @@ def show_search_ui(ai_model, db):
                         v_mark = ' ✅ 인증' if d.get('is_verified') else ''
                         score = d.get('rerank_score', 0)
                         with st.expander(f"[{d.get('measurement_item','-')}] {d.get('model_name','공통')} (신뢰도: {score}%) {v_mark}"):
-                            st.markdown(f'<div class="meta-bar"><span>🏢 제조사: <b>{d.get("manufacturer","미지정")}</b></span><span>🧪 항목: <b>{d.get("measurement_item","공통")}</b></span><span>🏷️ 모델: <b>{d.get("model_name","공통")}</b></span></div>', unsafe_allow_html=True)
+                            # 시인성이 강화된 메타바
+                            st.markdown(f'''<div class="meta-bar">
+                                <span>🏢 제조사: <b>{d.get("manufacturer","미지정")}</b></span>
+                                <span>🧪 항목: <b>{d.get("measurement_item","공통")}</b></span>
+                                <span>🏷️ 모델: <b>{d.get("model_name","공통")}</b></span>
+                            </div>''', unsafe_allow_html=True)
                             st.write(d.get('content') or d.get('solution'))
                             
-                            # [기능 보존] 현장 라벨 교정 폼 (흰 줄 박스 제거됨)
                             st.markdown("---")
                             st.markdown("🔧 **데이터 품질 관리 (현장 라벨 교정)**")
-                            with st.form(key=f"edit_v160p3_{d['u_key']}"):
+                            with st.form(key=f"edit_v161_{d['u_key']}"):
                                 c1, c2, c3 = st.columns(3)
                                 e_mfr = c1.text_input("제조사", d.get('manufacturer',''), key=f"m_{d['u_key']}")
                                 e_mod = c2.text_input("모델명", d.get('model_name',''), key=f"o_{d['u_key']}")
                                 e_itm = c3.text_input("항목", d.get('measurement_item',''), key=f"i_{d['u_key']}")
                                 if st.form_submit_button("💾 정보 교정 및 DB 반영"):
                                     t_name = "knowledge_base" if "EXP" in d['u_key'] else "manual_base"
-                                    success, msg = db.update_record_labels(t_name, d['id'], e_mfr, e_mod, e_itm)
-                                    if success: st.success("데이터 품질 교정 완료!"); time.sleep(0.5); st.rerun()
-                                    else: st.error(msg)
+                                    if db.update_record_labels(t_name, d['id'], e_mfr, e_mod, e_itm)[0]:
+                                        st.success("데이터 품질 교정 완료!"); time.sleep(0.5); st.rerun()
             else: st.warning("🔍 검색 결과가 없습니다.")
