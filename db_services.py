@@ -81,15 +81,15 @@ class DBManager:
             return True if res.data else False
         except: return False
 
-    # [V167] 지식 승격 시 실시간 벡터 임베딩 생성 로직 포함
+    # [V168] 지식 승격 로직: 실시간 벡터화 및 자동 검증 처리
     def promote_to_knowledge(self, issue, solution, mfr, model, item):
         try:
-            from logic_ai import get_embedding # 실시간 벡터 추출
+            from logic_ai import get_embedding
             payload = {
                 "domain": "기술지식",
                 "issue": issue,
                 "solution": solution,
-                "embedding": get_embedding(issue), # 검색을 위한 벡터 데이터 생성
+                "embedding": get_embedding(issue),
                 "semantic_version": 1,
                 "is_verified": True,
                 "manufacturer": str(mfr).strip() or "미지정",
@@ -97,10 +97,8 @@ class DBManager:
                 "measurement_item": str(item).strip() or "공통"
             }
             res = self.supabase.table("knowledge_base").insert(payload).execute()
-            if res.data: return True, "성공"
-            else: return False, "DB 저장 실패"
-        except Exception as e:
-            return False, str(e)
+            return (True, "성공") if res.data else (False, "DB 저장 실패")
+        except Exception as e: return (False, str(e))
 
     def update_file_labels(self, table_name, file_name, mfr, model, item):
         try:
