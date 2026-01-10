@@ -5,7 +5,7 @@ def show_community_ui(ai_model, db):
     st.markdown("""<style>
         .comment-box { background-color: rgba(0,74,153,0.1); padding: 15px; border-radius: 8px; border-left: 5px solid #004a99; margin-bottom: 12px; color: #ffffff !important; }
         .comment-box strong { color: #ffd700 !important; }
-        .promo-ready { background-color: rgba(22, 101, 52, 0.1); padding: 15px; border-radius: 8px; border: 1px solid #166534; margin-top: 10px; color: #ffffff !important; }
+        .auto-sync-tag { background-color: rgba(22, 101, 52, 0.2); color: #166534; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: bold; }
     </style>""", unsafe_allow_html=True)
 
     st.subheader("👥 현장 지식 커뮤니티 (Q&A)")
@@ -24,7 +24,7 @@ def show_community_ui(ai_model, db):
         is_edit = st.session_state.community_mode == "edit"
         post_data = st.session_state.get("editing_post", {})
         
-        with st.form("post_form_v167"):
+        with st.form("post_form_v168"):
             st.markdown(f"### 📝 {'질문 수정' if is_edit else '새로운 질문 등록'}")
             author = st.text_input("작성자", value=post_data.get("author", ""), disabled=is_edit)
             title = st.text_input("질문 제목", value=post_data.get("title", ""))
@@ -68,21 +68,29 @@ def show_community_ui(ai_model, db):
                     st.divider()
                     comments = db.get_comments(p['id'])
                     if comments:
-                        st.markdown("#### 💬 현장 대원 답변")
+                        st.markdown("#### 💬 현장 대원 답변 (AI 지식 자동 동기화)")
                         for c in comments:
-                            st.markdown(f"""<div class="comment-box"><strong>{c['author']} 대원:</strong><br>{c['content']}</div>""", unsafe_allow_html=True)
-                            
-                            st.markdown('<div class="promo-ready">', unsafe_allow_html=True)
-                            if st.button("💎 이 답변을 정식 지식으로 등록", key=f"promo_{c['id']}", use_container_width=True):
-                                # V167 핵심: 질문 글에 저장된 라벨 정보를 사용하여 승격
-                                success, msg = db.promote_to_knowledge(p['title'], c['content'], p.get('manufacturer','미지정'), p.get('model_name','미지정'), p.get('measurement_item','공통'))
-                                if success: st.success("검색에 즉시 반영되도록 벡터화 및 승격 완료!"); time.sleep(1); st.rerun()
-                                else: st.error(f"실패: {msg}")
-                            st.markdown('</div>', unsafe_allow_html=True)
+                            st.markdown(f"""<div class="comment-box">
+                                <strong>{c['author']} 대원:</strong><br>{c['content']}
+                            </div>""", unsafe_allow_html=True)
+                            # [V168] 버튼 제거: 답변 리스트 노출로 끝 (이미 지식화 완료 상태)
 
                     with st.form(key=f"cf_{p['id']}"):
                         c_author = st.text_input("내 이름", key=f"ca_{p['id']}")
                         c_content = st.text_area("답변 내용", key=f"cc_{p['id']}")
                         if st.form_submit_button("💬 답변 달기"):
                             if c_author and c_content:
-                                if db.add_comment(p['id'], c_author, c_content): st.success("답변 저장!"); st.rerun()
+                                # 1. 답변 등록
+                                if db.add_comment(p['id'], c_author, c_content):
+                                    # 2. [V168 핵심] 등록 즉시 지식 승격 로직 자동 실행
+                                    success, msg = db.promote_to_knowledge(
+                                        p['title'], 
+                                        c_content, 
+                                        p.get('manufacturer','미지정'), 
+                                        p.get('model_name','미지정'), 
+                                        p.get('measurement_item','공통')
+                                    )
+                                    if success:
+                                        st.success("답변이 저장되었으며, AI가 즉시 새로운 지식으로 학습했습니다!")
+                                        time.sleep(1); st.rerun()
+                                    else: st.error(f"지식 동기화 실패: {msg}")
