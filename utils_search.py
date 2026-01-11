@@ -5,9 +5,8 @@ from logic_ai import *
 
 def perform_unified_search(ai_model, db, user_q, u_threshold):
     """
-    [V186] 스트리밍 지원 오케스트레이터:
-    1. V185의 초병렬(Hyper-Parallel) 부트스트랩 유지
-    2. 요약 생성을 여기서 하지 않고, 순위만 매겨서 즉시 반환 (UI에서 스트리밍하기 위함)
+    [V187] 모델명 방화벽(Zero Tolerance) 탑재 오케스트레이터:
+    사용자가 특정 모델을 언급하면, 불일치하는 지식은 점수 감점이 아니라 '즉시 제외' 처리.
     """
     
     # 1. [V185 유지] 초병렬 초기 진입 (Embedding + Intent)
@@ -37,23 +36,39 @@ def perform_unified_search(ai_model, db, user_q, u_threshold):
         m_res = future_m.result()
         k_res = future_k.result()
 
-    # 4. 후보군 압축 및 하드 메타데이터 필터링 (V184 로직 전면 보존)
+    # 4. 후보군 압축 및 방화벽 가동 (Firewall Logic)
     raw_candidates = []
+    
+    # 비교를 위한 타겟 메타데이터 정규화
+    t_mfr = str(intent.get('target_mfr') or '미지정').lower().replace(" ", "")
+    t_model = str(intent.get('target_model') or '미지정').lower().replace(" ", "")
+    t_item = str(intent.get('target_item') or '공통').lower().replace(" ", "")
+
     for d in (m_res + k_res):
         u_key = f"{'EXP' if 'solution' in d else 'MAN'}_{d.get('id')}"
         if d.get('semantic_version') == 1:
+            # 문서 메타데이터 정규화
+            d_mfr = str(d.get('manufacturer') or '').lower().replace(" ", "")
+            d_model = str(d.get('model_name') or '').lower().replace(" ", "")
+            d_item = str(d.get('measurement_item') or '').lower().replace(" ", "")
+            
+            # ---------------------------------------------------------
+            # [V187 핵심] 모델명 불일치 즉시 차단 (Zero Tolerance Firewall)
+            # 조건: 사용자가 모델을 특정했고(미지정 아님), 문서에도 모델명이 있는데, 서로 포함 관계가 아닐 때
+            # ---------------------------------------------------------
+            if t_model != '미지정' and d_model != '' and t_model not in d_model and d_model not in t_model:
+                continue  # [강력 차단] 점수 계산조차 하지 않고 루프 건너뜀
+            
+            # [V187 추가] 제조사 불일치 즉시 차단
+            if t_mfr != '미지정' and d_mfr != '' and t_mfr not in d_mfr:
+                continue
+
+            # ---------------------------------------------------------
+            # 아래는 기존 점수 계산 로직 (살아남은 후보들 간의 순위 경쟁)
+            # ---------------------------------------------------------
             score = (d.get('similarity') or 0)
             
-            # V184 None 값 방어 로직
-            t_mfr = str(intent.get('target_mfr') or '미지정').lower()
-            d_mfr = str(d.get('manufacturer') or '').lower()
-            
-            if t_mfr != '미지정' and t_mfr != 'none' and t_mfr not in d_mfr:
-                score -= 5.0
-            
-            t_item = str(intent.get('target_item') or '공통').lower()
-            d_item = str(d.get('measurement_item') or '').lower()
-            
+            # 항목(Item)은 조금 유연하게 처리 (측정항목 이름이 다양할 수 있으므로 감점 방식 유지)
             if t_item != '공통' and t_item != 'none' and t_item not in d_item:
                 score -= 3.0
             
@@ -65,8 +80,7 @@ def perform_unified_search(ai_model, db, user_q, u_threshold):
     # 상위 8개 선정
     raw_candidates = sorted(raw_candidates, key=lambda x: x['final_score'], reverse=True)[:8]
     
-    # 5. [V186 변경] 요약 대기 없이 '빠른 리랭킹'만 수행 후 즉시 리턴
-    # (요약은 UI에서 스트리밍으로 처리하여 체감 속도 0초 구현)
+    # 5. [V186 유지] 빠른 리랭킹 후 반환
     final_results = quick_rerank_ai(ai_model, user_q, raw_candidates, intent)
     
     return final_results, intent, q_vec
