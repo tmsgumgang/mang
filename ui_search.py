@@ -19,7 +19,7 @@ def show_search_ui(ai_model, db):
         s_mode = st.radio("검색 모드", ["업무기술 🛠️", "생활정보 🍴"], horizontal=True, label_visibility="collapsed")
         u_threshold = st.slider("정밀도 설정", 0.0, 1.0, 0.6, 0.05)
         user_q = st.text_input("질문 입력", placeholder="예: 시마즈 TOC 고장 조치", label_visibility="collapsed")
-        search_btn = st.button("🔍 V190 하이브리드 지능 검색", use_container_width=True, type="primary")
+        search_btn = st.button("🔍 검색", use_container_width=True, type="primary")
 
     if user_q and (search_btn or user_q):
         if "last_query" not in st.session_state or st.session_state.last_query != user_q:
