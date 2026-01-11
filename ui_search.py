@@ -5,13 +5,13 @@ from logic_ai import *
 from utils_search import perform_unified_search
 
 def show_search_ui(ai_model, db):
-    # CSS 테마 유지 (V175/183)
+    # CSS 유지 (V175/183)
     st.markdown("""<style>
         .summary-box { background-color: #f8fafc; border: 2px solid #166534; padding: 20px; border-radius: 12px; color: #0f172a !important; margin-bottom: 25px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); line-height: 1.8; }
         .summary-box b { color: #166534 !important; }
         .meta-bar { background-color: #004a99 !important; padding: 12px; border-radius: 6px; font-size: 0.9rem; margin-bottom: 12px; color: #ffffff !important; display: flex; gap: 15px; flex-wrap: wrap; }
-        .meta-bar b { color: #ffd700 !important; }
         .report-box { background-color: #ffffff; border: 1px solid #004a99; padding: 25px; border-radius: 12px; color: #0f172a !important; box-shadow: inset 0 2px 4px 0 rgba(0, 0, 0, 0.05); line-height: 1.8; }
+        .feedback-bar { background-color: rgba(226, 232, 240, 0.3); padding: 12px; border-radius: 8px; margin-top: 15px; border: 1px solid #e2e8f0; }
     </style>""", unsafe_allow_html=True)
 
     _, main_col, _ = st.columns([1, 2, 1])
@@ -19,27 +19,47 @@ def show_search_ui(ai_model, db):
         s_mode = st.radio("검색 모드", ["업무기술 🛠️", "생활정보 🍴"], horizontal=True, label_visibility="collapsed")
         u_threshold = st.slider("정밀도 설정", 0.0, 1.0, 0.6, 0.05)
         user_q = st.text_input("질문 입력", placeholder="예: 시마즈 TOC 고장 조치", label_visibility="collapsed")
-        search_btn = st.button("🔍 V183 초고성능 지능 검색 실행", use_container_width=True, type="primary")
+        search_btn = st.button("🔍 V186 초실시간 스트리밍 검색", use_container_width=True, type="primary")
 
     if user_q and (search_btn or user_q):
         if "last_query" not in st.session_state or st.session_state.last_query != user_q:
             st.session_state.last_query = user_q
             if "full_report" in st.session_state: del st.session_state.full_report
+            if "streamed_summary" in st.session_state: del st.session_state.streamed_summary
 
-        with st.spinner("AI가 지식을 통합 분석 중입니다..."):
-            # [V183] 큐 벡터를 함께 반환받아 피드백 저장 시 활용
-            final, instant_summary, intent, q_vec = perform_unified_search(ai_model, db, user_q, u_threshold)
+        # 1. [Fast Rendering] 검색 결과만 빠르게 가져오기
+        with st.spinner("지식 탐색 중..."):
+            final, intent, q_vec = perform_unified_search(ai_model, db, user_q, u_threshold)
 
         if final:
             _, res_col, _ = st.columns([0.5, 3, 0.5])
             with res_col:
+                # 2. [V186 혁신] 스트리밍 요약 영역 (빈 상자 먼저 생성)
                 st.subheader("⚡ AI 핵심 조치 가이드")
-                st.markdown(f'<div class="summary-box">{instant_summary.replace("\\n", "<br>")}</div>', unsafe_allow_html=True)
+                summary_placeholder = st.empty()
+                
+                # 이미 생성된 요약이 있으면 그대로 표시 (새로고침 시 유지)
+                if "streamed_summary" in st.session_state:
+                     summary_placeholder.markdown(f'<div class="summary-box">{st.session_state.streamed_summary.replace("\\n", "<br>")}</div>', unsafe_allow_html=True)
+                else:
+                    # 3. [Real-time Streaming] 글자 단위로 타닥타닥 출력
+                    full_text = ""
+                    # 0.5초라도 먼저 결과 리스트를 보여주기 위해 스트리밍은 비동기 느낌으로 진행
+                    try:
+                        stream_gen = generate_3line_summary_stream(ai_model, user_q, final)
+                        for chunk in stream_gen:
+                            full_text += chunk
+                            # 실시간 업데이트
+                            summary_placeholder.markdown(f'<div class="summary-box">{full_text.replace("\\n", "<br>")}</div>', unsafe_allow_html=True)
+                        st.session_state.streamed_summary = full_text
+                    except Exception as e:
+                        summary_placeholder.error(f"요약 생성 중 지연 발생: {str(e)}")
 
+                # 4. 심층 리포트 (V183 유지)
                 st.subheader("🔍 AI 전문가 심층 분석")
                 if "full_report" not in st.session_state:
                     if st.button("📋 기술 리포트 전문 생성", use_container_width=True):
-                        with st.spinner("심층 리포트 작성 중..."):
+                        with st.spinner("전문가 리포트 작성 중..."):
                             st.session_state.full_report = generate_relevant_summary(ai_model, user_q, final[:5])
                             st.rerun()
                 else:
@@ -47,6 +67,7 @@ def show_search_ui(ai_model, db):
                     st.write(st.session_state.full_report)
                     st.markdown('</div>', unsafe_allow_html=True)
 
+                # 5. 검색 결과 리스트 (V183 유지)
                 st.subheader("📋 참조 데이터 및 연관성 평가")
                 for d in final[:6]:
                     v_mark = ' ✅ 인증' if d.get('is_verified') else ''
@@ -62,22 +83,23 @@ def show_search_ui(ai_model, db):
                         t_name = "knowledge_base" if "EXP" in d['u_key'] else "manual_base"
                         st.markdown('<div class="feedback-bar">', unsafe_allow_html=True)
                         c1, c2, _ = st.columns([0.25, 0.25, 0.5])
-                        if c1.button("✅ 질문과 연관있음", key=f"v183_up_{d['u_key']}"):
-                            # [V183] 큐 벡터를 함께 저장하여 맥락 학습 강화
-                            if db.save_relevance_feedback(user_q, d['id'], t_name, 1, q_vec):
-                                st.success("평가 반영됨!"); time.sleep(0.5); st.rerun()
-                        if c2.button("❌ 질문과 무관함", key=f"v183_down_{d['u_key']}"):
-                            if db.save_relevance_feedback(user_q, d['id'], t_name, -1, q_vec):
-                                st.warning("맥락 정보 저장됨. 다음 검색부터 자동 배제됩니다."); time.sleep(0.5); st.rerun()
+                        
+                        # [V185 UI 최적화] 버튼 클릭 시 즉시 rerun하여 반응성 향상
+                        if c1.button("✅ 질문과 연관있음", key=f"v186_up_{d['u_key']}"):
+                            db.save_relevance_feedback(user_q, d['id'], t_name, 1, q_vec)
+                            st.success("반영됨"); time.sleep(0.2); st.rerun()
+                        if c2.button("❌ 질문과 무관함", key=f"v186_down_{d['u_key']}"):
+                            db.save_relevance_feedback(user_q, d['id'], t_name, -1, q_vec)
+                            st.warning("제외됨"); time.sleep(0.2); st.rerun()
                         st.markdown('</div>', unsafe_allow_html=True)
                         
                         st.markdown("---")
-                        with st.form(key=f"edit_v183_{d['u_key']}"):
+                        with st.form(key=f"edit_v186_{d['u_key']}"):
                             c1, c2, c3 = st.columns(3)
                             e_mfr = c1.text_input("제조사", d.get('manufacturer',''), key=f"m_{d['u_key']}")
                             e_mod = c2.text_input("모델명", d.get('model_name',''), key=f"o_{d['u_key']}")
                             e_itm = c3.text_input("항목", d.get('measurement_item',''), key=f"i_{d['u_key']}")
                             if st.form_submit_button("💾 정보 교정"):
                                 if db.update_record_labels(t_name, d['id'], e_mfr, e_mod, e_itm)[0]:
-                                    st.success("정보가 교정되었습니다."); time.sleep(0.5); st.rerun()
+                                    st.success("교정 완료"); time.sleep(0.5); st.rerun()
         else: st.warning("🔍 검색 결과가 없습니다.")
