@@ -9,16 +9,19 @@ def normalize_model_name(text):
 
 def filter_candidates_logic(candidates, intent, penalties, strict_mode=True):
     """
-    [V190] 후보군 필터링 코어 로직
-    strict_mode=True: 방화벽 가동 (불일치 시 차단, 단 '공통'은 허용)
-    strict_mode=False: 방화벽 해제 (점수 감점만 적용)
+    [V191] 명사 우선 법칙(Noun-First) 필터링 로직:
+    1. 항목(Item) 불일치 시 감점이 아니라 '즉시 차단' (Strict Mode)
+    2. 타겟 명사(Target Item)가 문서 내용에 없으면 '키워드 앵커링' 실패로 차단
     """
     filtered = []
     
     # 의도(Target) 정규화
     t_mfr = normalize_model_name(intent.get('target_mfr') or '미지정')
     t_model = normalize_model_name(intent.get('target_model') or '미지정')
-    t_item = normalize_model_name(intent.get('target_item') or '공통')
+    
+    # [V191] 타겟 항목은 정규화하되, 키워드 검색을 위해 원본도 유지
+    raw_t_item = str(intent.get('target_item') or '공통').strip()
+    t_item = normalize_model_name(raw_t_item)
     
     # '공통'으로 간주할 키워드 목록
     safe_keywords = ['공통', 'general', 'common', 'none', 'unknown', '미지정', '미분류', '기타']
@@ -30,40 +33,50 @@ def filter_candidates_logic(candidates, intent, penalties, strict_mode=True):
         # 문서(Doc) 정규화
         d_mfr_raw = str(d.get('manufacturer') or '')
         d_model_raw = str(d.get('model_name') or '')
+        d_content_raw = (str(d.get('content') or '') + str(d.get('solution') or '')).lower()
         
         d_mfr = normalize_model_name(d_mfr_raw)
         d_model = normalize_model_name(d_model_raw)
         d_item = normalize_model_name(d.get('measurement_item') or '')
         
-        # [V190 핵심] 공통 지식 프리패스 여부 확인
         is_common_doc = any(k in d_model_raw.lower() for k in safe_keywords) or (d_model == "")
         
-        # --- [방화벽 로직] ---
+        # --- [V191 강화된 방화벽 로직] ---
         if strict_mode:
-            # 1. 모델명 방화벽 (공통 문서는 통과)
+            # 1. 모델명 방화벽 (기존 유지)
             if t_model != '미지정' and not is_common_doc:
-                # 타겟 모델이 문서에 없고, 문서 모델이 타겟에 없으면 차단
                 if d_model != '' and t_model not in d_model and d_model not in t_model:
                     continue
             
-            # 2. 제조사 방화벽
+            # 2. 제조사 방화벽 (기존 유지)
             if t_mfr != '미지정':
                 is_common_mfr = any(k in d_mfr_raw.lower() for k in safe_keywords)
                 if d_mfr != '' and not is_common_mfr and t_mfr not in d_mfr:
                     continue
-        
+            
+            # 3. [V191 핵심] 항목(Item) 방화벽: 감점이 아니라 '즉시 차단'으로 변경
+            # 조건: 사용자가 명확한 항목(예: 채수펌프)을 요구했고, 문서도 명확한 다른 항목(예: TN)을 가질 때
+            if t_item != '공통' and t_item != 'none' and t_item != '미지정':
+                 is_doc_item_common = any(k in d_item for k in safe_keywords) or d_item == ""
+                 # 문서 항목이 공통이 아니고, 타겟 항목과 전혀 겹치지 않으면 탈락
+                 if not is_doc_item_common and t_item not in d_item and d_item not in t_item:
+                     continue
+            
+            # 4. [V191 핵심] 키워드 앵커링 (Content Check)
+            # 조건: 타겟 항목(예: 채수펌프)이 정해져 있는데, 문서 내용 어디에도 그 단어가 없다면 탈락
+            # (단, 문서 모델명이나 항목명에 포함되어 있으면 통과)
+            if t_item != '공통' and t_item != 'none' and t_item != '미지정':
+                 keyword_found = (raw_t_item in d_content_raw) or (t_item in d_item) or (t_item in d_model)
+                 if not keyword_found:
+                     continue
+
         # --- [점수 계산] ---
         score = (d.get('similarity') or 0)
-        
-        # 항목(Item) 불일치 감점
-        if t_item != '공통' and t_item != 'none' and t_item not in d_item:
-            score -= 3.0
         
         # 블랙리스트 감점
         score -= (penalties.get(u_key, 0) * 0.1)
         if d.get('is_verified'): score += 0.15
         
-        # [V190] 공통 문서는 사용자가 특정 모델을 찾을 때 우선순위가 약간 밀리도록 조정 (특화 문서 우대)
         if is_common_doc and t_model != '미지정':
             score -= 0.5 
 
@@ -73,8 +86,9 @@ def filter_candidates_logic(candidates, intent, penalties, strict_mode=True):
 
 def perform_unified_search(ai_model, db, user_q, u_threshold):
     """
-    [V190] 유연한 방화벽 오케스트레이터:
-    1차로 엄격하게 찾고, 결과가 없으면 2차로 유연하게 찾습니다.
+    [V191] 명사 우선 법칙 오케스트레이터:
+    엄격 모드에서 항목(Item) 불일치 문서를 철저히 배제하고,
+    검색 결과가 없을 때만 유연 모드로 전환하여 '관련성 없는 문서'의 난입을 막음.
     """
     # 1. 초기 진입 (병렬)
     with ThreadPoolExecutor() as executor:
@@ -99,21 +113,20 @@ def perform_unified_search(ai_model, db, user_q, u_threshold):
         m_res = future_m.result()
         k_res = future_k.result()
 
-    # V189 출처 태깅
     for r in m_res: r['source_table'] = 'manual_base'
     for r in k_res: r['source_table'] = 'knowledge_base'
     
     all_docs = m_res + k_res
 
-    # 3. [V190] 2단계 필터링 전략 (Fallback Strategy)
-    # Step 1: 엄격 모드 (Strict) - 방화벽 가동
+    # 3. [V191] 2단계 필터링 (Fallback Strategy)
+    # Step 1: 엄격 모드 (Strict) - 항목 불일치 및 키워드 미포함 문서 즉시 차단
     raw_candidates = filter_candidates_logic(all_docs, intent, penalties, strict_mode=True)
     
-    # Step 2: 결과가 0건이면 유연 모드 (Relaxed) - 방화벽 해제, 점수 경쟁
+    # Step 2: 결과가 0건이면 유연 모드 (Relaxed)
     if not raw_candidates:
         raw_candidates = filter_candidates_logic(all_docs, intent, penalties, strict_mode=False)
 
-    # 4. 빠른 리랭킹 (V186 유지)
+    # 4. 빠른 리랭킹
     final_results = quick_rerank_ai(ai_model, user_q, raw_candidates, intent)
     
     return final_results, intent, q_vec
