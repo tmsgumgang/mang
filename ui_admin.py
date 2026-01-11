@@ -22,7 +22,7 @@ def show_admin_ui(ai_model, db):
         except:
             st.warning("DB 연결 상태를 확인해주세요.")
 
-    # 2. 매뉴얼 학습 (V202 안전장치 적용된 함수 호출)
+    # 2. 매뉴얼 학습 (V203 안전장치 적용된 함수 호출)
     with tabs[1]:
         show_manual_upload_ui(ai_model, db)
 
@@ -89,9 +89,9 @@ def show_admin_ui(ai_model, db):
                         st.rerun()
         else: st.info("승인 대기 중인 데이터가 없습니다.")
 
-# [V202 핵심 수정] 업로드 함수 (AttributeError 방지 및 UI 개선)
+# [V203 핵심 수정] 업로드 함수 (리스트/딕셔너리 타입 에러 방지 패치)
 def show_manual_upload_ui(ai_model, db):
-    st.subheader("📂 PDF 매뉴얼 업로드 (V202 Safe Mode)")
+    st.subheader("📂 PDF 매뉴얼 업로드 (V203 Robust Mode)")
     up_f = st.file_uploader("PDF 파일 선택", type=["pdf"])
     
     if up_f and st.button("🚀 학습 시작", use_container_width=True, type="primary"):
@@ -116,22 +116,30 @@ def show_manual_upload_ui(ai_model, db):
                     # 메타데이터 추출 시도
                     meta = extract_metadata_ai(ai_model, chunk)
                     
-                    # [V202 Fix] meta가 None일 경우 기본값 할당 (에러 원천 차단)
-                    if not meta:
-                        meta = {
-                            "manufacturer": "미지정",
-                            "model_name": "미지정", 
-                            "measurement_item": "공통"
-                        }
+                    # [V203 Fix] meta가 리스트([...])로 반환될 경우 처리 로직 추가
+                    if isinstance(meta, list):
+                        if len(meta) > 0 and isinstance(meta[0], dict):
+                            meta = meta[0] # 리스트의 첫 번째 딕셔너리 추출
+                        else:
+                            meta = {} # 빈 리스트거나 이상한 값이면 초기화
                     
+                    # [V203 Fix] meta가 딕셔너리가 아니거나 None일 경우 방어
+                    if not isinstance(meta, dict):
+                        meta = {}
+
+                    # 기본값 설정 (get 메서드 안전 사용)
+                    manufacturer = meta.get('manufacturer', '미지정')
+                    model_name = meta.get('model_name', '미지정')
+                    measurement_item = meta.get('measurement_item', '공통')
+
                     # DB 저장
                     db.supabase.table("manual_base").insert({
                         "domain": "기술지식", 
                         "content": clean_text_for_db(chunk), 
                         "file_name": up_f.name, 
-                        "manufacturer": meta.get('manufacturer','미지정'), 
-                        "model_name": meta.get('model_name','미지정'), 
-                        "measurement_item": meta.get('measurement_item','공통'), 
+                        "manufacturer": manufacturer, 
+                        "model_name": model_name, 
+                        "measurement_item": measurement_item, 
                         "embedding": get_embedding(chunk), 
                         "semantic_version": 2
                     }).execute()
@@ -144,7 +152,9 @@ def show_manual_upload_ui(ai_model, db):
                 st.rerun()
                 
             except Exception as e:
-                st.error(f"오류 발생: {str(e)}")
+                st.error(f"오류 발생 (Chunk {i}): {str(e)}")
+                # 디버깅용: 실제 들어온 데이터 타입 확인
+                print(f"DEBUG Error: meta type={type(meta)}")
 
 # [V164 유지] 지식 직접 등록 함수
 def show_knowledge_reg_ui(ai_model, db):
