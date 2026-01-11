@@ -62,13 +62,11 @@ def analyze_search_intent(_ai_model, query):
     except:
         return default_intent
 
-# [V186] 리랭킹 전용 함수 (고속 처리를 위해 통합 엔진에서 다시 분리/최적화)
 @st.cache_data(ttl=3600, show_spinner=False)
 def quick_rerank_ai(_ai_model, query, results, intent):
     if not results: return []
     safe_intent = intent if (intent and isinstance(intent, dict)) else {"target_mfr": "미지정", "target_item": "공통"}
     
-    # 상위 5개만 빠르게 평가
     candidates = []
     for r in results[:5]:
         candidates.append({
@@ -92,40 +90,46 @@ def quick_rerank_ai(_ai_model, query, results, intent):
         return sorted(results, key=lambda x: x['rerank_score'], reverse=True)
     except: return results
 
-# [V186 핵심] 스트리밍 요약 생성기 (Generator)
-# 텍스트가 완성될 때까지 기다리지 않고, 생성되는 족족 UI로 던져줍니다.
+# [V200] 팩트 고정(Fact-Lock) 스트리밍 가이드
 def generate_3line_summary_stream(ai_model, query, results):
     if not results:
         yield "검색 결과가 부족하여 요약을 생성할 수 없습니다."
         return
 
-    # 요약에 참고할 데이터 (상위 3개)
-    data_context = []
-    for r in results[:3]:
-        data_context.append(f"- {r.get('content') or r.get('solution')}")
+    # [Fact-Lock] 상위 1위 문서에 절대적 권한 부여
+    top_doc = results[0]
+    top_content = f"★최우선참고자료(Fact Source): {top_doc.get('content') or top_doc.get('solution')}"
     
-    prompt = f"""질문: {query}
-    참고 데이터: {json.dumps(data_context, ensure_ascii=False)}
+    other_context = []
+    for r in results[1:3]:
+        other_context.append(f"- 보조자료: {r.get('content') or r.get('solution')}")
     
-    위 데이터를 바탕으로 현장 조치 가이드 3가지를 작성해.
-    형식:
-    1. (핵심 조치) - (효과)
-    2. (핵심 조치) - (효과)
-    3. (핵심 조치) - (효과)
+    full_context = [top_content] + other_context
     
-    - 반드시 바로 출력을 시작할 것.
-    - 문장 사이에는 줄바꿈을 두 번 넣어줘."""
+    prompt = f"""[Role] You are a strict technical manual assistant.
+    [Question] {query}
+    [Data] {json.dumps(full_context, ensure_ascii=False)}
     
-    # stream=True 옵션으로 스트림 객체 생성
+    [Mandatory Rules]
+    1. **NO Hallucination:** Use ONLY the provided [Data]. Do NOT add general knowledge or safety rules (e.g., helmet, gloves) unless explicitly stated in [Data].
+    2. **Specific Nouns:** When asked for 'tools' or 'parts', list the EXACT specific names found in the data (e.g., 'Monkey Spanner', 'Cable Tie', 'PL-50-...').
+    3. **Silence on Unknowns:** If the data does not contain the answer, say "문서에 관련 정보가 명시되어 있지 않습니다." Do not make things up.
+    4. **Language:** Korean.
+    
+    [Output Format]
+    1. (핵심 내용) - (설명)
+    2. (핵심 내용) - (설명)
+    3. (핵심 내용) - (설명)
+    
+    Start output immediately."""
+    
     response = ai_model.generate_content(prompt, stream=True)
     for chunk in response:
         if chunk.text:
             yield chunk.text
 
-# 기존 통합 함수 유지 (하위 호환성 및 보존 지침 준수)
 @st.cache_data(ttl=3600, show_spinner=False)
 def unified_rerank_and_summary_ai(_ai_model, query, results, intent):
-    # (V183 코드 내용 유지 - 생략 없이 보존됨)
     if not results: return [], "관련 지식을 찾지 못했습니다."
     safe_intent = intent if (intent and isinstance(intent, dict)) else {"target_mfr": "미지정", "target_item": "공통"}
     candidates = [{"id":r['id'],"content":(r.get('content')or r.get('solution'))[:300]} for r in results[:5]]
@@ -138,7 +142,19 @@ def unified_rerank_and_summary_ai(_ai_model, query, results, intent):
         return sorted(results, key=lambda x: x['rerank_score'], reverse=True), parsed.get('summary', "요약 불가")
     except: return results, "오류 발생"
 
+# [V200] 팩트 고정(Fact-Lock) 심층 리포트
 def generate_relevant_summary(ai_model, query, data):
-    prompt = f"질문: {query} 데이터: {data}\n문장 단위로 줄바꿈하여 정밀 기술 리포트를 작성해줘."
+    # 기존의 느슨한 프롬프트를 폐기하고, 엄격한 제약조건을 건 프롬프트로 교체
+    prompt = f"""
+    [역할] 너는 팩트 기반의 기술 리포트 작성가야. 절대 상상하지 마.
+    [질문] {query}
+    [데이터] {data}
+    
+    [지시사항 - 절대 준수]
+    1. **오직 [데이터]에 있는 내용만으로** 리포트를 작성해.
+    2. 데이터에 없는 '일반적인 상식', '통상적인 절차', '안전 수칙'은 절대 덧붙이지 마.
+    3. 사용자가 준비물을 물으면 데이터에 있는 **구체적인 품명**만 나열해.
+    4. 문장 단위로 줄바꿈하여 가독성 있게 작성해.
+    """
     res = ai_model.generate_content(prompt)
     return res.text
