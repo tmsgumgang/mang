@@ -48,44 +48,63 @@ class DBManager:
             return (True, "성공") if res.data else (False, "실패")
         except Exception as e: return (False, str(e))
 
-    # [V195 핵심] 하이브리드 검색 (Vector + Keyword Force)
+    # [V198 핵심] 쌍끌이 SQL (Dual-Keyword SQL)
     def match_filtered_db(self, rpc_name, query_vec, threshold, intent, query_text, context_blacklist=None):
         try:
             target_item = intent.get('target_item', '공통')
             
-            # 1. AI 벡터 검색 (의미 기반)
+            # 1. AI 벡터 검색
             vector_results = self.supabase.rpc(rpc_name, {"query_embedding": query_vec, "match_threshold": threshold, "match_count": 40}).execute().data or []
             
-            # 2. SQL 키워드 검색 (글자 기반)
-            # 사용자가 '채수펌프' 등 구체적인 걸 찾으면, AI 판단 무시하고 DB 뒤짐
+            # 2. SQL 키워드 강제 검색 (Space & No-Space 동시 공략)
             keyword_results = []
+            
+            # 검색할 키워드 후보군 생성
+            search_candidates = set()
             if target_item and target_item not in ['공통', '미지정', 'none', 'unknown']:
+                search_candidates.add(target_item.strip()) # 원본 (예: 채수 펌프)
+                search_candidates.add(target_item.replace(" ", "")) # 붙여쓰기 (예: 채수펌프)
+            
+            # [안전망] 타겟이 '공통'이면 사용자 질문에서 직접 명사 추정 (2글자 이상)
+            # (예: "채수펌프 교체..." -> "채수펌프"가 target_item에 안 잡혔을 경우 대비)
+            if not search_candidates:
+                words = query_text.split()
+                for w in words:
+                    if len(w) >= 2 and w not in ['알려줘', '어떻게', '교체', '방법', '준비물']:
+                        search_candidates.add(w)
+            
+            if search_candidates:
                 t_name = "manual_base" if "manual" in rpc_name else "knowledge_base"
-                
-                # 공백 제거 등 전처리 없이 순수 키워드로도 검색 시도
-                # (혹시 모르니 앞뒤 공백만 제거)
-                clean_kw = target_item.strip()
-                
                 query_builder = self.supabase.table(t_name).select("*")
                 
-                if t_name == "manual_base":
-                    # 매뉴얼: 항목, 내용, 모델명에서 찾기
-                    res = query_builder.or_(f"measurement_item.ilike.%{clean_kw}%,content.ilike.%{clean_kw}%,model_name.ilike.%{clean_kw}%").limit(10).execute()
-                else:
-                    # 지식: 항목, 이슈, 솔루션에서 찾기
-                    res = query_builder.or_(f"measurement_item.ilike.%{clean_kw}%,issue.ilike.%{clean_kw}%,solution.ilike.%{clean_kw}%").limit(10).execute()
+                # OR 조건 생성 (모든 후보 키워드에 대해 ILIKE 적용)
+                # measurement_item, model_name, content(issue/solution) 전부 뒤짐
+                or_conditions = []
+                for kw in search_candidates:
+                    if not kw: continue
+                    if t_name == "manual_base":
+                        or_conditions.append(f"measurement_item.ilike.%{kw}%")
+                        or_conditions.append(f"model_name.ilike.%{kw}%")
+                        or_conditions.append(f"content.ilike.%{kw}%")
+                    else:
+                        or_conditions.append(f"measurement_item.ilike.%{kw}%")
+                        or_conditions.append(f"issue.ilike.%{kw}%")
+                        or_conditions.append(f"solution.ilike.%{kw}%")
                 
-                if res.data:
-                    for d in res.data:
-                        # 키워드로 잡힌 녀석은 AI 점수가 없으므로 0.99점 부여 (강제 상위 노출)
-                        d['similarity'] = 0.99 
-                        keyword_results.append(d)
+                if or_conditions:
+                    # 콤마로 연결하여 하나의 거대한 OR 필터 완성
+                    final_filter = ",".join(or_conditions)
+                    res = query_builder.or_(final_filter).limit(10).execute()
+                    
+                    if res.data:
+                        for d in res.data:
+                            d['similarity'] = 0.99 # 강제 소환 가산점
+                            keyword_results.append(d)
 
-            # 3. 결과 병합 (ID 기준 중복 제거)
-            # 키워드 검색 결과(0.99점)를 우선적으로 덮어씌움
+            # 3. 결과 병합
             merged_map = {}
             for d in vector_results: merged_map[d['id']] = d
-            for d in keyword_results: merged_map[d['id']] = d # 여기서 덮어씀
+            for d in keyword_results: merged_map[d['id']] = d # SQL 결과 우선
                 
             final_results_list = list(merged_map.values())
             
@@ -95,13 +114,11 @@ class DBManager:
             t_name = "manual_base" if "manual" in rpc_name else "knowledge_base"
 
             for d in final_results_list:
-                # 블랙리스트 체크
                 if context_blacklist and (t_name, d['id']) in context_blacklist:
                     continue
                 
                 final_score = d.get('similarity') or 0
                 
-                # 키워드 가산점
                 content = (d.get('content') or d.get('solution') or "").lower()
                 for kw in keywords:
                     if kw.lower() in content: final_score += 0.1
@@ -113,7 +130,7 @@ class DBManager:
         except Exception as e:
             return []
 
-    # (이하 기존 커뮤니티/관리 함수들 생략 없이 보존)
+    # (이하 기존 함수 보존)
     def get_community_posts(self):
         try: return self.supabase.table("community_posts").select("*").order("created_at", desc=True).execute().data
         except: return []
