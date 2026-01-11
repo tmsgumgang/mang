@@ -90,13 +90,13 @@ def quick_rerank_ai(_ai_model, query, results, intent):
         return sorted(results, key=lambda x: x['rerank_score'], reverse=True)
     except: return results
 
-# [V200] 팩트 고정(Fact-Lock) 스트리밍 가이드
+# [V200 핵심] 팩트 고정(Fact-Lock) 스트리밍 요약 생성기
 def generate_3line_summary_stream(ai_model, query, results):
     if not results:
         yield "검색 결과가 부족하여 요약을 생성할 수 없습니다."
         return
 
-    # [Fact-Lock] 상위 1위 문서에 절대적 권한 부여
+    # [Fact-Lock] 상위 1위 문서(가장 정확한 문서)를 'Primary Source'로 지정
     top_doc = results[0]
     top_content = f"★최우선참고자료(Fact Source): {top_doc.get('content') or top_doc.get('solution')}"
     
@@ -142,9 +142,8 @@ def unified_rerank_and_summary_ai(_ai_model, query, results, intent):
         return sorted(results, key=lambda x: x['rerank_score'], reverse=True), parsed.get('summary', "요약 불가")
     except: return results, "오류 발생"
 
-# [V200] 팩트 고정(Fact-Lock) 심층 리포트
+# [V200 핵심] 팩트 고정(Fact-Lock) 심층 리포트
 def generate_relevant_summary(ai_model, query, data):
-    # 기존의 느슨한 프롬프트를 폐기하고, 엄격한 제약조건을 건 프롬프트로 교체
     prompt = f"""
     [역할] 너는 팩트 기반의 기술 리포트 작성가야. 절대 상상하지 마.
     [질문] {query}
