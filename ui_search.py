@@ -5,7 +5,7 @@ from logic_ai import *
 from utils_search import perform_unified_search
 
 def show_search_ui(ai_model, db):
-    # CSS 유지 (V175/183)
+    # CSS 스타일 정의
     st.markdown("""<style>
         .summary-box { background-color: #f8fafc; border: 2px solid #166534; padding: 20px; border-radius: 12px; color: #0f172a !important; margin-bottom: 25px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); line-height: 1.8; }
         .summary-box b { color: #166534 !important; }
@@ -40,6 +40,7 @@ def show_search_ui(ai_model, db):
                      summary_placeholder.markdown(f'<div class="summary-box">{st.session_state.streamed_summary.replace("\\n", "<br>")}</div>', unsafe_allow_html=True)
                 else:
                     try:
+                        # logic_ai에서 스트리밍 생성기 호출
                         stream_gen = generate_3line_summary_stream(ai_model, user_q, final)
                         full_text = ""
                         for chunk in stream_gen:
@@ -72,9 +73,7 @@ def show_search_ui(ai_model, db):
                         </div>''', unsafe_allow_html=True)
                         st.write(d.get('content') or d.get('solution'))
                         
-                        # [V189 수정] 추측성 로직 제거 -> 확실한 source_table 사용
-                        # 기존: t_name = "knowledge_base" if "EXP" in d['u_key'] else "manual_base"
-                        # 변경: utils_search.py에서 붙여준 확실한 태그 사용
+                        # [V189] 명확한 source_table 사용
                         t_name = d.get('source_table', 'manual_base') 
 
                         st.markdown('<div class="feedback-bar">', unsafe_allow_html=True)
@@ -97,10 +96,10 @@ def show_search_ui(ai_model, db):
                             if st.form_submit_button("💾 정보 교정"):
                                 if db.update_record_labels(t_name, d['id'], e_mfr, e_mod, e_itm)[0]:
                                     st.success("정보 교정 완료! 데이터베이스에 반영되었습니다.")
-                                    # [V189 핵심] 업데이트 후 캐시를 날려버려야 새 데이터가 보임
+                                    # [V189 핵심] 캐시 클리어 후 리런
                                     st.cache_data.clear()
-                                    time.sleep(1.0) # 사용자가 메시지 볼 시간 확보
+                                    time.sleep(1.0)
                                     st.rerun()
                                 else:
                                     st.error("업데이트 실패: 데이터베이스 오류")
-        else: st.warning("🔍 검색 결과가 없습니다.")ㄴ
+        else: st.warning("🔍 검색 결과가 없습니다.")
