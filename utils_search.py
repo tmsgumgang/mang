@@ -8,8 +8,15 @@ def normalize_model_name(text):
     return str(text).lower().replace(" ", "").replace("-", "").replace("_", "")
 
 def filter_candidates_logic(candidates, intent, penalties, strict_mode=True):
-    # (V193/194 필터 로직 유지 - 내용만 V195에 맞게 미세 조정)
+    """
+    [V196] SQL 검증 필터(SQL-Verified Filter):
+    1. 사용자가 구체적 명사(Target Item)를 찾을 때,
+    2. 문서에 해당 명사가 '텍스트'로 존재하지 않으면,
+    3. AI 유사도 점수가 아무리 높아도(0.95 미만) 가차 없이 탈락시킴.
+       (TN 장비가 '교체' 유사성으로 끼어드는 것을 원천 봉쇄)
+    """
     filtered = []
+    
     t_mfr = normalize_model_name(intent.get('target_mfr') or '미지정')
     t_model = normalize_model_name(intent.get('target_model') or '미지정')
     
@@ -28,43 +35,52 @@ def filter_candidates_logic(candidates, intent, penalties, strict_mode=True):
         d_model_raw = str(d.get('model_name') or '')
         d_item_raw = str(d.get('measurement_item') or '')
         
-        d_content_full_raw = (d_mfr_raw + " " + d_model_raw + " " + d_item_raw + " " + str(d.get('content') or '') + " " + str(d.get('solution') or '')).lower()
+        # 검색 대상 텍스트 통합 (내용 + 제목 + 항목명)
+        d_content_full_raw = (
+            d_mfr_raw + " " + d_model_raw + " " + d_item_raw + " " + 
+            str(d.get('content') or '') + " " + str(d.get('solution') or '')
+        ).lower()
         normalized_content = d_content_full_raw.replace(" ", "")
 
         d_mfr = normalize_model_name(d_mfr_raw)
         d_model = normalize_model_name(d_model_raw)
         d_item = normalize_model_name(d_item_raw)
         
-        # [V195] 하이브리드 검색으로 찾은 문서(점수 0.99)는 방화벽 프리패스 고려
+        # [V196] 하이브리드 검색(SQL)으로 찾은 문서는 이미 검증됨 (점수 > 0.98)
         similarity = d.get('similarity') or 0
-        is_hybrid_hit = (similarity > 0.98) # 키워드로 강제 소환된 녀석
+        is_hybrid_hit = (similarity > 0.98)
 
         if strict_mode:
-            passed_keyword = True
-            if is_specific_target:
+            # 1. [핵심] SQL 검증 로직 (SQL-Verification)
+            # 타겟이 명확한데(채수펌프), 문서에 그 글자가 없고, SQL로 찾은 것도 아니라면?
+            if is_specific_target and not is_hybrid_hit:
                 if normalized_target not in normalized_content:
-                    passed_keyword = False
-            
-            # [V195 수정] 키워드가 없더라도 하이브리드 히트(0.99)라면 살려줌
-            # (SQL이 찾았는데 Python이 버리는 불상사 방지)
-            if not passed_keyword and similarity < 0.82 and not is_hybrid_hit:
-                continue
+                    # [V196 강화] AI 유사도가 0.95(초고득점) 미만이면 무조건 탈락
+                    # (기존 0.82 -> 0.95 상향: TN 장비 등이 여기서 다 걸러짐)
+                    if similarity < 0.95:
+                        continue 
 
+            # 2. 아이템 카테고리 체크
             if is_specific_target:
                 is_doc_common = any(k in d_item for k in generic_keywords) or d_item == ""
-                # 하이브리드 히트면 카테고리 불일치도 넘어감
-                if not is_doc_common and t_item not in d_item and d_item not in t_item and similarity < 0.85 and not is_hybrid_hit:
-                    continue
+                # 하이브리드 히트면 카테고리 불일치도 넘어감 (키워드가 있으니까)
+                if not is_doc_common and t_item not in d_item and d_item not in t_item and not is_hybrid_hit:
+                    # 키워드 없으면 점수 0.95 미만 탈락
+                    if similarity < 0.95: 
+                        continue
 
+            # 3. 모델명 방화벽
             if t_model != '미지정':
                 is_doc_model_common = any(k in d_model_raw.lower() for k in generic_keywords) or d_model == ""
-                if not is_doc_model_common and d_model != '' and t_model not in d_model and d_model not in t_model and similarity < 0.88 and not is_hybrid_hit:
-                     continue
+                if not is_doc_model_common and d_model != '' and t_model not in d_model and d_model not in t_model and not is_hybrid_hit:
+                     if similarity < 0.95:
+                         continue
 
         score = similarity
         score -= (penalties.get(u_key, 0) * 0.1)
         if d.get('is_verified'): score += 0.15
         
+        # 키워드 가산점
         if is_specific_target and (raw_t_item.lower() in d_item_raw.lower() or raw_t_item.lower() in d_model_raw.lower()):
             score += 0.2
 
@@ -73,7 +89,7 @@ def filter_candidates_logic(candidates, intent, penalties, strict_mode=True):
     return sorted(filtered, key=lambda x: x['final_score'], reverse=True)[:8]
 
 def perform_unified_search(ai_model, db, user_q, u_threshold):
-    # (V194 오케스트레이션 로직 유지)
+    # (V195 오케스트레이션 유지 - V196 필터 적용)
     with ThreadPoolExecutor() as executor:
         future_vec = executor.submit(get_embedding, user_q)
         future_intent = executor.submit(analyze_search_intent, ai_model, user_q)
@@ -103,10 +119,10 @@ def perform_unified_search(ai_model, db, user_q, u_threshold):
     
     all_docs = m_res + k_res
 
-    # 1단계: 엄격 모드 (V195 필터 - 하이브리드 히트 우대)
+    # 1단계: 엄격 모드 (V196 SQL 검증 필터 가동)
     raw_candidates = filter_candidates_logic(all_docs, intent, penalties, strict_mode=True)
     
-    # 2단계: 결과 0건이면 유연 모드
+    # 2단계: 결과 0건이면 유연 모드 (품질 점수 0.65 이상)
     if not raw_candidates:
         fallback_candidates = filter_candidates_logic(all_docs, intent, penalties, strict_mode=False)
         raw_candidates = [d for d in fallback_candidates if d['final_score'] > 0.65]
