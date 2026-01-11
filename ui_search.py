@@ -27,35 +27,28 @@ def show_search_ui(ai_model, db):
             if "full_report" in st.session_state: del st.session_state.full_report
             if "streamed_summary" in st.session_state: del st.session_state.streamed_summary
 
-        # 1. [Fast Rendering] 검색 결과만 빠르게 가져오기
         with st.spinner("지식 탐색 중..."):
             final, intent, q_vec = perform_unified_search(ai_model, db, user_q, u_threshold)
 
         if final:
             _, res_col, _ = st.columns([0.5, 3, 0.5])
             with res_col:
-                # 2. [V186 혁신] 스트리밍 요약 영역 (빈 상자 먼저 생성)
                 st.subheader("⚡ AI 핵심 조치 가이드")
                 summary_placeholder = st.empty()
                 
-                # 이미 생성된 요약이 있으면 그대로 표시 (새로고침 시 유지)
                 if "streamed_summary" in st.session_state:
                      summary_placeholder.markdown(f'<div class="summary-box">{st.session_state.streamed_summary.replace("\\n", "<br>")}</div>', unsafe_allow_html=True)
                 else:
-                    # 3. [Real-time Streaming] 글자 단위로 타닥타닥 출력
-                    full_text = ""
-                    # 0.5초라도 먼저 결과 리스트를 보여주기 위해 스트리밍은 비동기 느낌으로 진행
                     try:
                         stream_gen = generate_3line_summary_stream(ai_model, user_q, final)
+                        full_text = ""
                         for chunk in stream_gen:
                             full_text += chunk
-                            # 실시간 업데이트
                             summary_placeholder.markdown(f'<div class="summary-box">{full_text.replace("\\n", "<br>")}</div>', unsafe_allow_html=True)
                         st.session_state.streamed_summary = full_text
                     except Exception as e:
                         summary_placeholder.error(f"요약 생성 중 지연 발생: {str(e)}")
 
-                # 4. 심층 리포트 (V183 유지)
                 st.subheader("🔍 AI 전문가 심층 분석")
                 if "full_report" not in st.session_state:
                     if st.button("📋 기술 리포트 전문 생성", use_container_width=True):
@@ -67,7 +60,6 @@ def show_search_ui(ai_model, db):
                     st.write(st.session_state.full_report)
                     st.markdown('</div>', unsafe_allow_html=True)
 
-                # 5. 검색 결과 리스트 (V183 유지)
                 st.subheader("📋 참조 데이터 및 연관성 평가")
                 for d in final[:6]:
                     v_mark = ' ✅ 인증' if d.get('is_verified') else ''
@@ -80,26 +72,35 @@ def show_search_ui(ai_model, db):
                         </div>''', unsafe_allow_html=True)
                         st.write(d.get('content') or d.get('solution'))
                         
-                        t_name = "knowledge_base" if "EXP" in d['u_key'] else "manual_base"
+                        # [V189 수정] 추측성 로직 제거 -> 확실한 source_table 사용
+                        # 기존: t_name = "knowledge_base" if "EXP" in d['u_key'] else "manual_base"
+                        # 변경: utils_search.py에서 붙여준 확실한 태그 사용
+                        t_name = d.get('source_table', 'manual_base') 
+
                         st.markdown('<div class="feedback-bar">', unsafe_allow_html=True)
                         c1, c2, _ = st.columns([0.25, 0.25, 0.5])
                         
-                        # [V185 UI 최적화] 버튼 클릭 시 즉시 rerun하여 반응성 향상
-                        if c1.button("✅ 질문과 연관있음", key=f"v186_up_{d['u_key']}"):
+                        if c1.button("✅ 질문과 연관있음", key=f"v189_up_{d['u_key']}"):
                             db.save_relevance_feedback(user_q, d['id'], t_name, 1, q_vec)
                             st.success("반영됨"); time.sleep(0.2); st.rerun()
-                        if c2.button("❌ 질문과 무관함", key=f"v186_down_{d['u_key']}"):
+                        if c2.button("❌ 질문과 무관함", key=f"v189_down_{d['u_key']}"):
                             db.save_relevance_feedback(user_q, d['id'], t_name, -1, q_vec)
                             st.warning("제외됨"); time.sleep(0.2); st.rerun()
                         st.markdown('</div>', unsafe_allow_html=True)
                         
                         st.markdown("---")
-                        with st.form(key=f"edit_v186_{d['u_key']}"):
+                        with st.form(key=f"edit_v189_{d['u_key']}"):
                             c1, c2, c3 = st.columns(3)
                             e_mfr = c1.text_input("제조사", d.get('manufacturer',''), key=f"m_{d['u_key']}")
                             e_mod = c2.text_input("모델명", d.get('model_name',''), key=f"o_{d['u_key']}")
                             e_itm = c3.text_input("항목", d.get('measurement_item',''), key=f"i_{d['u_key']}")
                             if st.form_submit_button("💾 정보 교정"):
                                 if db.update_record_labels(t_name, d['id'], e_mfr, e_mod, e_itm)[0]:
-                                    st.success("교정 완료"); time.sleep(0.5); st.rerun()
-        else: st.warning("🔍 검색 결과가 없습니다.")
+                                    st.success("정보 교정 완료! 데이터베이스에 반영되었습니다.")
+                                    # [V189 핵심] 업데이트 후 캐시를 날려버려야 새 데이터가 보임
+                                    st.cache_data.clear()
+                                    time.sleep(1.0) # 사용자가 메시지 볼 시간 확보
+                                    st.rerun()
+                                else:
+                                    st.error("업데이트 실패: 데이터베이스 오류")
+        else: st.warning("🔍 검색 결과가 없습니다.")ㄴ
