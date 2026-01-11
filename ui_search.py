@@ -1,105 +1,119 @@
-import streamlit as st
 import time
 import json
+from concurrent.futures import ThreadPoolExecutor
 from logic_ai import *
-from utils_search import perform_unified_search
 
-def show_search_ui(ai_model, db):
-    # CSS 스타일 정의
-    st.markdown("""<style>
-        .summary-box { background-color: #f8fafc; border: 2px solid #166534; padding: 20px; border-radius: 12px; color: #0f172a !important; margin-bottom: 25px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); line-height: 1.8; }
-        .summary-box b { color: #166534 !important; }
-        .meta-bar { background-color: #004a99 !important; padding: 12px; border-radius: 6px; font-size: 0.9rem; margin-bottom: 12px; color: #ffffff !important; display: flex; gap: 15px; flex-wrap: wrap; }
-        .report-box { background-color: #ffffff; border: 1px solid #004a99; padding: 25px; border-radius: 12px; color: #0f172a !important; box-shadow: inset 0 2px 4px 0 rgba(0, 0, 0, 0.05); line-height: 1.8; }
-        .feedback-bar { background-color: rgba(226, 232, 240, 0.3); padding: 12px; border-radius: 8px; margin-top: 15px; border: 1px solid #e2e8f0; }
-    </style>""", unsafe_allow_html=True)
+def normalize_model_name(text):
+    if not text: return ""
+    return str(text).lower().replace(" ", "").replace("-", "").replace("_", "")
 
-    _, main_col, _ = st.columns([1, 2, 1])
-    with main_col:
-        s_mode = st.radio("검색 모드", ["업무기술 🛠️", "생활정보 🍴"], horizontal=True, label_visibility="collapsed")
-        u_threshold = st.slider("정밀도 설정", 0.0, 1.0, 0.6, 0.05)
-        user_q = st.text_input("질문 입력", placeholder="예: 시마즈 TOC 고장 조치", label_visibility="collapsed")
-        search_btn = st.button("🔍 V186 초실시간 스트리밍 검색", use_container_width=True, type="primary")
+def filter_candidates_logic(candidates, intent, penalties, strict_mode=True):
+    """
+    [V190] 후보군 필터링 코어 로직
+    strict_mode=True: 방화벽 가동 (불일치 시 차단, 단 '공통'은 허용)
+    strict_mode=False: 방화벽 해제 (점수 감점만 적용)
+    """
+    filtered = []
+    
+    # 의도(Target) 정규화
+    t_mfr = normalize_model_name(intent.get('target_mfr') or '미지정')
+    t_model = normalize_model_name(intent.get('target_model') or '미지정')
+    t_item = normalize_model_name(intent.get('target_item') or '공통')
+    
+    # '공통'으로 간주할 키워드 목록
+    safe_keywords = ['공통', 'general', 'common', 'none', 'unknown', '미지정', '미분류', '기타']
 
-    if user_q and (search_btn or user_q):
-        if "last_query" not in st.session_state or st.session_state.last_query != user_q:
-            st.session_state.last_query = user_q
-            if "full_report" in st.session_state: del st.session_state.full_report
-            if "streamed_summary" in st.session_state: del st.session_state.streamed_summary
+    for d in candidates:
+        u_key = f"{'EXP' if 'solution' in d else 'MAN'}_{d.get('id')}"
+        if d.get('semantic_version') != 1: continue
 
-        with st.spinner("지식 탐색 중..."):
-            final, intent, q_vec = perform_unified_search(ai_model, db, user_q, u_threshold)
+        # 문서(Doc) 정규화
+        d_mfr_raw = str(d.get('manufacturer') or '')
+        d_model_raw = str(d.get('model_name') or '')
+        
+        d_mfr = normalize_model_name(d_mfr_raw)
+        d_model = normalize_model_name(d_model_raw)
+        d_item = normalize_model_name(d.get('measurement_item') or '')
+        
+        # [V190 핵심] 공통 지식 프리패스 여부 확인
+        is_common_doc = any(k in d_model_raw.lower() for k in safe_keywords) or (d_model == "")
+        
+        # --- [방화벽 로직] ---
+        if strict_mode:
+            # 1. 모델명 방화벽 (공통 문서는 통과)
+            if t_model != '미지정' and not is_common_doc:
+                # 타겟 모델이 문서에 없고, 문서 모델이 타겟에 없으면 차단
+                if d_model != '' and t_model not in d_model and d_model not in t_model:
+                    continue
+            
+            # 2. 제조사 방화벽
+            if t_mfr != '미지정':
+                is_common_mfr = any(k in d_mfr_raw.lower() for k in safe_keywords)
+                if d_mfr != '' and not is_common_mfr and t_mfr not in d_mfr:
+                    continue
+        
+        # --- [점수 계산] ---
+        score = (d.get('similarity') or 0)
+        
+        # 항목(Item) 불일치 감점
+        if t_item != '공통' and t_item != 'none' and t_item not in d_item:
+            score -= 3.0
+        
+        # 블랙리스트 감점
+        score -= (penalties.get(u_key, 0) * 0.1)
+        if d.get('is_verified'): score += 0.15
+        
+        # [V190] 공통 문서는 사용자가 특정 모델을 찾을 때 우선순위가 약간 밀리도록 조정 (특화 문서 우대)
+        if is_common_doc and t_model != '미지정':
+            score -= 0.5 
 
-        if final:
-            _, res_col, _ = st.columns([0.5, 3, 0.5])
-            with res_col:
-                st.subheader("⚡ AI 핵심 조치 가이드")
-                summary_placeholder = st.empty()
-                
-                if "streamed_summary" in st.session_state:
-                     summary_placeholder.markdown(f'<div class="summary-box">{st.session_state.streamed_summary.replace("\\n", "<br>")}</div>', unsafe_allow_html=True)
-                else:
-                    try:
-                        # logic_ai에서 스트리밍 생성기 호출
-                        stream_gen = generate_3line_summary_stream(ai_model, user_q, final)
-                        full_text = ""
-                        for chunk in stream_gen:
-                            full_text += chunk
-                            summary_placeholder.markdown(f'<div class="summary-box">{full_text.replace("\\n", "<br>")}</div>', unsafe_allow_html=True)
-                        st.session_state.streamed_summary = full_text
-                    except Exception as e:
-                        summary_placeholder.error(f"요약 생성 중 지연 발생: {str(e)}")
+        filtered.append({**d, 'final_score': score, 'u_key': u_key})
+        
+    return sorted(filtered, key=lambda x: x['final_score'], reverse=True)[:8]
 
-                st.subheader("🔍 AI 전문가 심층 분석")
-                if "full_report" not in st.session_state:
-                    if st.button("📋 기술 리포트 전문 생성", use_container_width=True):
-                        with st.spinner("전문가 리포트 작성 중..."):
-                            st.session_state.full_report = generate_relevant_summary(ai_model, user_q, final[:5])
-                            st.rerun()
-                else:
-                    st.markdown('<div class="report-box">', unsafe_allow_html=True)
-                    st.write(st.session_state.full_report)
-                    st.markdown('</div>', unsafe_allow_html=True)
+def perform_unified_search(ai_model, db, user_q, u_threshold):
+    """
+    [V190] 유연한 방화벽 오케스트레이터:
+    1차로 엄격하게 찾고, 결과가 없으면 2차로 유연하게 찾습니다.
+    """
+    # 1. 초기 진입 (병렬)
+    with ThreadPoolExecutor() as executor:
+        future_vec = executor.submit(get_embedding, user_q)
+        future_intent = executor.submit(analyze_search_intent, ai_model, user_q)
+        q_vec = future_vec.result()
+        intent = future_intent.result()
+    
+    if not intent or not isinstance(intent, dict):
+        intent = {"target_mfr": "미지정", "target_model": "미지정", "target_item": "공통"}
 
-                st.subheader("📋 참조 데이터 및 연관성 평가")
-                for d in final[:6]:
-                    v_mark = ' ✅ 인증' if d.get('is_verified') else ''
-                    score = d.get('rerank_score', 0)
-                    with st.expander(f"[{d.get('measurement_item','-')}] {d.get('model_name','공통')} (신뢰도: {score}%) {v_mark}"):
-                        st.markdown(f'''<div class="meta-bar">
-                            <span>🏢 제조사: <b>{d.get("manufacturer","미지정")}</b></span>
-                            <span>🧪 항목: <b>{d.get("measurement_item","공통")}</b></span>
-                            <span>🏷️ 모델: <b>{d.get("model_name","공통")}</b></span>
-                        </div>''', unsafe_allow_html=True)
-                        st.write(d.get('content') or d.get('solution'))
-                        
-                        # [V189] 명확한 source_table 사용
-                        t_name = d.get('source_table', 'manual_base') 
+    # 2. 배치 필터링 및 DB 조회 (병렬)
+    with ThreadPoolExecutor() as executor:
+        future_blacklist = executor.submit(db.get_semantic_context_blacklist, q_vec)
+        future_penalties = executor.submit(db.get_penalty_counts)
+        context_blacklist = future_blacklist.result()
+        penalties = future_penalties.result()
 
-                        st.markdown('<div class="feedback-bar">', unsafe_allow_html=True)
-                        c1, c2, _ = st.columns([0.25, 0.25, 0.5])
-                        
-                        if c1.button("✅ 질문과 연관있음", key=f"v189_up_{d['u_key']}"):
-                            db.save_relevance_feedback(user_q, d['id'], t_name, 1, q_vec)
-                            st.success("반영됨"); time.sleep(0.2); st.rerun()
-                        if c2.button("❌ 질문과 무관함", key=f"v189_down_{d['u_key']}"):
-                            db.save_relevance_feedback(user_q, d['id'], t_name, -1, q_vec)
-                            st.warning("제외됨"); time.sleep(0.2); st.rerun()
-                        st.markdown('</div>', unsafe_allow_html=True)
-                        
-                        st.markdown("---")
-                        with st.form(key=f"edit_v189_{d['u_key']}"):
-                            c1, c2, c3 = st.columns(3)
-                            e_mfr = c1.text_input("제조사", d.get('manufacturer',''), key=f"m_{d['u_key']}")
-                            e_mod = c2.text_input("모델명", d.get('model_name',''), key=f"o_{d['u_key']}")
-                            e_itm = c3.text_input("항목", d.get('measurement_item',''), key=f"i_{d['u_key']}")
-                            if st.form_submit_button("💾 정보 교정"):
-                                if db.update_record_labels(t_name, d['id'], e_mfr, e_mod, e_itm)[0]:
-                                    st.success("정보 교정 완료! 데이터베이스에 반영되었습니다.")
-                                    # [V189 핵심] 캐시 클리어 후 리런
-                                    st.cache_data.clear()
-                                    time.sleep(1.0)
-                                    st.rerun()
-                                else:
-                                    st.error("업데이트 실패: 데이터베이스 오류")
-        else: st.warning("🔍 검색 결과가 없습니다.")
+    with ThreadPoolExecutor() as executor:
+        future_m = executor.submit(db.match_filtered_db, "match_manual", q_vec, u_threshold, intent, user_q, context_blacklist)
+        future_k = executor.submit(db.match_filtered_db, "match_knowledge", q_vec, u_threshold, intent, user_q, context_blacklist)
+        m_res = future_m.result()
+        k_res = future_k.result()
+
+    # V189 출처 태깅
+    for r in m_res: r['source_table'] = 'manual_base'
+    for r in k_res: r['source_table'] = 'knowledge_base'
+    
+    all_docs = m_res + k_res
+
+    # 3. [V190] 2단계 필터링 전략 (Fallback Strategy)
+    # Step 1: 엄격 모드 (Strict) - 방화벽 가동
+    raw_candidates = filter_candidates_logic(all_docs, intent, penalties, strict_mode=True)
+    
+    # Step 2: 결과가 0건이면 유연 모드 (Relaxed) - 방화벽 해제, 점수 경쟁
+    if not raw_candidates:
+        raw_candidates = filter_candidates_logic(all_docs, intent, penalties, strict_mode=False)
+
+    # 4. 빠른 리랭킹 (V186 유지)
+    final_results = quick_rerank_ai(ai_model, user_q, raw_candidates, intent)
+    
+    return final_results, intent, q_vec
