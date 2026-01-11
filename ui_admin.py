@@ -2,12 +2,20 @@ import streamlit as st
 import io
 import time
 import PyPDF2
+# [V204] OCR 및 이미지 처리를 위한 라이브러리 추가
+try:
+    import pytesseract
+    from pdf2image import convert_from_bytes
+    OCR_AVAILABLE = True
+except ImportError:
+    OCR_AVAILABLE = False
+
 from logic_ai import extract_metadata_ai, get_embedding, clean_text_for_db, semantic_split_v143
 
 def show_admin_ui(ai_model, db):
     st.title("🔧 관리자 및 데이터 엔지니어링")
     
-    # [수정] 탭을 6개로 확장하여 업로드와 등록 기능을 UI에 포함시킴
+    # 탭 구성
     tabs = st.tabs(["🧹 현황", "📂 매뉴얼 학습", "📝 지식 등록", "🚨 분류실", "🏗️ 재건축", "🏷️ 승인"])
     
     # 1. 현황 대시보드
@@ -22,7 +30,7 @@ def show_admin_ui(ai_model, db):
         except:
             st.warning("DB 연결 상태를 확인해주세요.")
 
-    # 2. 매뉴얼 학습 (V203 안전장치 적용된 함수 호출)
+    # 2. 매뉴얼 학습 (V204 OCR 탑재)
     with tabs[1]:
         show_manual_upload_ui(ai_model, db)
 
@@ -30,7 +38,7 @@ def show_admin_ui(ai_model, db):
     with tabs[2]:
         show_knowledge_reg_ui(ai_model, db)
 
-    # 4. 수동 분류실 (미지정 데이터 정제)
+    # 4. 수동 분류실
     with tabs[3]:
         st.subheader("🚨 제조사 미지정 데이터 정제")
         target = st.radio("조회 대상", ["경험", "매뉴얼"], horizontal=True, key="admin_cls_target")
@@ -89,22 +97,52 @@ def show_admin_ui(ai_model, db):
                         st.rerun()
         else: st.info("승인 대기 중인 데이터가 없습니다.")
 
-# [V203 핵심 수정] 업로드 함수 (리스트/딕셔너리 타입 에러 방지 패치)
+# [V204] 업로드 함수 (OCR 엔진 통합)
 def show_manual_upload_ui(ai_model, db):
-    st.subheader("📂 PDF 매뉴얼 업로드 (V203 Robust Mode)")
-    up_f = st.file_uploader("PDF 파일 선택", type=["pdf"])
+    st.subheader("📂 PDF 매뉴얼 업로드 (V204 OCR Engine)")
     
+    # [V204] OCR 옵션 UI
+    col_u1, col_u2 = st.columns([3, 1])
+    up_f = col_u1.file_uploader("PDF 파일 선택", type=["pdf"])
+    use_ocr = col_u2.checkbox("OCR(이미지 스캔) 사용", help="스캔된 문서나 이미지 위주의 PDF일 경우 체크하세요. 속도가 느릴 수 있습니다.")
+    
+    if not OCR_AVAILABLE and use_ocr:
+        st.warning("⚠️ 서버에 Tesseract/Poppler가 설치되지 않아 OCR을 사용할 수 없습니다. (관리자 문의)")
+
     if up_f and st.button("🚀 학습 시작", use_container_width=True, type="primary"):
         with st.status("데이터 처리 중...", expanded=True) as status:
             try:
-                # 1. 텍스트 추출
-                status.write("📖 PDF 읽는 중...")
-                pdf_r = PyPDF2.PdfReader(io.BytesIO(up_f.read()))
-                all_t = "\n".join([p.extract_text() or "" for p in pdf_r.pages])
+                raw_text = ""
                 
+                # 1. 텍스트 추출 (OCR vs 일반)
+                if use_ocr and OCR_AVAILABLE:
+                    status.write("📷 OCR 엔진 가동 중 (이미지 → 텍스트 변환)...")
+                    # PDF를 이미지 리스트로 변환
+                    images = convert_from_bytes(up_f.read())
+                    total_pages = len(images)
+                    
+                    # 각 페이지별로 OCR 수행
+                    ocr_prog = st.progress(0)
+                    for idx, img in enumerate(images):
+                        # 한글+영어 혼용 인식
+                        page_text = pytesseract.image_to_string(img, lang='kor+eng')
+                        raw_text += page_text + "\n"
+                        ocr_prog.progress((idx + 1) / total_pages)
+                        status.write(f"  - {idx+1}/{total_pages} 페이지 스캔 완료")
+                    
+                    status.write("✅ OCR 변환 완료!")
+                    
+                else:
+                    status.write("📖 PDF 텍스트 레이어 읽는 중...")
+                    pdf_r = PyPDF2.PdfReader(io.BytesIO(up_f.read()))
+                    raw_text = "\n".join([p.extract_text() or "" for p in pdf_r.pages])
+
+                if len(raw_text.strip()) < 50:
+                    st.warning("⚠️ 추출된 텍스트가 너무 적습니다. 문서가 이미지라면 'OCR 사용'을 체크해주세요.")
+
                 # 2. 청킹
                 status.write("✂️ 문맥 단위 분할 중...")
-                chunks = semantic_split_v143(all_t)
+                chunks = semantic_split_v143(raw_text)
                 
                 # 3. AI 분석 및 저장
                 progress_bar = st.progress(0)
@@ -113,33 +151,23 @@ def show_manual_upload_ui(ai_model, db):
                 for i, chunk in enumerate(chunks):
                     status.write(f"🧠 AI 분석 중 ({i+1}/{total})...")
                     
-                    # 메타데이터 추출 시도
+                    # 메타데이터 추출
                     meta = extract_metadata_ai(ai_model, chunk)
                     
-                    # [V203 Fix] meta가 리스트([...])로 반환될 경우 처리 로직 추가
+                    # [V203 방어 로직 유지]
                     if isinstance(meta, list):
-                        if len(meta) > 0 and isinstance(meta[0], dict):
-                            meta = meta[0] # 리스트의 첫 번째 딕셔너리 추출
-                        else:
-                            meta = {} # 빈 리스트거나 이상한 값이면 초기화
-                    
-                    # [V203 Fix] meta가 딕셔너리가 아니거나 None일 경우 방어
-                    if not isinstance(meta, dict):
-                        meta = {}
-
-                    # 기본값 설정 (get 메서드 안전 사용)
-                    manufacturer = meta.get('manufacturer', '미지정')
-                    model_name = meta.get('model_name', '미지정')
-                    measurement_item = meta.get('measurement_item', '공통')
+                        if len(meta) > 0 and isinstance(meta[0], dict): meta = meta[0]
+                        else: meta = {}
+                    if not isinstance(meta, dict): meta = {}
 
                     # DB 저장
                     db.supabase.table("manual_base").insert({
                         "domain": "기술지식", 
                         "content": clean_text_for_db(chunk), 
                         "file_name": up_f.name, 
-                        "manufacturer": manufacturer, 
-                        "model_name": model_name, 
-                        "measurement_item": measurement_item, 
+                        "manufacturer": meta.get('manufacturer','미지정'), 
+                        "model_name": meta.get('model_name','미지정'), 
+                        "measurement_item": meta.get('measurement_item','공통'), 
                         "embedding": get_embedding(chunk), 
                         "semantic_version": 2
                     }).execute()
@@ -152,9 +180,8 @@ def show_manual_upload_ui(ai_model, db):
                 st.rerun()
                 
             except Exception as e:
-                st.error(f"오류 발생 (Chunk {i}): {str(e)}")
-                # 디버깅용: 실제 들어온 데이터 타입 확인
-                print(f"DEBUG Error: meta type={type(meta)}")
+                st.error(f"오류 발생: {str(e)}")
+                print(f"DEBUG Error: {e}")
 
 # [V164 유지] 지식 직접 등록 함수
 def show_knowledge_reg_ui(ai_model, db):
