@@ -41,6 +41,7 @@ def extract_json(text):
 # --------------------------------------------------------------------------------
 def extract_metadata_ai(ai_model, content):
     try:
+        # [수정] 태그 표준화를 위한 강력한 프롬프트 적용
         prompt = f"""
         [Role] You are a Database Engineer responsible for labeling technical documents.
         [Task] Analyze the provided text and extract metadata for search optimization.
@@ -51,10 +52,13 @@ def extract_metadata_ai(ai_model, content):
         [Rules]
         1. **manufacturer**: Identify the maker. If unknown/general, use "공통".
         2. **model_name**: Identify the specific model. If multiple parts are described, give a collective name (e.g., 'Water Sampling Panel', 'Pump System').
-        3. **measurement_item**: This is CRITICAL. List **ALL** equipment, parts, components, and technical keywords mentioned in the text.
-           - Use COMMAS to separate them.
-           - Example: "Breaker, PLC, Relay, Inverter, EOCR"
-           - Do NOT pick just one. List everything a user might search for.
+        3. **measurement_item**: **STRICT TAGGING RULES**
+           - Extract key technical terms as a comma-separated list.
+           - **Rule A (First Item)**: The FIRST item must be the **Main Category** (Single Noun).
+           - **Rule B (Format)**: "MainCategory, RelatedKeyword1, RelatedKeyword2..."
+           - **Rule C (No Adjectives)**: Remove words like 'method', 'procedure', 'broken', 'repair'. Use **NOUNS ONLY**.
+           - **Example (Bad)**: "How to fix pump, broken seal, leaking water"
+           - **Example (Good)**: "Pump, Seal, Water Leakage, Maintenance"
         
         [Output Format (JSON)]
         {{"manufacturer": "...", "model_name": "...", "measurement_item": "..."}}
