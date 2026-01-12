@@ -35,14 +35,30 @@ def extract_json(text):
         return json.loads(cleaned)
     except: return None
 
+# --------------------------------------------------------------------------------
+# [V206] 자동 키워드 태깅(Auto-Tagging) 엔진
+# 목표: 문서 내의 모든 중요 부품/장비를 콤마로 나열하여 검색 적중률 극대화
+# --------------------------------------------------------------------------------
 def extract_metadata_ai(ai_model, content):
     try:
-        prompt = f"""텍스트에서 정보를 정밀하게 추출해 JSON으로 응답해.
-        - manufacturer: 제조사
-        - model_name: 모델명
-        - measurement_item: 측정항목
-        텍스트: {content[:2000]}
-        응답형식(JSON): {{"manufacturer": "값", "model_name": "값", "measurement_item": "값"}}"""
+        prompt = f"""
+        [Role] You are a Database Engineer responsible for labeling technical documents.
+        [Task] Analyze the provided text and extract metadata for search optimization.
+        
+        [Text]
+        {content[:2000]}
+        
+        [Rules]
+        1. **manufacturer**: Identify the maker. If unknown/general, use "공통".
+        2. **model_name**: Identify the specific model. If multiple parts are described, give a collective name (e.g., 'Water Sampling Panel', 'Pump System').
+        3. **measurement_item**: This is CRITICAL. List **ALL** equipment, parts, components, and technical keywords mentioned in the text.
+           - Use COMMAS to separate them.
+           - Example: "Breaker, PLC, Relay, Inverter, EOCR"
+           - Do NOT pick just one. List everything a user might search for.
+        
+        [Output Format (JSON)]
+        {{"manufacturer": "...", "model_name": "...", "measurement_item": "..."}}
+        """
         res = ai_model.generate_content(prompt)
         return extract_json(res.text)
     except: return None
@@ -157,3 +173,5 @@ def generate_relevant_summary(ai_model, query, data):
     """
     res = ai_model.generate_content(prompt)
     return res.text
+
+# [End of File]
