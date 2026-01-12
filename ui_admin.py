@@ -63,6 +63,7 @@ def show_admin_ui(ai_model, db):
                             if b1.form_submit_button("✅ 저장"):
                                 if not n_mfr.strip(): st.error("제조사 필수")
                                 else:
+                                    # [Update] db_services의 update 메서드 내부에서 정제 로직이 자동 수행됨
                                     res = db.update_file_labels(t_name, r['file_name'], n_mfr, n_mod, n_itm) if batch_apply else db.update_record_labels(t_name, r['id'], n_mfr, n_mod, n_itm)
                                     if res[0]: st.success(f"{res[1]}!"); time.sleep(0.5); st.rerun()
                             if b2.form_submit_button("🗑️ 폐기"):
@@ -94,6 +95,7 @@ def show_admin_ui(ai_model, db):
                     mod = st.text_input("모델명", r.get('model_name',''))
                     itm = st.text_input("항목", r.get('measurement_item',''))
                     if st.form_submit_button("✅ 승인"): 
+                        # [Update] db_services 내부 로직을 통해 저장 시 자동 태그 정제
                         db.update_record_labels("manual_base", r['id'], mfr, mod, itm)
                         st.rerun()
         else: st.info("승인 대기 중인 데이터가 없습니다.")
@@ -164,13 +166,19 @@ def show_manual_upload_ui(ai_model, db):
                         meta = meta[0] if (len(meta) > 0 and isinstance(meta[0], dict)) else {}
                     if not isinstance(meta, dict): meta = {}
 
+                    # [V207 핵심 수정] DBManager의 정제 로직(세탁기)을 통과시킴
+                    # 직접 insert 하기 전에 db._normalize_tags 등을 사용하여 포맷 통일
+                    clean_mfr = db._clean_text(meta.get('manufacturer'))
+                    clean_model = db._clean_text(meta.get('model_name'))
+                    clean_item = db._normalize_tags(meta.get('measurement_item'))
+
                     db.supabase.table("manual_base").insert({
                         "domain": "기술지식", 
                         "content": clean_text_for_db(chunk), 
                         "file_name": up_f.name, 
-                        "manufacturer": meta.get('manufacturer','미지정'), 
-                        "model_name": meta.get('model_name','미지정'), 
-                        "measurement_item": meta.get('measurement_item','공통'), 
+                        "manufacturer": clean_mfr, 
+                        "model_name": clean_model, 
+                        "measurement_item": clean_item, 
                         "embedding": get_embedding(chunk), 
                         "semantic_version": 2
                     }).execute()
@@ -199,6 +207,7 @@ def show_knowledge_reg_ui(ai_model, db):
         
         if st.form_submit_button("💾 지식 저장"):
             if f_iss and f_sol and mfr:
+                # [Update] db.promote_to_knowledge 내부에서 _normalize_tags가 호출되어 자동 정제됨
                 success, msg = db.promote_to_knowledge(f_iss, f_sol, mfr, mod, itm)
                 if success: st.success("저장 완료!"); time.sleep(0.5); st.rerun()
                 else: st.error(f"저장 실패: {msg}")
