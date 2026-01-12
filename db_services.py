@@ -4,6 +4,39 @@ class DBManager:
     def __init__(self, supabase_client):
         self.supabase = supabase_client
 
+    # =========================================================
+    # [NEW] 데이터 정규화(Cleaning) 헬퍼 함수
+    # 모든 데이터는 저장되기 전 이 함수들을 통과하여 깨끗해집니다.
+    # =========================================================
+    def _normalize_tags(self, raw_tags):
+        """
+        입력된 태그 문자열을 정제하여 표준 포맷으로 변환합니다.
+        Input: " 수중펌프 ,  모터, 수중펌프  "
+        Output: "수중펌프, 모터"
+        """
+        if not raw_tags or str(raw_tags).lower() in ['none', 'nan', 'null']:
+            return "공통"
+
+        # 1. 콤마로 분리하고 앞뒤 공백 제거
+        tags = [t.strip() for t in str(raw_tags).split(',')]
+
+        # 2. 빈 태그 제거 및 중복 제거 (순서 유지)
+        seen = set()
+        clean_tags = []
+        for tag in tags:
+            if tag and tag not in seen:
+                clean_tags.append(tag)
+                seen.add(tag)
+
+        return ", ".join(clean_tags) if clean_tags else "공통"
+
+    def _clean_text(self, text):
+        """일반 텍스트(제조사, 모델명) 정제"""
+        if not text or str(text).lower() in ['none', 'nan', 'null', '미지정']:
+            return "미지정"
+        return str(text).strip()
+    # =========================================================
+
     def keep_alive(self):
         try: self.supabase.table("knowledge_base").select("id").limit(1).execute()
         except: pass
@@ -43,7 +76,18 @@ class DBManager:
 
     def update_record_labels(self, table_name, row_id, mfr, model, item):
         try:
-            payload = {"manufacturer": str(mfr).strip(), "model_name": str(model).strip(), "measurement_item": str(item).strip(), "semantic_version": 1, "review_required": False}
+            # [수정] 입력 데이터 정제 로직 적용
+            clean_mfr = self._clean_text(mfr)
+            clean_model = self._clean_text(model)
+            clean_item = self._normalize_tags(item)
+
+            payload = {
+                "manufacturer": clean_mfr, 
+                "model_name": clean_model, 
+                "measurement_item": clean_item, 
+                "semantic_version": 1, 
+                "review_required": False
+            }
             res = self.supabase.table(table_name).update(payload).eq("id", row_id).execute()
             return (True, "성공") if res.data else (False, "실패")
         except Exception as e: return (False, str(e))
@@ -66,7 +110,6 @@ class DBManager:
                 search_candidates.add(target_item.replace(" ", "")) # 붙여쓰기 (예: 채수펌프)
             
             # [안전망] 타겟이 '공통'이면 사용자 질문에서 직접 명사 추정 (2글자 이상)
-            # (예: "채수펌프 교체..." -> "채수펌프"가 target_item에 안 잡혔을 경우 대비)
             if not search_candidates:
                 words = query_text.split()
                 for w in words:
@@ -78,7 +121,6 @@ class DBManager:
                 query_builder = self.supabase.table(t_name).select("*")
                 
                 # OR 조건 생성 (모든 후보 키워드에 대해 ILIKE 적용)
-                # measurement_item, model_name, content(issue/solution) 전부 뒤짐
                 or_conditions = []
                 for kw in search_candidates:
                     if not kw: continue
@@ -92,7 +134,6 @@ class DBManager:
                         or_conditions.append(f"solution.ilike.%{kw}%")
                 
                 if or_conditions:
-                    # 콤마로 연결하여 하나의 거대한 OR 필터 완성
                     final_filter = ",".join(or_conditions)
                     res = query_builder.or_(final_filter).limit(10).execute()
                     
@@ -130,21 +171,43 @@ class DBManager:
         except Exception as e:
             return []
 
-    # (이하 기존 함수 보존)
     def get_community_posts(self):
         try: return self.supabase.table("community_posts").select("*").order("created_at", desc=True).execute().data
         except: return []
 
     def add_community_post(self, author, title, content, mfr, model, item):
         try:
-            payload = {"author": author, "title": title, "content": content, "manufacturer": mfr, "model_name": model, "measurement_item": item}
+            # [수정] 입력 데이터 정제
+            clean_mfr = self._clean_text(mfr)
+            clean_model = self._clean_text(model)
+            clean_item = self._normalize_tags(item)
+
+            payload = {
+                "author": author, 
+                "title": title, 
+                "content": content, 
+                "manufacturer": clean_mfr, 
+                "model_name": clean_model, 
+                "measurement_item": clean_item
+            }
             res = self.supabase.table("community_posts").insert(payload).execute()
             return True if res.data else False
         except: return False
 
     def update_community_post(self, post_id, title, content, mfr, model, item):
         try:
-            payload = {"title": title, "content": content, "manufacturer": mfr, "model_name": model, "measurement_item": item}
+            # [수정] 입력 데이터 정제
+            clean_mfr = self._clean_text(mfr)
+            clean_model = self._clean_text(model)
+            clean_item = self._normalize_tags(item)
+
+            payload = {
+                "title": title, 
+                "content": content, 
+                "manufacturer": clean_mfr, 
+                "model_name": clean_model, 
+                "measurement_item": clean_item
+            }
             res = self.supabase.table("community_posts").update(payload).eq("id", post_id).execute()
             return True if res.data else False
         except: return False
@@ -168,14 +231,41 @@ class DBManager:
     def promote_to_knowledge(self, issue, solution, mfr, model, item):
         try:
             from logic_ai import get_embedding
-            payload = {"domain": "기술지식", "issue": issue, "solution": solution, "embedding": get_embedding(issue), "semantic_version": 1, "is_verified": True, "manufacturer": str(mfr).strip() or "미지정", "model_name": str(model).strip() or "미지정", "measurement_item": str(item).strip() or "공통"}
+            
+            # [수정] 입력 데이터 정제 (AI 지식 등록 시에도 적용)
+            clean_mfr = self._clean_text(mfr)
+            clean_model = self._clean_text(model)
+            clean_item = self._normalize_tags(item)
+
+            payload = {
+                "domain": "기술지식", 
+                "issue": issue, 
+                "solution": solution, 
+                "embedding": get_embedding(issue), 
+                "semantic_version": 1, 
+                "is_verified": True, 
+                "manufacturer": clean_mfr, 
+                "model_name": clean_model, 
+                "measurement_item": clean_item
+            }
             res = self.supabase.table("knowledge_base").insert(payload).execute()
             return (True, "성공") if res.data else (False, "실패")
         except Exception as e: return (False, str(e))
 
     def update_file_labels(self, table_name, file_name, mfr, model, item):
         try:
-            payload = {"manufacturer": str(mfr).strip(), "model_name": str(model).strip(), "measurement_item": str(item).strip(), "semantic_version": 1, "review_required": False}
+            # [수정] 일괄 업데이트 시에도 정제 적용
+            clean_mfr = self._clean_text(mfr)
+            clean_model = self._clean_text(model)
+            clean_item = self._normalize_tags(item)
+
+            payload = {
+                "manufacturer": clean_mfr, 
+                "model_name": clean_model, 
+                "measurement_item": clean_item, 
+                "semantic_version": 1, 
+                "review_required": False
+            }
             res = self.supabase.table(table_name).update(payload).eq("file_name", file_name).or_(f'manufacturer.eq.미지정,manufacturer.is.null,manufacturer.eq.""').execute()
             return True, f"{len(res.data)}건 일괄 분류 완료"
         except Exception as e: return False, str(e)
