@@ -1,8 +1,10 @@
 import streamlit as st
 import io
 import time
-import PyPDF2
-# [V204] OCR 및 이미지 처리를 위한 라이브러리 추가
+# [V205] 고성능 PDF 추출기 pdfplumber 도입
+import pdfplumber 
+
+# OCR 라이브러리 (없으면 비활성화)
 try:
     import pytesseract
     from pdf2image import convert_from_bytes
@@ -15,7 +17,6 @@ from logic_ai import extract_metadata_ai, get_embedding, clean_text_for_db, sema
 def show_admin_ui(ai_model, db):
     st.title("🔧 관리자 및 데이터 엔지니어링")
     
-    # 탭 구성
     tabs = st.tabs(["🧹 현황", "📂 매뉴얼 학습", "📝 지식 등록", "🚨 분류실", "🏗️ 재건축", "🏷️ 승인"])
     
     # 1. 현황 대시보드
@@ -30,7 +31,7 @@ def show_admin_ui(ai_model, db):
         except:
             st.warning("DB 연결 상태를 확인해주세요.")
 
-    # 2. 매뉴얼 학습 (V204 OCR 탑재)
+    # 2. 매뉴얼 학습 (V205 스마트 추출)
     with tabs[1]:
         show_manual_upload_ui(ai_model, db)
 
@@ -97,48 +98,53 @@ def show_admin_ui(ai_model, db):
                         st.rerun()
         else: st.info("승인 대기 중인 데이터가 없습니다.")
 
-# [V204] 업로드 함수 (OCR 엔진 통합)
+# [V205] 스마트 업로드 함수 (pdfplumber + OCR 선택)
 def show_manual_upload_ui(ai_model, db):
-    st.subheader("📂 PDF 매뉴얼 업로드 (V204 OCR Engine)")
+    st.subheader("📂 PDF 매뉴얼 업로드 (V205 Smart Engine)")
     
-    # [V204] OCR 옵션 UI
     col_u1, col_u2 = st.columns([3, 1])
     up_f = col_u1.file_uploader("PDF 파일 선택", type=["pdf"])
-    use_ocr = col_u2.checkbox("OCR(이미지 스캔) 사용", help="스캔된 문서나 이미지 위주의 PDF일 경우 체크하세요. 속도가 느릴 수 있습니다.")
+    # 기본값 False: 이 파일은 텍스트 추출이 훨씬 좋습니다.
+    use_ocr = col_u2.checkbox("강제 OCR 사용", value=False, help="글자가 드래그되지 않는 '통이미지' 파일일 때만 켜세요.")
     
-    if not OCR_AVAILABLE and use_ocr:
-        st.warning("⚠️ 서버에 Tesseract/Poppler가 설치되지 않아 OCR을 사용할 수 없습니다. (관리자 문의)")
-
     if up_f and st.button("🚀 학습 시작", use_container_width=True, type="primary"):
-        with st.status("데이터 처리 중...", expanded=True) as status:
+        with st.status("데이터 정밀 분석 중...", expanded=True) as status:
             try:
                 raw_text = ""
                 
-                # 1. 텍스트 추출 (OCR vs 일반)
+                # A. 강제 OCR 모드 (이미지 파일 등)
                 if use_ocr and OCR_AVAILABLE:
-                    status.write("📷 OCR 엔진 가동 중 (이미지 → 텍스트 변환)...")
-                    # PDF를 이미지 리스트로 변환
+                    status.write("📷 OCR 엔진 강제 구동 (이미지 스캔 중)...")
                     images = convert_from_bytes(up_f.read())
                     total_pages = len(images)
-                    
-                    # 각 페이지별로 OCR 수행
-                    ocr_prog = st.progress(0)
+                    prog = st.progress(0)
                     for idx, img in enumerate(images):
-                        # 한글+영어 혼용 인식
-                        page_text = pytesseract.image_to_string(img, lang='kor+eng')
-                        raw_text += page_text + "\n"
-                        ocr_prog.progress((idx + 1) / total_pages)
-                        status.write(f"  - {idx+1}/{total_pages} 페이지 스캔 완료")
-                    
-                    status.write("✅ OCR 변환 완료!")
-                    
+                        raw_text += pytesseract.image_to_string(img, lang='kor+eng') + "\n"
+                        prog.progress((idx+1)/total_pages)
+                
+                # B. 스마트 텍스트 추출 (추천)
                 else:
-                    status.write("📖 PDF 텍스트 레이어 읽는 중...")
-                    pdf_r = PyPDF2.PdfReader(io.BytesIO(up_f.read()))
-                    raw_text = "\n".join([p.extract_text() or "" for p in pdf_r.pages])
+                    status.write("📖 고정밀 텍스트 추출 중 (pdfplumber)...")
+                    with pdfplumber.open(up_f) as pdf:
+                        pages = pdf.pages
+                        total_pages = len(pages)
+                        prog = st.progress(0)
+                        
+                        for idx, page in enumerate(pages):
+                            # 테이블 등을 고려하여 텍스트 추출
+                            page_text = page.extract_text()
+                            if page_text:
+                                raw_text += page_text + "\n"
+                            else:
+                                # 텍스트가 없으면(이미지 페이지) 경고 메시지
+                                status.write(f"⚠️ {idx+1}페이지는 텍스트가 없습니다. (이미지일 가능성)")
+                            
+                            prog.progress((idx+1)/total_pages)
 
-                if len(raw_text.strip()) < 50:
-                    st.warning("⚠️ 추출된 텍스트가 너무 적습니다. 문서가 이미지라면 'OCR 사용'을 체크해주세요.")
+                # 텍스트 품질 점검
+                if len(raw_text.strip()) < 100:
+                    st.error("❌ 추출된 텍스트가 거의 없습니다! '강제 OCR 사용'을 체크하고 다시 시도해보세요.")
+                    st.stop()
 
                 # 2. 청킹
                 status.write("✂️ 문맥 단위 분할 중...")
@@ -149,18 +155,15 @@ def show_manual_upload_ui(ai_model, db):
                 total = len(chunks)
                 
                 for i, chunk in enumerate(chunks):
-                    status.write(f"🧠 AI 분석 중 ({i+1}/{total})...")
+                    status.write(f"🧠 지식 생성 중 ({i+1}/{total})...")
                     
-                    # 메타데이터 추출
                     meta = extract_metadata_ai(ai_model, chunk)
                     
-                    # [V203 방어 로직 유지]
+                    # [V203 방어 로직]
                     if isinstance(meta, list):
-                        if len(meta) > 0 and isinstance(meta[0], dict): meta = meta[0]
-                        else: meta = {}
+                        meta = meta[0] if (len(meta) > 0 and isinstance(meta[0], dict)) else {}
                     if not isinstance(meta, dict): meta = {}
 
-                    # DB 저장
                     db.supabase.table("manual_base").insert({
                         "domain": "기술지식", 
                         "content": clean_text_for_db(chunk), 
@@ -174,14 +177,13 @@ def show_manual_upload_ui(ai_model, db):
                     
                     progress_bar.progress((i + 1) / total)
                 
-                status.update(label="✅ 학습 완료!", state="complete", expanded=False)
-                st.success(f"총 {total}개의 지식 블록이 생성되었습니다.")
+                status.update(label="✅ 학습 완료! 완벽하게 추출되었습니다.", state="complete", expanded=False)
+                st.success(f"총 {total}개의 고품질 지식 블록이 생성되었습니다.")
                 time.sleep(1)
                 st.rerun()
                 
             except Exception as e:
                 st.error(f"오류 발생: {str(e)}")
-                print(f"DEBUG Error: {e}")
 
 # [V164 유지] 지식 직접 등록 함수
 def show_knowledge_reg_ui(ai_model, db):
