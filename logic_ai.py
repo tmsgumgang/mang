@@ -39,11 +39,10 @@ def extract_json(text):
 
 # --------------------------------------------------------------------------------
 # [V206] 자동 키워드 태깅(Auto-Tagging) 엔진
-# 목표: 문서 내의 모든 중요 부품/장비를 콤마로 나열하여 검색 적중률 극대화
 # --------------------------------------------------------------------------------
 def extract_metadata_ai(ai_model, content):
     try:
-        # [수정] 프롬프트를 외부 파일에서 로드
+        # [수정] 프롬프트 분리 적용
         prompt = PROMPTS["extract_metadata"].format(content=content[:2000])
         res = ai_model.generate_content(prompt)
         return extract_json(res.text)
@@ -51,9 +50,14 @@ def extract_metadata_ai(ai_model, content):
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def analyze_search_intent(_ai_model, query):
-    default_intent = {"target_mfr": "미지정", "target_model": "미지정", "target_item": "공통"}
+    default_intent = {
+        "target_mfr": "미지정", 
+        "target_model": "미지정", 
+        "target_item": "공통",
+        "target_action": "일반" # [New] 프롬프트에 맞춰 필드 추가
+    }
     try:
-        # [수정] 프롬프트를 외부 파일에서 로드
+        # [수정] 프롬프트 분리 적용
         prompt = PROMPTS["search_intent"].format(query=query)
         res = _ai_model.generate_content(prompt)
         intent_res = extract_json(res.text)
@@ -77,7 +81,7 @@ def quick_rerank_ai(_ai_model, query, results, intent):
             "content": (r.get('content') or r.get('solution'))[:200]
         })
 
-    # [수정] 프롬프트를 외부 파일에서 로드 (변수 매핑)
+    # [수정] 프롬프트 분리 적용
     prompt = PROMPTS["rerank_score"].format(
         query=query, 
         mfr=safe_intent.get('target_mfr'), 
@@ -109,7 +113,7 @@ def generate_3line_summary_stream(ai_model, query, results):
     
     full_context = [top_content] + other_context
     
-    # [수정] 프롬프트를 외부 파일에서 로드
+    # [수정] 프롬프트 분리 적용
     prompt = PROMPTS["summary_fact_lock"].format(
         query=query, 
         context=json.dumps(full_context, ensure_ascii=False)
@@ -126,7 +130,7 @@ def unified_rerank_and_summary_ai(_ai_model, query, results, intent):
     safe_intent = intent if (intent and isinstance(intent, dict)) else {"target_mfr": "미지정", "target_item": "공통"}
     candidates = [{"id":r['id'],"content":(r.get('content')or r.get('solution'))[:300]} for r in results[:5]]
     
-    # [수정] 프롬프트를 외부 파일에서 로드
+    # [수정] 프롬프트 분리 적용
     prompt = PROMPTS["unified_rerank"].format(
         query=query, 
         safe_intent=safe_intent, 
@@ -143,7 +147,7 @@ def unified_rerank_and_summary_ai(_ai_model, query, results, intent):
 
 # [V200 핵심] 팩트 고정(Fact-Lock) 심층 리포트
 def generate_relevant_summary(ai_model, query, data):
-    # [수정] 프롬프트를 외부 파일에서 로드
+    # [수정] 프롬프트 분리 적용
     prompt = PROMPTS["deep_report"].format(
         query=query, 
         data=data
