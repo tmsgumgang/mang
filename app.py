@@ -7,10 +7,16 @@ import ui_search
 import ui_admin
 import ui_community
 
-# 환경 변수 로드
-SUPABASE_URL = st.secrets["SUPABASE_URL"]
-SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
-GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
+# --------------------------------------------------------------------------
+# [설정] 환경 변수 로드
+# --------------------------------------------------------------------------
+try:
+    SUPABASE_URL = st.secrets["SUPABASE_URL"]
+    SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
+    GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
+except FileNotFoundError:
+    st.error("secrets.toml 파일을 찾을 수 없습니다.")
+    st.stop()
 
 @st.cache_resource
 def init_system():
@@ -21,14 +27,18 @@ def init_system():
 
 ai_model, db = init_system()
 
-# UI 공통 설정
+# --------------------------------------------------------------------------
+# [UI] 공통 레이아웃 설정
+# --------------------------------------------------------------------------
 st.set_page_config(page_title="금강수계 AI V161", layout="wide", initial_sidebar_state="collapsed")
 st.markdown("""<style>
     .fixed-header { position: fixed; top: 0; left: 0; width: 100%; background-color: #004a99; color: white; padding: 10px 0; z-index: 999; text-align: center; font-weight: bold; }
     .main .block-container { padding-top: 5.5rem !important; }
 </style><div class="fixed-header">🌊 금강수계 수질자동측정망 AI V161 (지식 커뮤니티 복구)</div>""", unsafe_allow_html=True)
 
-# 메인 메뉴 라우팅
+# --------------------------------------------------------------------------
+# [메뉴] 라우팅 처리
+# --------------------------------------------------------------------------
 _, menu_col, _ = st.columns([1, 2, 1])
 with menu_col:
     mode = st.selectbox("작업 메뉴 선택", 
