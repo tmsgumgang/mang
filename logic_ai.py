@@ -2,6 +2,8 @@ import re
 import json
 import google.generativeai as genai
 import streamlit as st
+# [New] 프롬프트 파일 불러오기
+from prompts import PROMPTS 
 
 @st.cache_data(show_spinner=False)
 def get_embedding(text):
@@ -41,28 +43,8 @@ def extract_json(text):
 # --------------------------------------------------------------------------------
 def extract_metadata_ai(ai_model, content):
     try:
-        # [수정] 태그 표준화를 위한 강력한 프롬프트 적용
-        prompt = f"""
-        [Role] You are a Database Engineer responsible for labeling technical documents.
-        [Task] Analyze the provided text and extract metadata for search optimization.
-        
-        [Text]
-        {content[:2000]}
-        
-        [Rules]
-        1. **manufacturer**: Identify the maker. If unknown/general, use "공통".
-        2. **model_name**: Identify the specific model. If multiple parts are described, give a collective name (e.g., 'Water Sampling Panel', 'Pump System').
-        3. **measurement_item**: **STRICT TAGGING RULES**
-           - Extract key technical terms as a comma-separated list.
-           - **Rule A (First Item)**: The FIRST item must be the **Main Category** (Single Noun).
-           - **Rule B (Format)**: "MainCategory, RelatedKeyword1, RelatedKeyword2..."
-           - **Rule C (No Adjectives)**: Remove words like 'method', 'procedure', 'broken', 'repair'. Use **NOUNS ONLY**.
-           - **Example (Bad)**: "How to fix pump, broken seal, leaking water"
-           - **Example (Good)**: "Pump, Seal, Water Leakage, Maintenance"
-        
-        [Output Format (JSON)]
-        {{"manufacturer": "...", "model_name": "...", "measurement_item": "..."}}
-        """
+        # [수정] 프롬프트를 외부 파일에서 로드
+        prompt = PROMPTS["extract_metadata"].format(content=content[:2000])
         res = ai_model.generate_content(prompt)
         return extract_json(res.text)
     except: return None
@@ -71,9 +53,8 @@ def extract_metadata_ai(ai_model, content):
 def analyze_search_intent(_ai_model, query):
     default_intent = {"target_mfr": "미지정", "target_model": "미지정", "target_item": "공통"}
     try:
-        prompt = f"""사용자의 질문에서 '타겟 모델명', '측정 항목', '제조사'를 완벽하게 추출해.
-        질문: {query}
-        응답형식(JSON): {{"target_mfr": "제조사", "target_model": "모델명", "target_item": "측정항목"}}"""
+        # [수정] 프롬프트를 외부 파일에서 로드
+        prompt = PROMPTS["search_intent"].format(query=query)
         res = _ai_model.generate_content(prompt)
         intent_res = extract_json(res.text)
         if intent_res and isinstance(intent_res, dict):
@@ -96,11 +77,13 @@ def quick_rerank_ai(_ai_model, query, results, intent):
             "content": (r.get('content') or r.get('solution'))[:200]
         })
 
-    prompt = f"""사용자 질문: "{query}"
-    조건: 제조사 {safe_intent.get('target_mfr')}, 항목 {safe_intent.get('target_item')}
-    각 후보의 적합성을 0-100점으로 평가해.
-    후보: {json.dumps(candidates, ensure_ascii=False)}
-    응답형식(JSON): [{{"id": 1, "score": 95}}, ...]"""
+    # [수정] 프롬프트를 외부 파일에서 로드 (변수 매핑)
+    prompt = PROMPTS["rerank_score"].format(
+        query=query, 
+        mfr=safe_intent.get('target_mfr'), 
+        item=safe_intent.get('target_item'), 
+        candidates=json.dumps(candidates, ensure_ascii=False)
+    )
     
     try:
         res = _ai_model.generate_content(prompt)
@@ -126,22 +109,11 @@ def generate_3line_summary_stream(ai_model, query, results):
     
     full_context = [top_content] + other_context
     
-    prompt = f"""[Role] You are a strict technical manual assistant.
-    [Question] {query}
-    [Data] {json.dumps(full_context, ensure_ascii=False)}
-    
-    [Mandatory Rules]
-    1. **NO Hallucination:** Use ONLY the provided [Data]. Do NOT add general knowledge or safety rules (e.g., helmet, gloves) unless explicitly stated in [Data].
-    2. **Specific Nouns:** When asked for 'tools' or 'parts', list the EXACT specific names found in the data (e.g., 'Monkey Spanner', 'Cable Tie', 'PL-50-...').
-    3. **Silence on Unknowns:** If the data does not contain the answer, say "문서에 관련 정보가 명시되어 있지 않습니다." Do not make things up.
-    4. **Language:** Korean.
-    
-    [Output Format]
-    1. (핵심 내용) - (설명)
-    2. (핵심 내용) - (설명)
-    3. (핵심 내용) - (설명)
-    
-    Start output immediately."""
+    # [수정] 프롬프트를 외부 파일에서 로드
+    prompt = PROMPTS["summary_fact_lock"].format(
+        query=query, 
+        context=json.dumps(full_context, ensure_ascii=False)
+    )
     
     response = ai_model.generate_content(prompt, stream=True)
     for chunk in response:
@@ -153,7 +125,14 @@ def unified_rerank_and_summary_ai(_ai_model, query, results, intent):
     if not results: return [], "관련 지식을 찾지 못했습니다."
     safe_intent = intent if (intent and isinstance(intent, dict)) else {"target_mfr": "미지정", "target_item": "공통"}
     candidates = [{"id":r['id'],"content":(r.get('content')or r.get('solution'))[:300]} for r in results[:5]]
-    prompt = f"질문:{query} 조건:{safe_intent} 후보:{candidates} 평가 및 3줄요약해. JSON응답."
+    
+    # [수정] 프롬프트를 외부 파일에서 로드
+    prompt = PROMPTS["unified_rerank"].format(
+        query=query, 
+        safe_intent=safe_intent, 
+        candidates=candidates
+    )
+    
     try:
         res = _ai_model.generate_content(prompt)
         parsed = extract_json(res.text)
@@ -164,17 +143,11 @@ def unified_rerank_and_summary_ai(_ai_model, query, results, intent):
 
 # [V200 핵심] 팩트 고정(Fact-Lock) 심층 리포트
 def generate_relevant_summary(ai_model, query, data):
-    prompt = f"""
-    [역할] 너는 팩트 기반의 기술 리포트 작성가야. 절대 상상하지 마.
-    [질문] {query}
-    [데이터] {data}
-    
-    [지시사항 - 절대 준수]
-    1. **오직 [데이터]에 있는 내용만으로** 리포트를 작성해.
-    2. 데이터에 없는 '일반적인 상식', '통상적인 절차', '안전 수칙'은 절대 덧붙이지 마.
-    3. 사용자가 준비물을 물으면 데이터에 있는 **구체적인 품명**만 나열해.
-    4. 문장 단위로 줄바꿈하여 가독성 있게 작성해.
-    """
+    # [수정] 프롬프트를 외부 파일에서 로드
+    prompt = PROMPTS["deep_report"].format(
+        query=query, 
+        data=data
+    )
     res = ai_model.generate_content(prompt)
     return res.text
 
