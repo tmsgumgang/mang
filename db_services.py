@@ -47,13 +47,15 @@ class DBManager:
             return Counter([r['source_id'] for r in res.data])
         except: return {}
 
-    def save_relevance_feedback(self, query, doc_id, t_name, score, query_vec=None):
+    # [수정됨] 사유(reason) 파라미터 추가 및 저장 로직 업데이트
+    def save_relevance_feedback(self, query, doc_id, t_name, score, query_vec=None, reason=None):
         try:
             payload = {
                 "query_text": query.strip(),
                 "doc_id": doc_id,
                 "table_name": t_name,
-                "relevance_score": score
+                "relevance_score": score,
+                "reason": reason  # [New] 사유 저장
             }
             if query_vec:
                 payload["query_embedding"] = query_vec
