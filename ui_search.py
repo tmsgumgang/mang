@@ -13,8 +13,10 @@ def show_search_ui(ai_model, db):
         .summary-box b { color: #166534 !important; }
         .meta-bar { background-color: #004a99 !important; padding: 12px; border-radius: 6px; font-size: 0.9rem; margin-bottom: 12px; color: #ffffff !important; display: flex; gap: 15px; flex-wrap: wrap; }
         .report-box { background-color: #ffffff; border: 1px solid #004a99; padding: 25px; border-radius: 12px; color: #0f172a !important; box-shadow: inset 0 2px 4px 0 rgba(0, 0, 0, 0.05); line-height: 1.8; }
-        .feedback-bar { background-color: rgba(226, 232, 240, 0.5); padding: 10px; border-radius: 8px; margin-top: 5px; margin-bottom: 20px; border: 1px solid #cbd5e1; text-align: center; }
+        .feedback-bar { background-color: rgba(226, 232, 240, 0.5); padding: 15px; border-radius: 8px; margin-top: 5px; margin-bottom: 20px; border: 1px solid #cbd5e1; }
         .doc-feedback-bar { background-color: rgba(226, 232, 240, 0.3); padding: 8px; border-radius: 6px; margin-top: 10px; border: 1px solid #e2e8f0; }
+        /* 드롭다운/입력창 스타일 조정 */
+        .stSelectbox, .stTextInput { margin-bottom: 10px !important; }
     </style>""", unsafe_allow_html=True)
 
     # ----------------------------------------------------------------------
@@ -61,7 +63,7 @@ def show_search_ui(ai_model, db):
                         summary_placeholder.error(f"요약 중 오류: {str(e)}")
 
                 # --------------------------------------------------------
-                # [New] 통합 피드백 버튼 (질문 <-> Top1 문서 관계 평가)
+                # [New] 통합 피드백 버튼 (사유 선택 기능 추가)
                 # --------------------------------------------------------
                 st.markdown('<div class="feedback-bar">', unsafe_allow_html=True)
                 st.write("💡 이 답변이 문제 해결에 도움이 되셨나요?")
@@ -70,14 +72,34 @@ def show_search_ui(ai_model, db):
                 top_doc = final[0]
                 t_name_top = top_doc.get('source_table', 'manual_base')
                 
+                # [사유 입력 UI]
+                feedback_reason = "일반 평가" # 기본값
+                
+                # 깔끔하게 접어서 보여줌 (필요한 사람만 입력하도록)
+                with st.expander("📝 의견/사유 남기기 (선택사항)"):
+                    reason_type = st.selectbox(
+                        "피드백 사유를 선택하세요",
+                        ["선택 안 함", "관련성 없음", "모델명 다름", "내용이 부족함", "오류/잘못된 정보", "직접 입력"],
+                        key=f"reason_sel_{len(st.session_state.last_query)}"
+                    )
+                    
+                    if reason_type == "직접 입력":
+                        feedback_reason = st.text_input(
+                            "구체적인 내용을 적어주세요", 
+                            placeholder="예: 아예 다른 장비 설명이 나옵니다.",
+                            key=f"reason_txt_{len(st.session_state.last_query)}"
+                        )
+                    elif reason_type != "선택 안 함":
+                        feedback_reason = reason_type
+
                 fb_c1, fb_c2, _ = st.columns([1, 1, 3])
                 with fb_c1:
                     if st.button("👍 도움됨", key=f"main_up_{len(st.session_state.last_query)}"):
-                        db.save_relevance_feedback(user_q, top_doc['id'], t_name_top, 1, q_vec)
+                        db.save_relevance_feedback(user_q, top_doc['id'], t_name_top, 1, q_vec, reason=feedback_reason)
                         st.toast("✅ 피드백 반영 완료! 더 똑똑해졌습니다.")
                 with fb_c2:
                     if st.button("👎 별로임", key=f"main_down_{len(st.session_state.last_query)}"):
-                        db.save_relevance_feedback(user_q, top_doc['id'], t_name_top, -1, q_vec)
+                        db.save_relevance_feedback(user_q, top_doc['id'], t_name_top, -1, q_vec, reason=feedback_reason)
                         st.toast("🚨 의견 감사합니다. 개선하겠습니다.")
                 st.markdown('</div>', unsafe_allow_html=True)
                 # --------------------------------------------------------
@@ -115,10 +137,10 @@ def show_search_ui(ai_model, db):
                         c1, c2, _ = st.columns([0.25, 0.25, 0.5])
                         
                         if c1.button("✅ 정확함", key=f"doc_up_{d['u_key']}"):
-                            db.save_relevance_feedback(user_q, d['id'], t_name, 1, q_vec)
+                            db.save_relevance_feedback(user_q, d['id'], t_name, 1, q_vec, reason="개별 문서 평가")
                             st.toast("반영되었습니다.")
                         if c2.button("❌ 부정확", key=f"doc_down_{d['u_key']}"):
-                            db.save_relevance_feedback(user_q, d['id'], t_name, -1, q_vec)
+                            db.save_relevance_feedback(user_q, d['id'], t_name, -1, q_vec, reason="개별 문서 평가")
                             st.toast("제외 처리되었습니다.")
                         st.markdown('</div>', unsafe_allow_html=True)
                         
