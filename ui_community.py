@@ -1,12 +1,12 @@
 import streamlit as st
 import time
 
-def show_community_ui(ai_model, db, initial_keyword=None):
+def show_community_ui(ai_model, db):
     # ----------------------------------------------------------------------
     # [Style] CSS 스타일 정의 (다크/라이트 모드 자동 대응)
     # ----------------------------------------------------------------------
     st.markdown("""<style>
-        /* [수정] 강제 흰색 글씨 제거 -> 테마 반응형 변수 사용 */
+        /* [수정 유지] 테마 반응형 변수 사용 */
         .comment-box { 
             background-color: rgba(0, 74, 153, 0.1); 
             padding: 15px; 
@@ -21,15 +21,6 @@ def show_community_ui(ai_model, db, initial_keyword=None):
 
     st.subheader("👥 현장 지식 커뮤니티 (Q&A)")
 
-    # ----------------------------------------------------------------------
-    # [Logic] 외부 유입(검색 실패 등) 처리
-    # ----------------------------------------------------------------------
-    # 만약 검색창에서 넘어왔다면(initial_keyword 존재), 강제로 글쓰기 모드로 전환
-    if initial_keyword and "community_mode" not in st.session_state:
-        st.session_state.community_mode = "write"
-        # 넘어온 키워드를 임시 저장소에 넣어둠 (아래 폼에서 꺼내 쓸 예정)
-        st.session_state.temp_title_keyword = initial_keyword
-
     if "community_mode" not in st.session_state:
         st.session_state.community_mode = "list"
 
@@ -43,9 +34,6 @@ def show_community_ui(ai_model, db, initial_keyword=None):
         elif st.session_state.community_mode in ["write", "edit"]:
              if st.button("목록으로", use_container_width=True):
                 st.session_state.community_mode = "list"
-                # 임시 데이터 청소
-                if "temp_title_keyword" in st.session_state: del st.session_state.temp_title_keyword
-                if "temp_post_intent" in st.session_state: del st.session_state.temp_post_intent
                 st.rerun()
 
     # ----------------------------------------------------------------------
@@ -55,47 +43,19 @@ def show_community_ui(ai_model, db, initial_keyword=None):
         is_edit = st.session_state.community_mode == "edit"
         post_data = st.session_state.get("editing_post", {})
         
-        # 1. 제목 기본값 설정 (검색어 연동)
-        default_title = post_data.get("title", "")
-        if not is_edit and not default_title:
-            # 검색에서 넘어온 키워드가 있으면 그걸 제목으로 씀
-            if "temp_title_keyword" in st.session_state:
-                default_title = f"{st.session_state.temp_title_keyword} 관련 문의"
-
-        # 2. [핵심] 장비 정보 기본값 설정 (AI Intent 연동)
-        default_mfr = post_data.get("manufacturer", "")
-        default_mod = post_data.get("model_name", "")
-        default_itm = post_data.get("measurement_item", "")
-
-        # 수정 모드가 아니고, 검색에서 넘어온 의도(Intent)가 있다면 덮어씌움
-        if not is_edit and "temp_post_intent" in st.session_state:
-            intent_data = st.session_state.temp_post_intent
-            # "미지정"이나 "공통"이 아닌 유의미한 값만 채움
-            if intent_data.get('target_mfr') and intent_data.get('target_mfr') not in ['미지정', 'unknown']:
-                default_mfr = intent_data.get('target_mfr')
-            if intent_data.get('target_model') and intent_data.get('target_model') not in ['미지정', 'unknown']:
-                default_mod = intent_data.get('target_model')
-            if intent_data.get('target_item') and intent_data.get('target_item') not in ['공통', 'unknown']:
-                default_itm = intent_data.get('target_item')
-
         with st.form("post_form_v168"):
             st.markdown(f"### 📝 {'질문 수정' if is_edit else '새로운 질문 등록'}")
             
-            # 안내 문구
-            if "temp_title_keyword" in st.session_state:
-                st.info(f"💡 AI가 분석한 장비 정보를 미리 채워두었습니다. 내용을 확인해주세요.")
-
             author = st.text_input("작성자", value=post_data.get("author", ""), disabled=is_edit)
-            title = st.text_input("질문 제목", value=default_title)
+            title = st.text_input("질문 제목", value=post_data.get("title", ""))
             content = st.text_area("고장 현상 및 내용", value=post_data.get("content", ""), height=150)
             
             st.markdown("---")
             st.markdown("🏷️ **장비 라벨링 정보 (필수)**")
             c1, c2, c3 = st.columns(3)
-            # 위에서 계산한 default 값을 value로 할당
-            mfr = c1.text_input("제조사", value=default_mfr)
-            mod = c2.text_input("모델명", value=default_mod)
-            itm = c3.text_input("측정항목", value=default_itm)
+            mfr = c1.text_input("제조사", value=post_data.get("manufacturer", ""))
+            mod = c2.text_input("모델명", value=post_data.get("model_name", ""))
+            itm = c3.text_input("측정항목", value=post_data.get("measurement_item", ""))
             
             b1, b2 = st.columns(2)
             if b1.form_submit_button("🚀 등록/수정 완료"):
@@ -107,17 +67,12 @@ def show_community_ui(ai_model, db, initial_keyword=None):
                         st.success("반영 완료!"); 
                         time.sleep(0.5); 
                         st.session_state.community_mode = "list"
-                        # 사용 완료된 임시 데이터 삭제
-                        if "temp_title_keyword" in st.session_state: del st.session_state.temp_title_keyword
-                        if "temp_post_intent" in st.session_state: del st.session_state.temp_post_intent
                         st.rerun()
                     else: st.error("DB 처리 실패")
                 else: st.error("제목, 내용, 제조사는 필수입니다.")
             
             if b2.form_submit_button("❌ 취소"):
                 st.session_state.community_mode = "list"
-                if "temp_title_keyword" in st.session_state: del st.session_state.temp_title_keyword
-                if "temp_post_intent" in st.session_state: del st.session_state.temp_post_intent
                 st.rerun()
 
     # ----------------------------------------------------------------------
@@ -153,9 +108,7 @@ def show_community_ui(ai_model, db, initial_keyword=None):
                         c_content = st.text_area("답변 내용", key=f"cc_{p['id']}")
                         if st.form_submit_button("💬 답변 달기"):
                             if c_author and c_content:
-                                # 1. 답변 등록
                                 if db.add_comment(p['id'], c_author, c_content):
-                                    # 2. [V168 핵심] 등록 즉시 지식 승격 로직 자동 실행
                                     success, msg = db.promote_to_knowledge(
                                         p['title'], 
                                         c_content, 
