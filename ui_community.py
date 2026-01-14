@@ -1,7 +1,6 @@
 import streamlit as st
 import time
 
-# [수정] initial_keyword 파라미터 추가 (기본값 None)
 def show_community_ui(ai_model, db, initial_keyword=None):
     # ----------------------------------------------------------------------
     # [Style] CSS 스타일 정의 (다크/라이트 모드 자동 대응)
@@ -16,9 +15,6 @@ def show_community_ui(ai_model, db, initial_keyword=None):
             margin-bottom: 12px; 
             color: inherit !important; /* 부모(테마) 색상 따름 */
         }
-        /* 다크모드일 때만 흰색 글씨가 필요하다면, Streamlit은 기본적으로 처리해주지만 
-           배경색이 어두운 파랑 계열이라 가독성을 위해 명도만 살짝 조정 */
-        
         .comment-box strong { color: #d97706 !important; /* 앰버 색상 (가독성 좋음) */ }
         .auto-sync-tag { background-color: rgba(22, 101, 52, 0.2); color: #166534; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: bold; }
     </style>""", unsafe_allow_html=True)
@@ -47,7 +43,9 @@ def show_community_ui(ai_model, db, initial_keyword=None):
         elif st.session_state.community_mode in ["write", "edit"]:
              if st.button("목록으로", use_container_width=True):
                 st.session_state.community_mode = "list"
+                # 임시 데이터 청소
                 if "temp_title_keyword" in st.session_state: del st.session_state.temp_title_keyword
+                if "temp_post_intent" in st.session_state: del st.session_state.temp_post_intent
                 st.rerun()
 
     # ----------------------------------------------------------------------
@@ -57,21 +55,35 @@ def show_community_ui(ai_model, db, initial_keyword=None):
         is_edit = st.session_state.community_mode == "edit"
         post_data = st.session_state.get("editing_post", {})
         
-        # [수정] 제목 기본값 설정 로직 (검색 연동)
+        # 1. 제목 기본값 설정 (검색어 연동)
         default_title = post_data.get("title", "")
         if not is_edit and not default_title:
             # 검색에서 넘어온 키워드가 있으면 그걸 제목으로 씀
             if "temp_title_keyword" in st.session_state:
                 default_title = f"{st.session_state.temp_title_keyword} 관련 문의"
-                # 한 번 썼으면 날림 (재사용 방지)
-                # del st.session_state.temp_title_keyword  <- 여기서 지우면 리런 시 사라지므로 폼 제출 후 삭제가 나음
+
+        # 2. [핵심] 장비 정보 기본값 설정 (AI Intent 연동)
+        default_mfr = post_data.get("manufacturer", "")
+        default_mod = post_data.get("model_name", "")
+        default_itm = post_data.get("measurement_item", "")
+
+        # 수정 모드가 아니고, 검색에서 넘어온 의도(Intent)가 있다면 덮어씌움
+        if not is_edit and "temp_post_intent" in st.session_state:
+            intent_data = st.session_state.temp_post_intent
+            # "미지정"이나 "공통"이 아닌 유의미한 값만 채움
+            if intent_data.get('target_mfr') and intent_data.get('target_mfr') not in ['미지정', 'unknown']:
+                default_mfr = intent_data.get('target_mfr')
+            if intent_data.get('target_model') and intent_data.get('target_model') not in ['미지정', 'unknown']:
+                default_mod = intent_data.get('target_model')
+            if intent_data.get('target_item') and intent_data.get('target_item') not in ['공통', 'unknown']:
+                default_itm = intent_data.get('target_item')
 
         with st.form("post_form_v168"):
             st.markdown(f"### 📝 {'질문 수정' if is_edit else '새로운 질문 등록'}")
             
             # 안내 문구
             if "temp_title_keyword" in st.session_state:
-                st.info(f"💡 검색하신 '{st.session_state.temp_title_keyword}'에 대한 답변을 찾지 못하셨군요. 전문가들에게 직접 물어보세요!")
+                st.info(f"💡 AI가 분석한 장비 정보를 미리 채워두었습니다. 내용을 확인해주세요.")
 
             author = st.text_input("작성자", value=post_data.get("author", ""), disabled=is_edit)
             title = st.text_input("질문 제목", value=default_title)
@@ -80,9 +92,10 @@ def show_community_ui(ai_model, db, initial_keyword=None):
             st.markdown("---")
             st.markdown("🏷️ **장비 라벨링 정보 (필수)**")
             c1, c2, c3 = st.columns(3)
-            mfr = c1.text_input("제조사", value=post_data.get("manufacturer", ""))
-            mod = c2.text_input("모델명", value=post_data.get("model_name", ""))
-            itm = c3.text_input("측정항목", value=post_data.get("measurement_item", ""))
+            # 위에서 계산한 default 값을 value로 할당
+            mfr = c1.text_input("제조사", value=default_mfr)
+            mod = c2.text_input("모델명", value=default_mod)
+            itm = c3.text_input("측정항목", value=default_itm)
             
             b1, b2 = st.columns(2)
             if b1.form_submit_button("🚀 등록/수정 완료"):
@@ -94,7 +107,9 @@ def show_community_ui(ai_model, db, initial_keyword=None):
                         st.success("반영 완료!"); 
                         time.sleep(0.5); 
                         st.session_state.community_mode = "list"
+                        # 사용 완료된 임시 데이터 삭제
                         if "temp_title_keyword" in st.session_state: del st.session_state.temp_title_keyword
+                        if "temp_post_intent" in st.session_state: del st.session_state.temp_post_intent
                         st.rerun()
                     else: st.error("DB 처리 실패")
                 else: st.error("제목, 내용, 제조사는 필수입니다.")
@@ -102,6 +117,7 @@ def show_community_ui(ai_model, db, initial_keyword=None):
             if b2.form_submit_button("❌ 취소"):
                 st.session_state.community_mode = "list"
                 if "temp_title_keyword" in st.session_state: del st.session_state.temp_title_keyword
+                if "temp_post_intent" in st.session_state: del st.session_state.temp_post_intent
                 st.rerun()
 
     # ----------------------------------------------------------------------
