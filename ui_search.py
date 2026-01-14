@@ -38,7 +38,7 @@ def show_search_ui(ai_model, db):
             if "full_report" in st.session_state: del st.session_state.full_report
             if "streamed_summary" in st.session_state: del st.session_state.streamed_summary
 
-        with st.spinner("수석 엔지니어가 지식을 탐색 중입니다..."):
+        with st.spinner("지식을 탐색 중입니다..."):
             final, intent, q_vec = perform_unified_search(ai_model, db, user_q, u_threshold)
 
         if final:
