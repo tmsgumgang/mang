@@ -143,16 +143,16 @@ def show_search_ui(ai_model, db):
                                     st.success("교정 완료"); st.cache_data.clear(); time.sleep(1.0); st.rerun()
                                 else: st.error("DB 오류")
         else:
-            # [수정] 검색 결과 없음 -> 커뮤니티 토스 기능 추가
+            # [수정] 검색 결과 없음 -> 커뮤니티 토스 기능 (Intent 포함)
             st.warning("🔍 검색 결과가 없습니다.")
             st.info("💡 찾으시는 지식이 없나요? 커뮤니티 전문가들에게 직접 물어보세요!")
             
             if st.button("🙋‍♂️ 이 질문으로 커뮤니티에 물어보기", type="primary"):
                 st.session_state.community_mode = "write"      # 글쓰기 모드 강제
                 st.session_state.temp_title_keyword = user_q   # 검색어를 제목 예약어로 저장
-                # 메뉴 이동 효과를 주기 위해 st.rerun() 전에 세션 변수를 세팅하는 것이 좋습니다.
-                # 다만 app.py의 라우팅 방식에 따라 즉시 반영이 안 될 수 있으므로, 
-                # 가장 확실한 방법은 사용자에게 '커뮤니티 탭으로 이동해주세요'라고 안내하거나, 
-                # app.py에서 mode 변수를 session_state로 제어하도록 구조를 변경해야 합니다.
-                # 현재 구조에서는 일단 데이터만 넘기고 rerun 합니다.
+                
+                # [핵심] AI가 분석한 의도(Intent)도 같이 넘김
+                if intent:
+                    st.session_state.temp_post_intent = intent
+                
                 st.rerun()
