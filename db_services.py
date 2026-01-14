@@ -173,6 +173,45 @@ class DBManager:
         except Exception as e:
             return []
 
+    # =========================================================
+    # [V205] 키워드 기반 강제 발굴 (3단계 안전장치)
+    # AI 벡터 검색이 실패했을 때, '경보', '기준' 같은 단어가 본문에 있으면 강제로 가져옴.
+    # =========================================================
+    def search_keyword_fallback(self, query_text):
+        """
+        벡터 유사도로 찾지 못한 데이터를 텍스트 매칭(LIKE)으로 강제 수색합니다.
+        가장 긴 단어(핵심 키워드)를 추출하여 manual_base를 뒤집니다.
+        """
+        # 1. 검색어에서 의미 있는 명사(2글자 이상) 추출
+        keywords = [k for k in query_text.split() if len(k) >= 2]
+        if not keywords: return []
+
+        # 2. 가장 핵심 키워드 하나로 검색 (예: "경보")
+        target_keyword = max(keywords, key=len)
+        
+        try:
+            # Supabase의 'ilike' (대소문자 무시 포함 검색) 사용
+            response = self.supabase.table("manual_base") \
+                .select("*") \
+                .or_(f"content.ilike.%{target_keyword}%,model_name.ilike.%{target_keyword}%") \
+                .limit(5) \
+                .execute()
+            
+            docs = response.data
+            
+            # 포맷 통일 (벡터 점수가 없으므로 기본 점수 부여)
+            for d in docs:
+                d['similarity'] = 0.85  # 키워드 매칭 성공 시 기본 점수
+                d['source_table'] = 'manual_base'
+                d['is_verified'] = False 
+                
+            return docs
+            
+        except Exception as e:
+            print(f"⚠️ 키워드 검색 실패: {e}")
+            return []
+    # =========================================================
+
     def get_community_posts(self):
         try: return self.supabase.table("community_posts").select("*").order("created_at", desc=True).execute().data
         except: return []
