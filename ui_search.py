@@ -1,8 +1,26 @@
 import streamlit as st
 import time
 import json
+import re  # [New] 정규식 사용을 위해 추가
 from logic_ai import *
 from utils_search import perform_unified_search
+
+# [New] 하이라이팅 헬퍼 함수
+def highlight_text(text, keywords):
+    if not text: return ""
+    if not keywords: return text
+    
+    # 키워드 전처리 (공백 제거 등) 및 정규식 패턴 생성
+    # 예: "TOC", "고장" -> (TOC|고장) 패턴 생성 (대소문자 무시)
+    escaped_keywords = [re.escape(k) for k in keywords if len(k) > 0]
+    if not escaped_keywords: return text
+    
+    pattern = re.compile(f"({'|'.join(escaped_keywords)})", re.IGNORECASE)
+    
+    # 매칭된 부분을 <mark> 태그로 감싸서 노란색 형광펜 효과
+    # background-color는 테마에 따라 너무 튀지 않게 조정 가능 (여기선 기본 노랑)
+    highlighted = pattern.sub(r'<mark style="background-color: #fef08a; color: black; padding: 0 2px; border-radius: 2px;">\1</mark>', text)
+    return highlighted
 
 def show_search_ui(ai_model, db):
     # ----------------------------------------------------------------------
@@ -73,8 +91,12 @@ def show_search_ui(ai_model, db):
                     st.write(st.session_state.full_report)
                     st.markdown('</div>', unsafe_allow_html=True)
 
-                # 3. 개별 문서 리스트 및 평가
+                # 3. 개별 문서 리스트 및 평가 (하이라이팅 적용)
                 st.subheader("📋 참조 데이터 및 연관성 평가")
+                
+                # 검색어 분리 (띄어쓰기 기준)
+                search_keywords = user_q.split()
+
                 for d in final[:6]:
                     v_mark = ' ✅ 인증' if d.get('is_verified') else ''
                     score = d.get('rerank_score', 0)
@@ -87,21 +109,24 @@ def show_search_ui(ai_model, db):
                             <span>🏷️ 모델: <b>{d.get("model_name","공통")}</b></span>
                         </div>''', unsafe_allow_html=True)
                         
-                        # 본문 출력
-                        st.write(d.get('content') or d.get('solution'))
+                        # [New] 본문 하이라이팅 적용
+                        raw_content = d.get('content') or d.get('solution') or ""
+                        # 줄바꿈 유지하면서 하이라이팅
+                        safe_content = raw_content.replace("\n", "<br>") 
+                        highlighted_content = highlight_text(safe_content, search_keywords)
+                        
+                        st.markdown(highlighted_content, unsafe_allow_html=True)
                         
                         t_name = d.get('source_table', 'manual_base') 
 
                         # ----------------------------------------------------
-                        # [New] 개별 문서 단위 정밀 피드백 (사유 선택 포함)
+                        # 개별 문서 단위 정밀 피드백 (사유 선택 포함)
                         # ----------------------------------------------------
                         st.markdown('<div class="doc-feedback-area">', unsafe_allow_html=True)
                         
-                        # 피드백 입력 폼 (Expander로 숨김 처리하여 UI 간소화)
                         with st.expander("📝 이 문서 평가하기 (클릭)"):
                             f_col1, f_col2 = st.columns([3, 1])
                             
-                            # 고유 키(Key) 생성: 위젯 충돌 방지용
                             unique_k = d.get('u_key', d['id']) 
                             
                             with f_col1:
