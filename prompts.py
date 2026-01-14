@@ -1,5 +1,5 @@
 # prompts.py
-# [Final Version] 깐깐한 수석 엔지니어 페르소나 적용
+# [Final Version] 깐깐한 수석 엔지니어 페르소나 + 검색 의도 자동 보정(Intent Fix) 적용
 
 PROMPTS = {
     # ----------------------------------------------------------------
@@ -17,20 +17,20 @@ PROMPTS = {
         2. **model_name**: Identify the specific model. If multiple parts are described, give a collective name.
         
         3. **measurement_item**: **STRICT TAGGING RULES**
-           - Extract key technical terms as a comma-separated list.
-           - **Rule A (Main)**: The FIRST item must be the **Main Category** (Single Noun).
-           - **Rule B (Acronyms)**: Keep technical acronyms AS IS (e.g., DO, pH, TOC).
-           - **Rule C (Error Codes)**: IF explicit error codes exist (e.g., 'E01', 'Err-3'), MUST include them.
-           - **Rule D (Clean)**: Use **NOUNS ONLY**. Remove 'broken', 'repair', 'method'.
-           
-           - **Example**: "Pump, Seal, Water Leakage, E01, Maintenance"
+            - Extract key technical terms as a comma-separated list.
+            - **Rule A (Main)**: The FIRST item must be the **Main Category** (Single Noun).
+            - **Rule B (Acronyms)**: Keep technical acronyms AS IS (e.g., DO, pH, TOC).
+            - **Rule C (Error Codes)**: IF explicit error codes exist (e.g., 'E01', 'Err-3'), MUST include them.
+            - **Rule D (Clean)**: Use **NOUNS ONLY**. Remove 'broken', 'repair', 'method'.
+            
+            - **Example**: "Pump, Seal, Water Leakage, E01, Maintenance"
         
         [Output Format (JSON)]
         {{"manufacturer": "...", "model_name": "...", "measurement_item": "..."}}
     """,
 
     # ----------------------------------------------------------------
-    # 2. 검색 의도 파악 (Intent Analysis)
+    # 2. 검색 의도 파악 (Intent Analysis) - [수정됨: 경보 관련 자동 추론 추가]
     # ----------------------------------------------------------------
     "search_intent": """
         [Task] Analyze the user's query and extract search filters and intent.
@@ -41,6 +41,7 @@ PROMPTS = {
         [Instructions]
         1. **target_mfr**: Manufacturer name (or "미지정").
         2. **target_model**: Specific model name (or "미지정").
+           - **CRITICAL RULE**: If the user does not specify a particular equipment model (e.g., TOC-4200) AND the query relates to "alarms", "warnings", or "standards" (e.g., "경보", "발령", "기준", "주의보"), **YOU MUST SET** the `target_model` to "수질자동측정망".
         3. **target_item**: Key component/item name (or "공통").
         4. **target_action**: User's goal (e.g., "Repair", "Usage", "Concept", "Error_Check").
         
