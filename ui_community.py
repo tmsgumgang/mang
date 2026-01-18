@@ -24,7 +24,7 @@ def show_community_ui(ai_model, db):
     if "community_mode" not in st.session_state:
         st.session_state.community_mode = "list"
 
-    # [UI] 상단 버튼 영역 (글쓰기 <-> 목록 전환)
+    # [UI] 상단 버튼 영역
     c1, c2 = st.columns([0.8, 0.2])
     with c2:
         if st.session_state.community_mode == "list":
@@ -60,7 +60,7 @@ def show_community_ui(ai_model, db):
             
             b1, b2 = st.columns(2)
             if b1.form_submit_button("🚀 등록/수정 완료"):
-                # [필수 체크] 작성자(author)가 비어있는지 확인
+                # [필수 체크] author(작성자)가 비어있는지 확인
                 if author and title and content and mfr:
                     if is_edit: 
                         success = db.update_community_post(post_data['id'], title, content, mfr, mod, itm)
@@ -116,7 +116,6 @@ def show_community_ui(ai_model, db):
                                 <strong>{c['author']} 대원:</strong><br>{c['content']}
                             </div>""", unsafe_allow_html=True)
 
-                    # [댓글 작성 폼]
                     with st.form(key=f"cf_{p['id']}"):
                         col_c1, col_c2 = st.columns([1, 3])
                         with col_c1:
@@ -127,14 +126,14 @@ def show_community_ui(ai_model, db):
                         if st.form_submit_button("💬 답변 달기"):
                             if c_author and c_content:
                                 if db.add_comment(p['id'], c_author, c_content):
-                                    # [수정 포인트] c_author(작성자)를 지식 등록 함수로 전달해야 함!
+                                    # [수정 확인] 작성자(c_author)를 지식 등록 함수로 전달
                                     success, msg = db.promote_to_knowledge(
                                         p['title'], 
                                         c_content, 
                                         p.get('manufacturer','미지정'), 
                                         p.get('model_name','미지정'), 
                                         p.get('measurement_item','공통'),
-                                        c_author  # <--- [중요] 여기가 추가되었습니다!
+                                        c_author # [확인] 작성자 파라미터 전달 완료
                                     )
                                     if success:
                                         st.success("답변 저장 + AI 지식 등록 완료!")
