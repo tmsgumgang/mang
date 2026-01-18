@@ -199,9 +199,10 @@ class DBManager:
             
             docs = response.data
             
-            # 포맷 통일 (벡터 점수가 없으므로 기본 점수 부여)
+            # [수정] 점수를 0.98로 대폭 상향! (Step 3까지 갔다는 건 이게 정답일 확률이 매우 높음)
+            # 벡터 검색 결과(보통 0.8~0.9)보다 높아야 상단에 노출됨
             for d in docs:
-                d['similarity'] = 0.85  # 키워드 매칭 성공 시 기본 점수
+                d['similarity'] = 0.98  # 기존 0.85 -> 0.98 (벡터 검색을 압도하는 점수)
                 d['source_table'] = 'manual_base'
                 d['is_verified'] = False 
                 
