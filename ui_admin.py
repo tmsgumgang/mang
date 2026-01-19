@@ -1,7 +1,6 @@
 import streamlit as st
 import io
 import time
-# [V205] 고성능 PDF 추출기 pdfplumber 도입
 import pdfplumber 
 
 # OCR 라이브러리 (없으면 비활성화)
@@ -31,11 +30,11 @@ def show_admin_ui(ai_model, db):
         except:
             st.warning("DB 연결 상태를 확인해주세요.")
 
-    # 2. 매뉴얼 학습 (V205 스마트 추출)
+    # 2. 매뉴얼 학습
     with tabs[1]:
         show_manual_upload_ui(ai_model, db)
 
-    # 3. 지식 직접 등록
+    # 3. 지식 직접 등록 (여기가 수정됨!)
     with tabs[2]:
         show_knowledge_reg_ui(ai_model, db)
 
@@ -63,7 +62,6 @@ def show_admin_ui(ai_model, db):
                             if b1.form_submit_button("✅ 저장"):
                                 if not n_mfr.strip(): st.error("제조사 필수")
                                 else:
-                                    # [Update] db_services의 update 메서드 내부에서 정제 로직이 자동 수행됨
                                     res = db.update_file_labels(t_name, r['file_name'], n_mfr, n_mod, n_itm) if batch_apply else db.update_record_labels(t_name, r['id'], n_mfr, n_mod, n_itm)
                                     if res[0]: st.success(f"{res[1]}!"); time.sleep(0.5); st.rerun()
                             if b2.form_submit_button("🗑️ 폐기"):
@@ -95,18 +93,16 @@ def show_admin_ui(ai_model, db):
                     mod = st.text_input("모델명", r.get('model_name',''))
                     itm = st.text_input("항목", r.get('measurement_item',''))
                     if st.form_submit_button("✅ 승인"): 
-                        # [Update] db_services 내부 로직을 통해 저장 시 자동 태그 정제
                         db.update_record_labels("manual_base", r['id'], mfr, mod, itm)
                         st.rerun()
         else: st.info("승인 대기 중인 데이터가 없습니다.")
 
-# [V205] 스마트 업로드 함수 (pdfplumber + OCR 선택)
+# [V205] 스마트 업로드 함수
 def show_manual_upload_ui(ai_model, db):
     st.subheader("📂 PDF 매뉴얼 업로드 (V205 Smart Engine)")
     
     col_u1, col_u2 = st.columns([3, 1])
     up_f = col_u1.file_uploader("PDF 파일 선택", type=["pdf"])
-    # 기본값 False: 이 파일은 텍스트 추출이 훨씬 좋습니다.
     use_ocr = col_u2.checkbox("강제 OCR 사용", value=False, help="글자가 드래그되지 않는 '통이미지' 파일일 때만 켜세요.")
     
     if up_f and st.button("🚀 학습 시작", use_container_width=True, type="primary"):
@@ -114,7 +110,7 @@ def show_manual_upload_ui(ai_model, db):
             try:
                 raw_text = ""
                 
-                # A. 강제 OCR 모드 (이미지 파일 등)
+                # A. 강제 OCR 모드
                 if use_ocr and OCR_AVAILABLE:
                     status.write("📷 OCR 엔진 강제 구동 (이미지 스캔 중)...")
                     images = convert_from_bytes(up_f.read())
@@ -124,7 +120,7 @@ def show_manual_upload_ui(ai_model, db):
                         raw_text += pytesseract.image_to_string(img, lang='kor+eng') + "\n"
                         prog.progress((idx+1)/total_pages)
                 
-                # B. 스마트 텍스트 추출 (추천)
+                # B. 스마트 텍스트 추출 (pdfplumber)
                 else:
                     status.write("📖 고정밀 텍스트 추출 중 (pdfplumber)...")
                     with pdfplumber.open(up_f) as pdf:
@@ -133,12 +129,10 @@ def show_manual_upload_ui(ai_model, db):
                         prog = st.progress(0)
                         
                         for idx, page in enumerate(pages):
-                            # 테이블 등을 고려하여 텍스트 추출
                             page_text = page.extract_text()
                             if page_text:
                                 raw_text += page_text + "\n"
                             else:
-                                # 텍스트가 없으면(이미지 페이지) 경고 메시지
                                 status.write(f"⚠️ {idx+1}페이지는 텍스트가 없습니다. (이미지일 가능성)")
                             
                             prog.progress((idx+1)/total_pages)
@@ -161,13 +155,10 @@ def show_manual_upload_ui(ai_model, db):
                     
                     meta = extract_metadata_ai(ai_model, chunk)
                     
-                    # [V203 방어 로직]
                     if isinstance(meta, list):
                         meta = meta[0] if (len(meta) > 0 and isinstance(meta[0], dict)) else {}
                     if not isinstance(meta, dict): meta = {}
 
-                    # [V207 핵심 수정] DBManager의 정제 로직(세탁기)을 통과시킴
-                    # 직접 insert 하기 전에 db._normalize_tags 등을 사용하여 포맷 통일
                     clean_mfr = db._clean_text(meta.get('manufacturer'))
                     clean_model = db._clean_text(meta.get('model_name'))
                     clean_item = db._normalize_tags(meta.get('measurement_item'))
@@ -193,13 +184,18 @@ def show_manual_upload_ui(ai_model, db):
             except Exception as e:
                 st.error(f"오류 발생: {str(e)}")
 
-# [V164 유지] 지식 직접 등록 함수
+# [V164 -> V209] 지식 직접 등록 함수 (작성자 추가)
 def show_knowledge_reg_ui(ai_model, db):
     st.subheader("📝 지식 직접 등록")
-    with st.form("admin_reg_knowledge_v164"):
+    with st.form("admin_reg_knowledge_v209"):
         st.info("💡 현장 경험 지식을 직접 데이터베이스에 등록합니다.")
+        
+        # [NEW] 작성자(등록자) 입력칸 추가
+        author = st.text_input("👤 지식 제공자 (등록자)", placeholder="본인의 이름을 입력하세요 (선택 사항)")
+        
         f_iss = st.text_input("제목(이슈)")
         f_sol = st.text_area("해결방법/경험지식", height=200)
+        
         c1, c2, c3 = st.columns(3)
         mfr = c1.text_input("제조사")
         mod = c2.text_input("모델명")
@@ -207,10 +203,13 @@ def show_knowledge_reg_ui(ai_model, db):
         
         if st.form_submit_button("💾 지식 저장"):
             if f_iss and f_sol and mfr:
-                # [Update] db.promote_to_knowledge 내부에서 _normalize_tags가 호출되어 자동 정제됨
-                success, msg = db.promote_to_knowledge(f_iss, f_sol, mfr, mod, itm)
-                if success: st.success("저장 완료!"); time.sleep(0.5); st.rerun()
+                # [Update] author(등록자)를 마지막 인자로 전달 (없으면 '익명' 처리됨)
+                if not author.strip():
+                    author = "익명"
+                    
+                success, msg = db.promote_to_knowledge(f_iss, f_sol, mfr, mod, itm, author)
+                
+                if success: st.success("✅ 저장 완료!"); time.sleep(0.5); st.rerun()
                 else: st.error(f"저장 실패: {msg}")
             else:
-                st.error("제목, 해결방법, 제조사는 필수 입력 항목입니다.")
-# [End of File]
+                st.error("⚠️ 제목, 해결방법, 제조사는 필수 입력 항목입니다.")
