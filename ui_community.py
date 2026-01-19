@@ -101,27 +101,25 @@ def show_community_ui(ai_model, db):
                                 <strong>{c['author']} 대원:</strong><br>{c['content']}
                             </div>""", unsafe_allow_html=True)
 
-                    # -------------------------------------------------------
                     # [UI 개선] 답변 작성 폼 (가독성 및 필수 입력 강조)
-                    # -------------------------------------------------------
                     st.markdown("#### 💡 답변 남기기")
                     with st.form(key=f"cf_{p['id']}"):
-                        # [변경] 컬럼(col1, col2) 제거 -> 위아래 배치로 변경하여 입력칸 확보
+                        # 이름 입력칸을 위로 배치하여 강조
                         c_author = st.text_input("👤 답변자 닉네임 (필수)", key=f"ca_{p['id']}", placeholder="본인의 이름을 입력해주세요")
                         c_content = st.text_area("답변 내용", key=f"cc_{p['id']}", placeholder="증상 해결 방법이나 조언을 입력해주세요")
                         
                         if st.form_submit_button("🚀 답변 등록 (AI 지식으로 자동 저장)"):
-                            # [유효성 검사] 이름이 없으면 절대 통과 불가
+                            # [유효성 검사] 이름 필수
                             if c_author.strip() and c_content.strip():
                                 if db.add_comment(p['id'], c_author, c_content):
-                                    # [지식 승격] 작성자 정보 포함하여 전달
+                                    # [핵심 수정] c_author(작성자)를 마지막 인자로 반드시 전달!
                                     success, msg = db.promote_to_knowledge(
                                         p['title'], 
                                         c_content, 
                                         p.get('manufacturer','미지정'), 
                                         p.get('model_name','미지정'), 
                                         p.get('measurement_item','공통'),
-                                        c_author 
+                                        c_author # <--- [여기!] 입력한 이름 전달
                                     )
                                     if success:
                                         st.success(f"🎉 {c_author}님의 답변이 등록되고, AI 지식베이스에 추가되었습니다!")
