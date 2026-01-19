@@ -60,7 +60,7 @@ def show_community_ui(ai_model, db):
             
             b1, b2 = st.columns(2)
             if b1.form_submit_button("🚀 등록/수정 완료"):
-                # [필수 체크] author(작성자)가 비어있는지 확인
+                # [수정됨] author(작성자)가 비어있는지 체크하는 로직 추가!
                 if author and title and content and mfr:
                     if is_edit: 
                         success = db.update_community_post(post_data['id'], title, content, mfr, mod, itm)
@@ -126,17 +126,18 @@ def show_community_ui(ai_model, db):
                         if st.form_submit_button("💬 답변 달기"):
                             if c_author and c_content:
                                 if db.add_comment(p['id'], c_author, c_content):
-                                    # [수정 확인] 작성자(c_author)를 지식 등록 함수로 전달
+                                    # 답변 등록 시 AI 지식으로 승격(Promote) 시도
+                                    # [중요] c_author (작성자) 변수를 마지막 인자로 전달하여 DB의 registered_by에 저장되게 함
                                     success, msg = db.promote_to_knowledge(
                                         p['title'], 
                                         c_content, 
                                         p.get('manufacturer','미지정'), 
                                         p.get('model_name','미지정'), 
                                         p.get('measurement_item','공통'),
-                                        c_author # [확인] 작성자 파라미터 전달 완료
+                                        c_author # [작성자 정보 전달]
                                     )
                                     if success:
-                                        st.success("답변 저장 + AI 지식 등록 완료!")
+                                        st.success("답변이 저장되었으며, AI가 즉시 새로운 지식으로 학습했습니다!")
                                         time.sleep(1)
                                         st.rerun()
                                     else: 
