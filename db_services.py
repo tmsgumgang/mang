@@ -213,7 +213,7 @@ class DBManager:
             return True if res.data else False
         except: return False
 
-    # [수정됨] author 파라미터 추가
+    # [수정됨] author -> registered_by 매핑 적용
     def promote_to_knowledge(self, issue, solution, mfr, model, item, author="익명"):
         try:
             from logic_ai import get_embedding
@@ -230,7 +230,7 @@ class DBManager:
                 "manufacturer": clean_mfr, 
                 "model_name": clean_model, 
                 "measurement_item": clean_item,
-                "author": author # [NEW] 작성자 정보 저장
+                "registered_by": author # [KEY FIX] 기존 author -> registered_by로 변경
             }
             res = self.supabase.table("knowledge_base").insert(payload).execute()
             return (True, "성공") if res.data else (False, "실패")
