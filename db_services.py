@@ -224,27 +224,30 @@ class DBManager:
         except Exception as e: return (False, str(e))
 
     # =========================================================
-    # [V220] 📦 소모품 재고관리 (Inventory)
+    # [V223] 📦 소모품 재고관리 (Inventory)
     # =========================================================
     def get_inventory_items(self):
         try:
             return self.supabase.table("inventory_items").select("*").order("category").order("item_name").execute().data
         except: return []
 
-    # [수정] .select() 제거, 에러 메시지 반환
-    def add_inventory_item(self, cat, name, model, loc, desc, initial_qty, worker):
+    # [수정됨 V223] 인자 변경: mfr(제조사), measure_val(측정항목) 추가
+    def add_inventory_item(self, cat, name, model, loc, mfr, measure_val, initial_qty, worker):
         try:
-            clean_mfr = self._clean_text(desc) 
+            # 제조사와 측정항목 문자열 처리
+            clean_mfr = self._clean_text(mfr)
+            clean_measure = self._normalize_tags(measure_val)
             
             payload = {
                 "category": cat,
                 "item_name": name,
                 "model_name": model,
                 "location": loc,
-                "description": desc,
+                "manufacturer": clean_mfr,       # DB 'manufacturer' 매핑
+                "measurement_item": clean_measure, # DB 'measurement_item' 매핑
                 "current_qty": 0 
             }
-            # [Fix] .select() 제거 -> 'SyncQueryRequestBuilder' 에러 해결
+            # Insert 실행
             res = self.supabase.table("inventory_items").insert(payload).execute()
             
             if res.data:
