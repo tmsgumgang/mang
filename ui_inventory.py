@@ -4,10 +4,10 @@ import pandas as pd
 
 def show_inventory_ui(db):
     """
-    [V222] 소모품 재고관리 시스템 UI - 최종 통합본
-    1. Tab 1: 대시보드 컬럼 최적화 (제조사 위주)
-    2. Tab 3: 엑셀/CSV 일괄 업로드 기능 추가 (사내 보안망 대응)
-    3. 안전장치: DB 서비스 버전 호환성 체크 포함
+    [V223] 소모품 재고관리 시스템 UI - 최종 수정
+    1. Tab 1: '측정항목' 열 추가
+    2. Tab 3: 개별 등록 시 '측정항목' 선택 박스 추가
+    3. Tab 3: 엑셀 업로드 시 '제조사' -> 'manufacturer', '측정항목' -> 'measurement_item' 매핑 수정
     """
     st.title("📦 소모품 재고관리 센터")
     
@@ -32,9 +32,15 @@ def show_inventory_ui(db):
                 df = pd.DataFrame(display_items)
                 
                 # [수정] 대시보드 컬럼 개편
-                # 제조사(description) -> 규격(model_name) -> 품명(item_name) -> 위치 -> 수량
-                df_show = df[['description', 'model_name', 'item_name', 'location', 'current_qty']].copy()
-                df_show.columns = ['제조사', '규격/모델', '품명', '위치', '현재 수량']
+                # 제조사 -> 측정항목(NEW) -> 규격 -> 품명 -> 위치 -> 수량
+                # DB 컬럼명 확인: manufacturer, measurement_item
+                
+                # 데이터가 없는 경우를 대비해 컬럼이 있는지 확인 후 처리
+                if 'manufacturer' not in df.columns: df['manufacturer'] = '-'
+                if 'measurement_item' not in df.columns: df['measurement_item'] = '-'
+
+                df_show = df[['manufacturer', 'measurement_item', 'model_name', 'item_name', 'location', 'current_qty']].copy()
+                df_show.columns = ['제조사', '측정항목', '규격/모델', '품명', '위치', '현재 수량']
                 
                 st.dataframe(df_show, use_container_width=True, hide_index=True)
             else:
@@ -58,6 +64,10 @@ def show_inventory_ui(db):
             
             for item in target_items:
                 with st.expander(f"📦 [{item['category']}] {item['item_name']} (현재: {item['current_qty']}개)", expanded=False):
+                    # 상세 정보 표시에 측정항목 추가
+                    mfr = item.get('manufacturer') or '-'
+                    measure = item.get('measurement_item') or '공통'
+                    st.markdown(f"- **제조사:** {mfr} / **측정항목:** {measure}")
                     st.markdown(f"- **규격:** {item['model_name']} / **위치:** {item.get('location', '-')}")
                     
                     c_worker, c_qty = st.columns([1, 1])
@@ -86,35 +96,38 @@ def show_inventory_ui(db):
     # [Tab 3] 품목 등록 및 관리 (개별 등록 + 엑셀 일괄 업로드)
     # ------------------------------------------------------------------
     with tab3:
-        # 탭 분리: 개별 등록 / 엑셀 일괄 업로드
         sub_tab1, sub_tab2 = st.tabs(["📝 개별 등록", "📂 엑셀 일괄 업로드"])
         
         # [3-1] 개별 등록
         with sub_tab1:
             st.markdown("### ⚙️ 신규 품목 등록 (초기 입고)")
-            with st.form("add_item_form_v222"):
+            with st.form("add_item_form_v223"):
                 st.markdown("#### 1. 품목 기본 정보")
                 c1, c2 = st.columns(2)
                 cat = c1.selectbox("분류", ["시약", "필터", "튜브/배관", "센서/전극", "기타 소모품"])
                 name = c2.text_input("품명 (필수)", placeholder="예: TOC 산화제")
                 
                 c3, c4 = st.columns(2)
-                model = c3.text_input("규격/모델명", placeholder="예: 638-41323")
-                loc = c4.text_input("보관 위치", placeholder="예: 시약장 1층")
-                desc = st.text_input("제조사/비고", placeholder="예: 시마즈")
+                # [NEW] 측정항목 선택 추가
+                measure_val = c3.selectbox("측정항목", ["공통", "TOC", "TN", "TP", "일반항목", "VOCs", "기타"])
+                model = c4.text_input("규격/모델명", placeholder="예: 638-41323")
+                
+                c5, c6 = st.columns(2)
+                mfr = c5.text_input("제조사", placeholder="예: 시마즈")
+                loc = c6.text_input("보관 위치", placeholder="예: 시약장 1층")
                 
                 st.divider()
                 st.markdown("#### 2. 초기 재고 설정 (선택)")
-                c5, c6 = st.columns(2)
-                reg_worker = c5.text_input("등록자(닉네임)", placeholder="본인 이름 (필수)")
-                init_qty = c6.number_input("초기 보유 수량", min_value=0, value=0)
+                c7, c8 = st.columns(2)
+                reg_worker = c7.text_input("등록자(닉네임)", placeholder="본인 이름 (필수)")
+                init_qty = c8.number_input("초기 보유 수량", min_value=0, value=0)
                 
                 if st.form_submit_button("💾 품목 및 재고 저장"):
                     if name:
                         if not reg_worker: st.error("이력 관리를 위해 등록자 이름은 필수입니다.")
                         else:
-                            # DB 통신 및 결과 타입 체크 (안전장치)
-                            result = db.add_inventory_item(cat, name, model, loc, desc, init_qty, reg_worker)
+                            # DB 함수 호출 (인자 8개)
+                            result = db.add_inventory_item(cat, name, model, loc, mfr, measure_val, init_qty, reg_worker)
                             
                             if isinstance(result, bool):
                                 success, msg = result, "알 수 없는 오류"
@@ -129,7 +142,7 @@ def show_inventory_ui(db):
                                 st.error(f"❌ 등록 실패: {msg}")
                     else: st.error("품명은 필수입니다.")
 
-        # [3-2] 엑셀 일괄 업로드 (NEW)
+        # [3-2] 엑셀 일괄 업로드
         with sub_tab2:
             st.markdown("### 📂 엑셀/CSV 파일로 한 번에 등록하기")
             st.info("💡 엑셀(.xlsx) 또는 CSV 파일을 업로드하세요. 한글이 깨져도 괜찮습니다.")
@@ -137,14 +150,17 @@ def show_inventory_ui(db):
             with st.expander("📋 엑셀 양식 확인하기 (클릭)", expanded=False):
                 st.markdown("""
                 **엑셀 첫 줄(헤더)에 아래 단어가 포함되어야 합니다:**
-                - `분류`, `품명`(필수), `규격`, `위치`, `제조사`, `초기수량`
+                - `분류`, `품명`(필수), `규격`, `위치`
+                - `제조사` (기존 비고 대신 제조사로 인식)
+                - `측정항목` (NEW: TOC, TN 등)
+                - `초기수량`
                 """)
             
             uploaded_file = st.file_uploader("파일 선택", type=['xlsx', 'xls', 'csv'])
             
             if uploaded_file:
                 try:
-                    # 파일 읽기 (인코딩 자동 처리)
+                    # 파일 읽기
                     if uploaded_file.name.endswith('.csv'):
                         try:
                             df_upload = pd.read_csv(uploaded_file, encoding='utf-8')
@@ -156,11 +172,13 @@ def show_inventory_ui(db):
                     
                     st.write("📊 데이터 미리보기 (상위 3개):", df_upload.head(3))
                     
-                    # 컬럼 매핑 (한글 -> 영문)
+                    # [핵심 수정] 컬럼 매핑 업데이트
                     expected_cols = {
                         '분류': 'category', '품명': 'item_name', '규격': 'model_name', 
-                        '모델': 'model_name', '위치': 'location', '제조사': 'description',
-                        '비고': 'description', '초기수량': 'qty', '수량': 'qty'
+                        '모델': 'model_name', '위치': 'location', 
+                        '제조사': 'manufacturer', '브랜드': 'manufacturer', # 제조사 매핑
+                        '측정항목': 'measurement_item', '측정': 'measurement_item', '항목': 'measurement_item', # 측정항목 매핑
+                        '초기수량': 'qty', '수량': 'qty'
                     }
                     df_upload.rename(columns=expected_cols, inplace=True)
                     
@@ -179,20 +197,23 @@ def show_inventory_ui(db):
                                 total_rows = len(df_upload)
                                 
                                 for idx, row in df_upload.iterrows():
-                                    # 결측치(NaN) 안전 처리
+                                    # 데이터 추출 및 결측치 처리
                                     cat = row.get('category', '기타 소모품') if not pd.isna(row.get('category')) else '기타 소모품'
                                     name = row.get('item_name')
-                                    if pd.isna(name): continue # 품명 없으면 패스
+                                    if pd.isna(name): continue 
                                     
                                     model = row.get('model_name', '') if not pd.isna(row.get('model_name')) else ''
                                     loc = row.get('location', '') if not pd.isna(row.get('location')) else ''
-                                    desc = row.get('description', '') if not pd.isna(row.get('description')) else ''
+                                    
+                                    # [New] 제조사 & 측정항목 가져오기
+                                    mfr = row.get('manufacturer', '') if not pd.isna(row.get('manufacturer')) else ''
+                                    measure_val = row.get('measurement_item', '공통') if not pd.isna(row.get('measurement_item')) else '공통'
+                                    
                                     qty = row.get('qty', 0) if not pd.isna(row.get('qty')) else 0
                                     
-                                    # DB 등록
-                                    res = db.add_inventory_item(str(cat), str(name), str(model), str(loc), str(desc), int(qty), batch_worker)
+                                    # DB 등록 (인자 순서: cat, name, model, loc, mfr, measure_val, qty, worker)
+                                    res = db.add_inventory_item(str(cat), str(name), str(model), str(loc), str(mfr), str(measure_val), int(qty), batch_worker)
                                     
-                                    # 결과 확인
                                     is_success = False
                                     if isinstance(res, tuple) and res[0]: is_success = True
                                     elif isinstance(res, bool) and res: is_success = True
