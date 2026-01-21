@@ -4,9 +4,8 @@ import pandas as pd
 
 def show_inventory_ui(db):
     """
-    [V214] 소모품 재고관리 시스템 UI
-    - 적정 재고(min_qty) 입력 및 표시 기능 완전 제거
-    - DB 서비스(V212)와 인자 개수(7개) 동기화 완료
+    [V218] 소모품 재고관리 시스템 UI - 디버깅 모드
+    - 등록 실패 시 정확한 에러 원인 출력
     """
     st.title("📦 소모품 재고관리 센터")
     
@@ -35,7 +34,7 @@ def show_inventory_ui(db):
             # 3. 테이블 출력 (적정재고 컬럼 제거)
             if display_items:
                 df = pd.DataFrame(display_items)
-                # [수정] min_qty 컬럼을 제외하고 표시
+                # min_qty 컬럼을 제외하고 표시
                 df_show = df[['category', 'item_name', 'model_name', 'location', 'current_qty']].copy()
                 df_show.columns = ['분류', '품명', '규격/모델', '위치', '현재 수량']
                 st.dataframe(df_show, use_container_width=True, hide_index=True)
@@ -92,12 +91,12 @@ def show_inventory_ui(db):
                             else: st.error("처리 실패")
 
     # ------------------------------------------------------------------
-    # [Tab 3] 품목 등록 및 관리 (min_q 제거 완료)
+    # [Tab 3] 품목 등록 및 관리 (디버깅 모드)
     # ------------------------------------------------------------------
     with tab3:
         st.markdown("### ⚙️ 신규 품목 등록 (초기 입고)")
         
-        with st.form("add_item_form_v214"):
+        with st.form("add_item_form_v218"):
             st.markdown("#### 1. 품목 기본 정보")
             c1, c2 = st.columns(2)
             cat = c1.selectbox("분류", ["시약", "필터", "튜브/배관", "센서/전극", "기타 소모품"])
@@ -108,7 +107,6 @@ def show_inventory_ui(db):
             loc = c4.text_input("보관 위치", placeholder="예: 시약장 1층")
             
             desc = st.text_input("제조사/비고", placeholder="예: 시마즈")
-            # [삭제됨] 적정 재고(min_q) 입력란 제거
             
             st.divider()
             
@@ -123,10 +121,16 @@ def show_inventory_ui(db):
                     if not reg_worker:
                         st.error("이력 관리를 위해 등록자 이름은 필수입니다.")
                     else:
-                        # [핵심 수정] min_q 제거 -> 인자 7개만 전달
-                        if db.add_inventory_item(cat, name, model, loc, desc, init_qty, reg_worker):
-                            st.success(f"[{name}] 등록 완료! (초기 재고 {init_qty}개 반영됨)"); time.sleep(1.5); st.rerun()
-                        else: st.error("등록 실패")
+                        # ⬇️ 수정된 부분: 성공여부(success)와 메시지(msg)를 같이 받습니다.
+                        success, msg = db.add_inventory_item(cat, name, model, loc, desc, init_qty, reg_worker)
+                        
+                        if success:
+                            st.success(f"[{name}] 등록 완료! (초기 재고 {init_qty}개 반영됨)")
+                            time.sleep(1.5)
+                            st.rerun()
+                        else:
+                            # ⬇️ 여기서 진짜 에러 이유가 출력됩니다.
+                            st.error(f"❌ 등록 실패: {msg}")
                 else:
                     st.error("품명은 필수입니다.")
         
