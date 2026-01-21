@@ -4,9 +4,8 @@ class DBManager:
     def __init__(self, supabase_client):
         self.supabase = supabase_client
 
-    # =========================================================
-    # [Helper] 데이터 정규화
-    # =========================================================
+    # ... [기존 Helper 메서드들은 그대로 유지] ...
+
     def _normalize_tags(self, raw_tags):
         if not raw_tags or str(raw_tags).lower() in ['none', 'nan', 'null']:
             return "공통"
@@ -27,6 +26,9 @@ class DBManager:
     def keep_alive(self):
         try: self.supabase.table("knowledge_base").select("id").limit(1).execute()
         except: pass
+
+    # ... [중간 생략: get_penalty_counts ~ update_vector 등 기존 함수들 동일] ...
+    # (코드가 너무 길어 핵심 수정 부분 위주로 작성하되, 복붙 편의를 위해 수정할 함수 주변부를 포함합니다)
 
     def get_penalty_counts(self):
         try:
@@ -76,7 +78,6 @@ class DBManager:
             return (True, "성공") if res.data else (False, "실패")
         except Exception as e: return (False, str(e))
 
-    # [V198] 검색 엔진
     def match_filtered_db(self, rpc_name, query_vec, threshold, intent, query_text, context_blacklist=None):
         try:
             target_item = intent.get('target_item', '공통')
@@ -150,9 +151,6 @@ class DBManager:
             return docs
         except: return []
 
-    # =========================================================
-    # [Legacy] 커뮤니티 & 지식 등록 (유지)
-    # =========================================================
     def get_community_posts(self):
         try: return self.supabase.table("community_posts").select("*").order("created_at", desc=True).execute().data
         except: return []
@@ -227,21 +225,16 @@ class DBManager:
         except Exception as e: return (False, str(e))
 
     # =========================================================
-    # [V212] 📦 소모품 재고관리 (Inventory) - [Updated]
+    # [V212] 📦 소모품 재고관리 (Inventory)
     # =========================================================
     def get_inventory_items(self):
-        """재고 현황 전체 조회"""
         try:
             return self.supabase.table("inventory_items").select("*").order("category").order("item_name").execute().data
         except: return []
 
-    # [핵심] min_q 파라미터를 삭제하여 인자 7개로 맞춤
+    # ⬇️ 여기가 수정된 부분입니다 (성공여부, 메시지 반환)
     def add_inventory_item(self, cat, name, model, loc, desc, initial_qty, worker):
-        """
-        [수정됨 V212] min_q 제거, 초기 재고 입고 로그 생성
-        """
         try:
-            # 정제 적용
             clean_mfr = self._clean_text(desc) 
             
             payload = {
@@ -250,24 +243,20 @@ class DBManager:
                 "model_name": model,
                 "location": loc,
                 "description": desc,
-                "current_qty": 0 # 일단 0으로 생성
-                # min_qty 삭제됨
+                "current_qty": 0 
             }
             res = self.supabase.table("inventory_items").insert(payload).select().execute()
             
             if res.data:
                 new_item_id = res.data[0]['id']
-                # 초기 재고가 있다면 '입고' 로그 생성 -> 트리거 작동
                 if initial_qty > 0:
                     self.log_inventory_change(new_item_id, "입고", initial_qty, worker, "신규 품목 등록 (초기 재고)")
-                return True
-            return False
+                return True, "성공"  # 🟢 성공 메시지 추가
+            return False, "데이터베이스 응답이 없습니다." # 🔴 실패 메시지
         except Exception as e: 
-            print(f"Add Inventory Error: {e}")
-            return False
+            return False, str(e) # 🔴 실제 에러 내용을 반환
 
     def log_inventory_change(self, item_id, c_type, qty, worker, reason):
-        """입/출고/조정 로그 기록"""
         try:
             payload = {
                 "item_id": item_id,
@@ -283,14 +272,12 @@ class DBManager:
             return False
 
     def delete_inventory_item(self, item_id):
-        """품목 삭제"""
         try:
             self.supabase.table("inventory_items").delete().eq("id", item_id).execute()
             return True
         except: return False
     
     def get_inventory_logs(self, item_id=None):
-        """로그 조회"""
         try:
             query = self.supabase.table("inventory_logs").select("*, inventory_items(item_name)").order("created_at", desc=True).limit(50)
             if item_id:
