@@ -5,7 +5,7 @@ class DBManager:
         self.supabase = supabase_client
 
     # =========================================================
-    # [NEW] 데이터 정규화(Cleaning) 헬퍼 함수
+    # [Helper] 데이터 정규화
     # =========================================================
     def _normalize_tags(self, raw_tags):
         if not raw_tags or str(raw_tags).lower() in ['none', 'nan', 'null']:
@@ -76,7 +76,7 @@ class DBManager:
             return (True, "성공") if res.data else (False, "실패")
         except Exception as e: return (False, str(e))
 
-    # [V198] 쌍끌이 SQL (Dual-Keyword SQL)
+    # [V198] 검색 엔진
     def match_filtered_db(self, rpc_name, query_vec, threshold, intent, query_text, context_blacklist=None):
         try:
             target_item = intent.get('target_item', '공통')
@@ -138,61 +138,35 @@ class DBManager:
             return filtered_results
         except Exception as e: return []
 
-    # [V205] 키워드 기반 강제 발굴 (3단계 안전장치)
     def search_keyword_fallback(self, query_text):
         keywords = [k for k in query_text.split() if len(k) >= 2]
         if not keywords: return []
         target_keyword = max(keywords, key=len)
         try:
-            response = self.supabase.table("manual_base") \
-                .select("*") \
-                .or_(f"content.ilike.%{target_keyword}%,model_name.ilike.%{target_keyword}%") \
-                .limit(5).execute()
+            response = self.supabase.table("manual_base").select("*").or_(f"content.ilike.%{target_keyword}%,model_name.ilike.%{target_keyword}%").limit(5).execute()
             docs = response.data
             for d in docs:
-                d['similarity'] = 0.98 # 점수 상향
-                d['source_table'] = 'manual_base'
-                d['is_verified'] = False 
+                d['similarity'] = 0.98; d['source_table'] = 'manual_base'; d['is_verified'] = False 
             return docs
-        except Exception as e:
-            print(f"⚠️ 키워드 검색 실패: {e}")
-            return []
+        except: return []
 
-    # ================= Community & Knowledge =================
-
+    # =========================================================
+    # [Legacy] 커뮤니티 & 지식 등록 (유지)
+    # =========================================================
     def get_community_posts(self):
         try: return self.supabase.table("community_posts").select("*").order("created_at", desc=True).execute().data
         except: return []
 
     def add_community_post(self, author, title, content, mfr, model, item):
         try:
-            clean_mfr = self._clean_text(mfr)
-            clean_model = self._clean_text(model)
-            clean_item = self._normalize_tags(item)
-            payload = {
-                "author": author, 
-                "title": title, 
-                "content": content, 
-                "manufacturer": clean_mfr, 
-                "model_name": clean_model, 
-                "measurement_item": clean_item
-            }
+            payload = {"author": author, "title": title, "content": content, "manufacturer": self._clean_text(mfr), "model_name": self._clean_text(model), "measurement_item": self._normalize_tags(item)}
             res = self.supabase.table("community_posts").insert(payload).execute()
             return True if res.data else False
         except: return False
 
     def update_community_post(self, post_id, title, content, mfr, model, item):
         try:
-            clean_mfr = self._clean_text(mfr)
-            clean_model = self._clean_text(model)
-            clean_item = self._normalize_tags(item)
-            payload = {
-                "title": title, 
-                "content": content, 
-                "manufacturer": clean_mfr, 
-                "model_name": clean_model, 
-                "measurement_item": clean_item
-            }
+            payload = {"title": title, "content": content, "manufacturer": self._clean_text(mfr), "model_name": self._clean_text(model), "measurement_item": self._normalize_tags(item)}
             res = self.supabase.table("community_posts").update(payload).eq("id", post_id).execute()
             return True if res.data else False
         except: return False
@@ -213,24 +187,14 @@ class DBManager:
             return True if res.data else False
         except: return False
 
-    # [수정됨] author -> registered_by 매핑 적용
     def promote_to_knowledge(self, issue, solution, mfr, model, item, author="익명"):
         try:
             from logic_ai import get_embedding
-            clean_mfr = self._clean_text(mfr)
-            clean_model = self._clean_text(model)
-            clean_item = self._normalize_tags(item)
             payload = {
-                "domain": "기술지식", 
-                "issue": issue, 
-                "solution": solution, 
-                "embedding": get_embedding(issue), 
-                "semantic_version": 1, 
-                "is_verified": True, 
-                "manufacturer": clean_mfr, 
-                "model_name": clean_model, 
-                "measurement_item": clean_item,
-                "registered_by": author # [KEY FIX] 기존 author -> registered_by로 변경
+                "domain": "기술지식", "issue": issue, "solution": solution, "embedding": get_embedding(issue), 
+                "semantic_version": 1, "is_verified": True, 
+                "manufacturer": self._clean_text(mfr), "model_name": self._clean_text(model), "measurement_item": self._normalize_tags(item),
+                "registered_by": author 
             }
             res = self.supabase.table("knowledge_base").insert(payload).execute()
             return (True, "성공") if res.data else (False, "실패")
@@ -263,22 +227,21 @@ class DBManager:
         except Exception as e: return (False, str(e))
 
     # =========================================================
-    # [V210] 📦 소모품 재고관리 (Inventory) - [Updated]
+    # [V212] 📦 소모품 재고관리 (Inventory) - [Updated]
     # =========================================================
     def get_inventory_items(self):
-        """재고 현황 전체 조회 (카테고리순 정렬)"""
+        """재고 현황 전체 조회"""
         try:
             return self.supabase.table("inventory_items").select("*").order("category").order("item_name").execute().data
         except: return []
 
-    def add_inventory_item(self, cat, name, model, loc, desc, min_q, initial_qty, worker):
+    def add_inventory_item(self, cat, name, model, loc, desc, initial_qty, worker):
         """
-        [수정됨] 신규 품목 등록 + 초기 재고 입고 로그 생성
-        - 1. 품목 생성 (일단 0개로 시작)
-        - 2. 초기 재고(initial_qty)가 있으면 '입고' 로그를 찍어서 트리거로 수량 채움
+        [수정됨 V212] min_q 제거, 초기 재고 입고 로그 생성
         """
         try:
-            clean_mfr = self._clean_text(desc) # 설명란에 제조사가 있다면.. (일단 desc는 설명으로 씀)
+            # 정제 적용
+            clean_mfr = self._clean_text(desc) 
             
             payload = {
                 "category": cat,
@@ -286,15 +249,14 @@ class DBManager:
                 "model_name": model,
                 "location": loc,
                 "description": desc,
-                "min_qty": min_q,
                 "current_qty": 0 # 일단 0으로 생성
+                # min_qty는 payload에서 제외 (DB에선 null 또는 default 처리)
             }
-            # .select()를 붙여야 생성된 ID를 받아올 수 있음 (중요!)
             res = self.supabase.table("inventory_items").insert(payload).select().execute()
             
             if res.data:
                 new_item_id = res.data[0]['id']
-                # 초기 재고가 있다면 '입고' 로그 생성 -> 트리거가 current_qty 자동 업데이트
+                # 초기 재고가 있다면 '입고' 로그 생성 -> 트리거 작동
                 if initial_qty > 0:
                     self.log_inventory_change(new_item_id, "입고", initial_qty, worker, "신규 품목 등록 (초기 재고)")
                 return True
@@ -304,10 +266,7 @@ class DBManager:
             return False
 
     def log_inventory_change(self, item_id, c_type, qty, worker, reason):
-        """
-        입/출고/조정 로그 기록
-        * 이 함수가 실행되면 Supabase의 Trigger가 자동으로 inventory_items의 수량을 조절합니다.
-        """
+        """입/출고/조정 로그 기록"""
         try:
             payload = {
                 "item_id": item_id,
@@ -323,14 +282,14 @@ class DBManager:
             return False
 
     def delete_inventory_item(self, item_id):
-        """품목 삭제 (주의: 로그도 같이 삭제됨 - CASCADE)"""
+        """품목 삭제"""
         try:
             self.supabase.table("inventory_items").delete().eq("id", item_id).execute()
             return True
         except: return False
     
     def get_inventory_logs(self, item_id=None):
-        """최근 로그 조회 (특정 아이템 or 전체)"""
+        """로그 조회"""
         try:
             query = self.supabase.table("inventory_logs").select("*, inventory_items(item_name)").order("created_at", desc=True).limit(50)
             if item_id:
