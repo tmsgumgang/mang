@@ -235,6 +235,7 @@ class DBManager:
             return self.supabase.table("inventory_items").select("*").order("category").order("item_name").execute().data
         except: return []
 
+    # [핵심] min_q 파라미터를 삭제하여 인자 7개로 맞춤
     def add_inventory_item(self, cat, name, model, loc, desc, initial_qty, worker):
         """
         [수정됨 V212] min_q 제거, 초기 재고 입고 로그 생성
@@ -250,7 +251,7 @@ class DBManager:
                 "location": loc,
                 "description": desc,
                 "current_qty": 0 # 일단 0으로 생성
-                # min_qty는 payload에서 제외 (DB에선 null 또는 default 처리)
+                # min_qty 삭제됨
             }
             res = self.supabase.table("inventory_items").insert(payload).select().execute()
             
