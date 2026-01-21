@@ -7,12 +7,12 @@ def show_inventory_ui(db):
     [V210] 소모품 재고관리 시스템 UI
     - 탭 1: 재고 부족 알림 및 전체 현황판
     - 탭 2: 현장용 간편 입/출고 (버튼식)
-    - 탭 3: 마스터 데이터 관리 (품목 등록/삭제)
+    - 탭 3: 마스터 데이터 관리 (품목 등록/삭제) - 초기재고/등록자 추가
     """
     st.title("📦 소모품 재고관리 센터")
     
-    # 상단 메뉴 구성
-    tab1, tab2, tab3 = st.tabs(["📊 재고 현황판", "⚡ 입/출고(현장용)", "⚙️ 품목 등록/관리"])
+    # 상단 메뉴 구성 (기록 조회 탭 추가)
+    tab1, tab2, tab3, tab4 = st.tabs(["📊 재고 현황판", "⚡ 입/출고(현장용)", "⚙️ 품목 등록/관리", "📜 이력 조회"])
 
     # ------------------------------------------------------------------
     # [Tab 1] 재고 현황판 (Dashboard)
@@ -115,9 +115,10 @@ def show_inventory_ui(db):
     # [Tab 3] 품목 등록 및 관리 (Master Data)
     # ------------------------------------------------------------------
     with tab3:
-        st.markdown("### ⚙️ 신규 품목 등록")
+        st.markdown("### ⚙️ 신규 품목 등록 (초기 입고)")
         
-        with st.form("add_item_form"):
+        with st.form("add_item_form_v210"):
+            st.markdown("#### 1. 품목 기본 정보")
             c1, c2 = st.columns(2)
             cat = c1.selectbox("분류", ["시약", "필터", "튜브/배관", "센서/전극", "기타 소모품"])
             name = c2.text_input("품명 (필수)", placeholder="예: TOC 산화제")
@@ -129,11 +130,23 @@ def show_inventory_ui(db):
             desc = st.text_input("제조사/비고", placeholder="예: 시마즈")
             min_q = st.number_input("적정 재고 (이보다 적으면 경고)", min_value=0, value=5)
             
-            if st.form_submit_button("💾 품목 저장"):
+            st.divider()
+            
+            # [NEW] 초기 재고 및 등록자 정보 입력
+            st.markdown("#### 2. 초기 재고 설정 (선택)")
+            c5, c6 = st.columns(2)
+            reg_worker = c5.text_input("등록자(닉네임)", placeholder="본인 이름 (필수)")
+            init_qty = c6.number_input("초기 보유 수량", min_value=0, value=0, help="현재 가지고 있는 수량을 입력하면 자동으로 입고 처리됩니다.")
+            
+            if st.form_submit_button("💾 품목 및 재고 저장"):
                 if name:
-                    if db.add_inventory_item(cat, name, model, loc, desc, min_q):
-                        st.success("등록되었습니다!"); time.sleep(1); st.rerun()
-                    else: st.error("등록 실패")
+                    if not reg_worker:
+                        st.error("이력 관리를 위해 등록자 이름은 필수입니다.")
+                    else:
+                        # DB 함수 호출 (인자 8개 전달)
+                        if db.add_inventory_item(cat, name, model, loc, desc, min_q, init_qty, reg_worker):
+                            st.success(f"[{name}] 등록 완료! (초기 재고 {init_qty}개 반영됨)"); time.sleep(1.5); st.rerun()
+                        else: st.error("등록 실패")
                 else:
                     st.error("품명은 필수입니다.")
         
@@ -148,3 +161,30 @@ def show_inventory_ui(db):
                 if col_d2.button("삭제", key=f"del_master_{d_item['id']}"):
                     if db.delete_inventory_item(d_item['id']):
                         st.warning("삭제되었습니다."); time.sleep(0.5); st.rerun()
+
+    # ------------------------------------------------------------------
+    # [Tab 4] 이력 조회 (Logs)
+    # ------------------------------------------------------------------
+    with tab4:
+        st.markdown("### 📜 입/출고 전체 이력")
+        if st.button("🔄 새로고침", key="refresh_logs"):
+            st.rerun()
+            
+        logs = db.get_inventory_logs()
+        if logs:
+            for log in logs:
+                item_name = log['inventory_items']['item_name'] if log.get('inventory_items') else "삭제된 품목"
+                # 아이콘 설정
+                icon = "📥" if log['change_type'] == "입고" else "📤" if log['change_type'] == "출고" else "🔄"
+                color = "blue" if log['change_type'] == "입고" else "red" if log['change_type'] == "출고" else "green"
+                
+                st.markdown(f"""
+                <div style="padding:10px; border-bottom:1px solid #eee;">
+                    <span style="font-size:1.1rem;">{icon} <strong>{item_name}</strong></span> 
+                    <span style="font-size:0.8rem; color:gray;">({log['created_at'][:16].replace('T', ' ')})</span><br>
+                    <span style="color:{color}; font-weight:bold;">{log['change_type']} {log['quantity']}개</span> 
+                    by <strong>{log['worker_name']}</strong> <span style="color:gray;">- {log.get('reason') or ''}</span>
+                </div>
+                """, unsafe_allow_html=True)
+        else:
+            st.info("아직 기록된 이력이 없습니다.")
