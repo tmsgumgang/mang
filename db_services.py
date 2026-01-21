@@ -263,7 +263,7 @@ class DBManager:
         except Exception as e: return (False, str(e))
 
     # =========================================================
-    # [V210] 📦 소모품 재고관리 (Inventory) - [NEW]
+    # [V210] 📦 소모품 재고관리 (Inventory) - [Updated]
     # =========================================================
     def get_inventory_items(self):
         """재고 현황 전체 조회 (카테고리순 정렬)"""
@@ -271,10 +271,13 @@ class DBManager:
             return self.supabase.table("inventory_items").select("*").order("category").order("item_name").execute().data
         except: return []
 
-    def add_inventory_item(self, cat, name, model, loc, desc, min_q):
-        """새로운 품목 등록 (초기 재고 0)"""
+    def add_inventory_item(self, cat, name, model, loc, desc, min_q, initial_qty, worker):
+        """
+        [수정됨] 신규 품목 등록 + 초기 재고 입고 로그 생성
+        - 1. 품목 생성 (일단 0개로 시작)
+        - 2. 초기 재고(initial_qty)가 있으면 '입고' 로그를 찍어서 트리거로 수량 채움
+        """
         try:
-            # 정제 적용
             clean_mfr = self._clean_text(desc) # 설명란에 제조사가 있다면.. (일단 desc는 설명으로 씀)
             
             payload = {
@@ -284,11 +287,21 @@ class DBManager:
                 "location": loc,
                 "description": desc,
                 "min_qty": min_q,
-                "current_qty": 0  # 초기값 0
+                "current_qty": 0 # 일단 0으로 생성
             }
-            res = self.supabase.table("inventory_items").insert(payload).execute()
-            return True if res.data else False
-        except: return False
+            # .select()를 붙여야 생성된 ID를 받아올 수 있음 (중요!)
+            res = self.supabase.table("inventory_items").insert(payload).select().execute()
+            
+            if res.data:
+                new_item_id = res.data[0]['id']
+                # 초기 재고가 있다면 '입고' 로그 생성 -> 트리거가 current_qty 자동 업데이트
+                if initial_qty > 0:
+                    self.log_inventory_change(new_item_id, "입고", initial_qty, worker, "신규 품목 등록 (초기 재고)")
+                return True
+            return False
+        except Exception as e: 
+            print(f"Add Inventory Error: {e}")
+            return False
 
     def log_inventory_change(self, item_id, c_type, qty, worker, reason):
         """
