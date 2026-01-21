@@ -4,8 +4,9 @@ class DBManager:
     def __init__(self, supabase_client):
         self.supabase = supabase_client
 
-    # ... [기존 Helper 메서드들은 그대로 유지] ...
-
+    # =========================================================
+    # [Helper] 데이터 정규화
+    # =========================================================
     def _normalize_tags(self, raw_tags):
         if not raw_tags or str(raw_tags).lower() in ['none', 'nan', 'null']:
             return "공통"
@@ -26,9 +27,6 @@ class DBManager:
     def keep_alive(self):
         try: self.supabase.table("knowledge_base").select("id").limit(1).execute()
         except: pass
-
-    # ... [중간 생략: get_penalty_counts ~ update_vector 등 기존 함수들 동일] ...
-    # (코드가 너무 길어 핵심 수정 부분 위주로 작성하되, 복붙 편의를 위해 수정할 함수 주변부를 포함합니다)
 
     def get_penalty_counts(self):
         try:
@@ -78,6 +76,7 @@ class DBManager:
             return (True, "성공") if res.data else (False, "실패")
         except Exception as e: return (False, str(e))
 
+    # [V198] 검색 엔진
     def match_filtered_db(self, rpc_name, query_vec, threshold, intent, query_text, context_blacklist=None):
         try:
             target_item = intent.get('target_item', '공통')
@@ -225,14 +224,14 @@ class DBManager:
         except Exception as e: return (False, str(e))
 
     # =========================================================
-    # [V212] 📦 소모품 재고관리 (Inventory)
+    # [V220] 📦 소모품 재고관리 (Inventory)
     # =========================================================
     def get_inventory_items(self):
         try:
             return self.supabase.table("inventory_items").select("*").order("category").order("item_name").execute().data
         except: return []
 
-    # ⬇️ 여기가 수정된 부분입니다 (성공여부, 메시지 반환)
+    # [수정] .select() 제거, 에러 메시지 반환
     def add_inventory_item(self, cat, name, model, loc, desc, initial_qty, worker):
         try:
             clean_mfr = self._clean_text(desc) 
@@ -245,16 +244,17 @@ class DBManager:
                 "description": desc,
                 "current_qty": 0 
             }
-            res = self.supabase.table("inventory_items").insert(payload).select().execute()
+            # [Fix] .select() 제거 -> 'SyncQueryRequestBuilder' 에러 해결
+            res = self.supabase.table("inventory_items").insert(payload).execute()
             
             if res.data:
                 new_item_id = res.data[0]['id']
                 if initial_qty > 0:
                     self.log_inventory_change(new_item_id, "입고", initial_qty, worker, "신규 품목 등록 (초기 재고)")
-                return True, "성공"  # 🟢 성공 메시지 추가
-            return False, "데이터베이스 응답이 없습니다." # 🔴 실패 메시지
+                return True, "성공"
+            return False, "데이터베이스가 응답하지 않습니다."
         except Exception as e: 
-            return False, str(e) # 🔴 실제 에러 내용을 반환
+            return False, str(e)
 
     def log_inventory_change(self, item_id, c_type, qty, worker, reason):
         try:
