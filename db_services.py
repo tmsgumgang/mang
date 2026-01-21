@@ -261,3 +261,66 @@ class DBManager:
             res = self.supabase.table(table_name).delete().eq("id", row_id).execute()
             return (True, "성공") if res.data else (False, "실패")
         except Exception as e: return (False, str(e))
+
+    # =========================================================
+    # [V210] 📦 소모품 재고관리 (Inventory) - [NEW]
+    # =========================================================
+    def get_inventory_items(self):
+        """재고 현황 전체 조회 (카테고리순 정렬)"""
+        try:
+            return self.supabase.table("inventory_items").select("*").order("category").order("item_name").execute().data
+        except: return []
+
+    def add_inventory_item(self, cat, name, model, loc, desc, min_q):
+        """새로운 품목 등록 (초기 재고 0)"""
+        try:
+            # 정제 적용
+            clean_mfr = self._clean_text(desc) # 설명란에 제조사가 있다면.. (일단 desc는 설명으로 씀)
+            
+            payload = {
+                "category": cat,
+                "item_name": name,
+                "model_name": model,
+                "location": loc,
+                "description": desc,
+                "min_qty": min_q,
+                "current_qty": 0  # 초기값 0
+            }
+            res = self.supabase.table("inventory_items").insert(payload).execute()
+            return True if res.data else False
+        except: return False
+
+    def log_inventory_change(self, item_id, c_type, qty, worker, reason):
+        """
+        입/출고/조정 로그 기록
+        * 이 함수가 실행되면 Supabase의 Trigger가 자동으로 inventory_items의 수량을 조절합니다.
+        """
+        try:
+            payload = {
+                "item_id": item_id,
+                "change_type": c_type,
+                "quantity": qty,
+                "worker_name": worker,
+                "reason": reason
+            }
+            res = self.supabase.table("inventory_logs").insert(payload).execute()
+            return True if res.data else False
+        except Exception as e:
+            print(f"Inventory Log Error: {e}")
+            return False
+
+    def delete_inventory_item(self, item_id):
+        """품목 삭제 (주의: 로그도 같이 삭제됨 - CASCADE)"""
+        try:
+            self.supabase.table("inventory_items").delete().eq("id", item_id).execute()
+            return True
+        except: return False
+    
+    def get_inventory_logs(self, item_id=None):
+        """최근 로그 조회 (특정 아이템 or 전체)"""
+        try:
+            query = self.supabase.table("inventory_logs").select("*, inventory_items(item_name)").order("created_at", desc=True).limit(50)
+            if item_id:
+                query = query.eq("item_id", item_id)
+            return query.execute().data
+        except: return []
