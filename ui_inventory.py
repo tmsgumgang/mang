@@ -4,9 +4,9 @@ import pandas as pd
 
 def show_inventory_ui(db):
     """
-    [V212] 소모품 재고관리 시스템 UI
-    - 적정 재고(min_qty) 입력 및 경고 기능 완전 제거
-    - DB 함수 인자 갯수 불일치(TypeError) 해결
+    [V213] 소모품 재고관리 시스템 UI
+    - 적정 재고(min_qty) 관련 로직 완전 제거 (DB 서비스 V212와 호환)
+    - 인자 개수 불일치 에러 해결
     """
     st.title("📦 소모품 재고관리 센터")
     
@@ -14,7 +14,7 @@ def show_inventory_ui(db):
     tab1, tab2, tab3, tab4 = st.tabs(["📊 재고 현황판", "⚡ 입/출고(현장용)", "⚙️ 품목 등록/관리", "📜 이력 조회"])
 
     # ------------------------------------------------------------------
-    # [Tab 1] 재고 현황판 (Simple Dashboard)
+    # [Tab 1] 재고 현황판
     # ------------------------------------------------------------------
     with tab1:
         st.markdown("### 🚦 실시간 재고 목록")
@@ -25,20 +25,17 @@ def show_inventory_ui(db):
         if not items:
             st.info("등록된 품목이 없습니다. [⚙️ 품목 등록/관리] 탭에서 품목을 등록해주세요.")
         else:
-            # [삭제됨] 재고 부족 경고(RED ZONE) 로직 전체 제거
-            
-            # 2. 전체 재고 리스트 (GREEN ZONE)
-            # 필터링 기능
+            # 1. 필터링 기능
             cat_list = ["전체"] + sorted(list(set([i['category'] for i in items])))
             selected_cat = st.selectbox("카테고리 필터", cat_list)
             
-            # 필터 적용
+            # 2. 필터 적용
             display_items = items if selected_cat == "전체" else [i for i in items if i['category'] == selected_cat]
             
-            # 테이블 형태로 깔끔하게 보여주기 (Pandas 활용)
+            # 3. 테이블 출력 (적정재고 컬럼 제거됨)
             if display_items:
                 df = pd.DataFrame(display_items)
-                # 컬럼명 한글 매핑 (적정재고 min_qty 제외)
+                # 컬럼명 한글 매핑
                 df_show = df[['category', 'item_name', 'model_name', 'location', 'current_qty']].copy()
                 df_show.columns = ['분류', '품명', '규격/모델', '위치', '현재 수량']
                 st.dataframe(df_show, use_container_width=True, hide_index=True)
@@ -46,11 +43,10 @@ def show_inventory_ui(db):
                 st.info("해당 카테고리의 품목이 없습니다.")
 
     # ------------------------------------------------------------------
-    # [Tab 2] 간편 입/출고 (Quick Action)
+    # [Tab 2] 간편 입/출고
     # ------------------------------------------------------------------
     with tab2:
         st.markdown("### ⚡ 현장 입/출고 처리")
-        st.caption("작업자 이름을 입력하고, 수량을 조절한 뒤 버튼을 누르세요.")
         
         items = db.get_inventory_items()
         if not items:
@@ -67,11 +63,10 @@ def show_inventory_ui(db):
                 st.warning("검색 결과가 없습니다.")
             
             for item in target_items:
-                # 카드 형태의 디자인
                 with st.expander(f"📦 [{item['category']}] {item['item_name']} (현재: {item['current_qty']}개)", expanded=False):
                     st.markdown(f"- **규격:** {item['model_name']} / **위치:** {item.get('location', '-')}")
                     
-                    # 입력 폼 (Unique Key 필수)
+                    # 입력 폼
                     c_worker, c_qty = st.columns([1, 1])
                     worker = c_worker.text_input("작업자(닉네임)", key=f"w_{item['id']}")
                     qty = c_qty.number_input("수량", min_value=1, value=1, key=f"q_{item['id']}")
@@ -87,7 +82,7 @@ def show_inventory_ui(db):
                                 st.success(f"{qty}개 입고 완료!"); time.sleep(0.5); st.rerun()
                             else: st.error("처리 실패")
                     
-                    # [출고] 버튼 (재고 부족 체크)
+                    # [출고] 버튼
                     if b2.button("📤 출고 (-)", key=f"out_{item['id']}", use_container_width=True):
                         if not worker: st.error("작업자 이름을 입력하세요.")
                         elif item['current_qty'] < qty: st.error(f"재고가 부족합니다! (현재 {item['current_qty']}개)")
@@ -97,12 +92,12 @@ def show_inventory_ui(db):
                             else: st.error("처리 실패")
 
     # ------------------------------------------------------------------
-    # [Tab 3] 품목 등록 및 관리 (Master Data)
+    # [Tab 3] 품목 등록 및 관리 (min_q 삭제 완료)
     # ------------------------------------------------------------------
     with tab3:
         st.markdown("### ⚙️ 신규 품목 등록 (초기 입고)")
         
-        with st.form("add_item_form_v212"):
+        with st.form("add_item_form_v213"):
             st.markdown("#### 1. 품목 기본 정보")
             c1, c2 = st.columns(2)
             cat = c1.selectbox("분류", ["시약", "필터", "튜브/배관", "센서/전극", "기타 소모품"])
@@ -113,22 +108,22 @@ def show_inventory_ui(db):
             loc = c4.text_input("보관 위치", placeholder="예: 시약장 1층")
             
             desc = st.text_input("제조사/비고", placeholder="예: 시마즈")
-            # [삭제됨] min_q 입력란 제거
+            # [삭제됨] 적정재고(min_q) 입력칸 제거
             
             st.divider()
             
-            # [NEW] 초기 재고 및 등록자 정보 입력
+            # 초기 재고 설정
             st.markdown("#### 2. 초기 재고 설정 (선택)")
             c5, c6 = st.columns(2)
             reg_worker = c5.text_input("등록자(닉네임)", placeholder="본인 이름 (필수)")
-            init_qty = c6.number_input("초기 보유 수량", min_value=0, value=0, help="현재 가지고 있는 수량을 입력하면 자동으로 입고 처리됩니다.")
+            init_qty = c6.number_input("초기 보유 수량", min_value=0, value=0, help="현재 수량을 입력하면 입고 처리됩니다.")
             
             if st.form_submit_button("💾 품목 및 재고 저장"):
                 if name:
                     if not reg_worker:
                         st.error("이력 관리를 위해 등록자 이름은 필수입니다.")
                     else:
-                        # [Updated] 함수 호출 인자 7개 (min_q 제거됨)
+                        # [핵심 수정] min_q 인자를 제거하고 7개만 전달!
                         if db.add_inventory_item(cat, name, model, loc, desc, init_qty, reg_worker):
                             st.success(f"[{name}] 등록 완료! (초기 재고 {init_qty}개 반영됨)"); time.sleep(1.5); st.rerun()
                         else: st.error("등록 실패")
@@ -148,7 +143,7 @@ def show_inventory_ui(db):
                         st.warning("삭제되었습니다."); time.sleep(0.5); st.rerun()
 
     # ------------------------------------------------------------------
-    # [Tab 4] 이력 조회 (Logs)
+    # [Tab 4] 이력 조회
     # ------------------------------------------------------------------
     with tab4:
         st.markdown("### 📜 입/출고 전체 이력")
@@ -159,7 +154,6 @@ def show_inventory_ui(db):
         if logs:
             for log in logs:
                 item_name = log['inventory_items']['item_name'] if log.get('inventory_items') else "삭제된 품목"
-                # 아이콘 설정
                 icon = "📥" if log['change_type'] == "입고" else "📤" if log['change_type'] == "출고" else "🔄"
                 color = "blue" if log['change_type'] == "입고" else "red" if log['change_type'] == "출고" else "green"
                 
