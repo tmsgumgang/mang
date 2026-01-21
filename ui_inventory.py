@@ -4,8 +4,9 @@ import pandas as pd
 
 def show_inventory_ui(db):
     """
-    [V219] 소모품 재고관리 시스템 UI - 충돌 방지 버전
-    - DB 서비스 버전이 안 맞아도 앱이 뻗지 않도록 안전장치 추가 (TypeError 방지)
+    [V221] 소모품 재고관리 시스템 UI
+    - 대시보드(Tab 1) 테이블 컬럼 개편: 분류 삭제, 제조사 추가, 순서 재배치
+    - DB 서비스(V220)와 호환 확인 완료
     """
     st.title("📦 소모품 재고관리 센터")
     
@@ -13,7 +14,7 @@ def show_inventory_ui(db):
     tab1, tab2, tab3, tab4 = st.tabs(["📊 재고 현황판", "⚡ 입/출고(현장용)", "⚙️ 품목 등록/관리", "📜 이력 조회"])
 
     # ------------------------------------------------------------------
-    # [Tab 1] 재고 현황판
+    # [Tab 1] 재고 현황판 (수정됨)
     # ------------------------------------------------------------------
     with tab1:
         st.markdown("### 🚦 실시간 재고 목록")
@@ -22,14 +23,26 @@ def show_inventory_ui(db):
         if not items:
             st.info("등록된 품목이 없습니다. [⚙️ 품목 등록/관리] 탭에서 품목을 등록해주세요.")
         else:
+            # 1. 필터링 기능
             cat_list = ["전체"] + sorted(list(set([i['category'] for i in items])))
             selected_cat = st.selectbox("카테고리 필터", cat_list)
+            
+            # 2. 필터 적용
             display_items = items if selected_cat == "전체" else [i for i in items if i['category'] == selected_cat]
             
+            # 3. 테이블 출력 (컬럼 구성 변경)
             if display_items:
                 df = pd.DataFrame(display_items)
-                df_show = df[['category', 'item_name', 'model_name', 'location', 'current_qty']].copy()
-                df_show.columns = ['분류', '품명', '규격/모델', '위치', '현재 수량']
+                
+                # [수정] 
+                # - 'category' 열 제거 (필터로 확인 가능하므로)
+                # - 'description' 열을 '제조사'로 활용하여 맨 앞에 배치
+                # - 순서: 제조사 -> 규격/모델 -> 품명 -> 위치 -> 현재 수량
+                df_show = df[['description', 'model_name', 'item_name', 'location', 'current_qty']].copy()
+                
+                # 헤더 이름 매핑
+                df_show.columns = ['제조사', '규격/모델', '품명', '위치', '현재 수량']
+                
                 st.dataframe(df_show, use_container_width=True, hide_index=True)
             else:
                 st.info("해당 카테고리의 품목이 없습니다.")
@@ -43,7 +56,9 @@ def show_inventory_ui(db):
         if not items:
             st.warning("품목을 먼저 등록해주세요.")
         else:
+            # 검색 기능
             search_txt = st.text_input("🔍 품명 또는 모델명 검색", placeholder="예: 시약, 638-...")
+            
             target_items = items
             if search_txt:
                 target_items = [i for i in items if search_txt.lower() in i['item_name'].lower() or search_txt.lower() in (i['model_name'] or "").lower()]
@@ -54,6 +69,7 @@ def show_inventory_ui(db):
                 with st.expander(f"📦 [{item['category']}] {item['item_name']} (현재: {item['current_qty']}개)", expanded=False):
                     st.markdown(f"- **규격:** {item['model_name']} / **위치:** {item.get('location', '-')}")
                     
+                    # 입력 폼
                     c_worker, c_qty = st.columns([1, 1])
                     worker = c_worker.text_input("작업자(닉네임)", key=f"w_{item['id']}")
                     qty = c_qty.number_input("수량", min_value=1, value=1, key=f"q_{item['id']}")
@@ -77,12 +93,12 @@ def show_inventory_ui(db):
                             else: st.error("처리 실패")
 
     # ------------------------------------------------------------------
-    # [Tab 3] 품목 등록 및 관리 (안전장치 추가)
+    # [Tab 3] 품목 등록 및 관리
     # ------------------------------------------------------------------
     with tab3:
         st.markdown("### ⚙️ 신규 품목 등록 (초기 입고)")
         
-        with st.form("add_item_form_v219"):
+        with st.form("add_item_form_v221"):
             st.markdown("#### 1. 품목 기본 정보")
             c1, c2 = st.columns(2)
             cat = c1.selectbox("분류", ["시약", "필터", "튜브/배관", "센서/전극", "기타 소모품"])
@@ -95,19 +111,18 @@ def show_inventory_ui(db):
             
             st.divider()
             
+            # [NEW] 초기 재고 및 등록자 정보 입력
             st.markdown("#### 2. 초기 재고 설정 (선택)")
             c5, c6 = st.columns(2)
             reg_worker = c5.text_input("등록자(닉네임)", placeholder="본인 이름 (필수)")
-            init_qty = c6.number_input("초기 보유 수량", min_value=0, value=0)
+            init_qty = c6.number_input("초기 보유 수량", min_value=0, value=0, help="현재 가지고 있는 수량을 입력하면 자동으로 입고 처리됩니다.")
             
             if st.form_submit_button("💾 품목 및 재고 저장"):
                 if name:
                     if not reg_worker:
                         st.error("이력 관리를 위해 등록자 이름은 필수입니다.")
                     else:
-                        # ---------------------------------------------------------
                         # [핵심 수정] DB가 구버전인지 신버전인지 확인해서 처리
-                        # ---------------------------------------------------------
                         result = db.add_inventory_item(cat, name, model, loc, desc, init_qty, reg_worker)
                         
                         # 만약 결과가 True/False(불리언) 하나뿐이라면 -> 구버전 DB임
