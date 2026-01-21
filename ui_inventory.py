@@ -4,21 +4,20 @@ import pandas as pd
 
 def show_inventory_ui(db):
     """
-    [V210] 소모품 재고관리 시스템 UI
-    - 탭 1: 재고 부족 알림 및 전체 현황판
-    - 탭 2: 현장용 간편 입/출고 (버튼식)
-    - 탭 3: 마스터 데이터 관리 (품목 등록/삭제) - 초기재고/등록자 추가
+    [V212] 소모품 재고관리 시스템 UI
+    - 적정 재고(min_qty) 입력 및 경고 기능 완전 제거
+    - DB 함수 인자 갯수 불일치(TypeError) 해결
     """
     st.title("📦 소모품 재고관리 센터")
     
-    # 상단 메뉴 구성 (기록 조회 탭 추가)
+    # 상단 메뉴 구성
     tab1, tab2, tab3, tab4 = st.tabs(["📊 재고 현황판", "⚡ 입/출고(현장용)", "⚙️ 품목 등록/관리", "📜 이력 조회"])
 
     # ------------------------------------------------------------------
-    # [Tab 1] 재고 현황판 (Dashboard)
+    # [Tab 1] 재고 현황판 (Simple Dashboard)
     # ------------------------------------------------------------------
     with tab1:
-        st.markdown("### 🚦 실시간 재고 모니터링")
+        st.markdown("### 🚦 실시간 재고 목록")
         
         # 데이터 조회
         items = db.get_inventory_items()
@@ -26,23 +25,9 @@ def show_inventory_ui(db):
         if not items:
             st.info("등록된 품목이 없습니다. [⚙️ 품목 등록/관리] 탭에서 품목을 등록해주세요.")
         else:
-            # 1. 재고 부족 경고 (RED ZONE)
-            shortage_items = [i for i in items if i['current_qty'] <= i['min_qty']]
+            # [삭제됨] 재고 부족 경고(RED ZONE) 로직 전체 제거
             
-            if shortage_items:
-                st.error(f"🚨 **재고 부족 경고: {len(shortage_items)}개 품목** (주문이 필요합니다!)")
-                for item in shortage_items:
-                    with st.container():
-                        c1, c2, c3, c4 = st.columns([2, 2, 1, 1])
-                        c1.markdown(f"**{item['item_name']}**")
-                        c2.caption(f"{item['model_name']} ({item['manufacturer'] or '미지정'})")
-                        c3.markdown(f"🔴 **{item['current_qty']}**개")
-                        c4.caption(f"기준: {item['min_qty']}")
-                st.divider()
-
             # 2. 전체 재고 리스트 (GREEN ZONE)
-            st.markdown("#### ✅ 전체 보유 현황")
-            
             # 필터링 기능
             cat_list = ["전체"] + sorted(list(set([i['category'] for i in items])))
             selected_cat = st.selectbox("카테고리 필터", cat_list)
@@ -53,9 +38,9 @@ def show_inventory_ui(db):
             # 테이블 형태로 깔끔하게 보여주기 (Pandas 활용)
             if display_items:
                 df = pd.DataFrame(display_items)
-                # 컬럼명 한글 매핑
-                df_show = df[['category', 'item_name', 'model_name', 'location', 'current_qty', 'min_qty']].copy()
-                df_show.columns = ['분류', '품명', '규격/모델', '위치', '현재고', '적정재고']
+                # 컬럼명 한글 매핑 (적정재고 min_qty 제외)
+                df_show = df[['category', 'item_name', 'model_name', 'location', 'current_qty']].copy()
+                df_show.columns = ['분류', '품명', '규격/모델', '위치', '현재 수량']
                 st.dataframe(df_show, use_container_width=True, hide_index=True)
             else:
                 st.info("해당 카테고리의 품목이 없습니다.")
@@ -117,7 +102,7 @@ def show_inventory_ui(db):
     with tab3:
         st.markdown("### ⚙️ 신규 품목 등록 (초기 입고)")
         
-        with st.form("add_item_form_v210"):
+        with st.form("add_item_form_v212"):
             st.markdown("#### 1. 품목 기본 정보")
             c1, c2 = st.columns(2)
             cat = c1.selectbox("분류", ["시약", "필터", "튜브/배관", "센서/전극", "기타 소모품"])
@@ -128,7 +113,7 @@ def show_inventory_ui(db):
             loc = c4.text_input("보관 위치", placeholder="예: 시약장 1층")
             
             desc = st.text_input("제조사/비고", placeholder="예: 시마즈")
-            min_q = st.number_input("적정 재고 (이보다 적으면 경고)", min_value=0, value=5)
+            # [삭제됨] min_q 입력란 제거
             
             st.divider()
             
@@ -143,8 +128,8 @@ def show_inventory_ui(db):
                     if not reg_worker:
                         st.error("이력 관리를 위해 등록자 이름은 필수입니다.")
                     else:
-                        # DB 함수 호출 (인자 8개 전달)
-                        if db.add_inventory_item(cat, name, model, loc, desc, min_q, init_qty, reg_worker):
+                        # [Updated] 함수 호출 인자 7개 (min_q 제거됨)
+                        if db.add_inventory_item(cat, name, model, loc, desc, init_qty, reg_worker):
                             st.success(f"[{name}] 등록 완료! (초기 재고 {init_qty}개 반영됨)"); time.sleep(1.5); st.rerun()
                         else: st.error("등록 실패")
                 else:
