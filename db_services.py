@@ -223,7 +223,7 @@ class DBManager:
         except Exception as e: return (False, str(e))
 
     # =========================================================
-    # [V227] 📦 소모품 재고관리 (Inventory)
+    # [V233] 📦 소모품 재고관리 (Inventory)
     # =========================================================
     def get_inventory_items(self):
         try:
@@ -238,13 +238,38 @@ class DBManager:
             return None
         except: return None
 
+    # [NEW V230] 대시보드 직접 수정을 위한 만능 업데이트 함수
+    def update_inventory_general(self, item_id, updates, worker):
+        try:
+            # 1. 현재 상태 조회 (로그용)
+            current = self.supabase.table("inventory_items").select("*").eq("id", item_id).execute()
+            if not current.data: return False, "항목을 찾을 수 없음"
+            
+            old_data = current.data[0]
+            old_qty = old_data.get('current_qty', 0)
+            
+            # 2. 업데이트 실행
+            self.supabase.table("inventory_items").update(updates).eq("id", item_id).execute()
+            
+            # 3. 수량 변경이 포함된 경우 로그 기록
+            if 'current_qty' in updates:
+                new_qty = updates['current_qty']
+                if old_qty != new_qty:
+                    diff = new_qty - old_qty
+                    log_type = "입고" if diff > 0 else "출고"
+                    reason = f"대시보드 직접 수정 ({old_qty} → {new_qty})"
+                    self.log_inventory_change(item_id, log_type, abs(diff), worker, reason)
+            
+            return True, "수정 성공"
+        except Exception as e:
+            return False, str(e)
+
     def update_inventory_qty(self, item_id, new_qty, worker):
         try:
             current = self.supabase.table("inventory_items").select("current_qty").eq("id", item_id).execute()
             old_qty = current.data[0]['current_qty'] if current.data else 0
             
-            if old_qty == new_qty:
-                return True, "변경 없음"
+            if old_qty == new_qty: return True, "변경 없음"
 
             self.supabase.table("inventory_items").update({"current_qty": new_qty}).eq("id", item_id).execute()
             
@@ -257,11 +282,10 @@ class DBManager:
         except Exception as e:
             return False, str(e)
 
-    # [수정 V227] desc(측정기기 모델) 인자 추가 및 description 컬럼 매핑
     def add_inventory_item(self, cat, name, model, loc, mfr, measure_val, desc, initial_qty, worker):
         try:
             clean_mfr = self._clean_text(mfr)
-            clean_desc = self._clean_text(desc) # 측정기기 모델 정리
+            clean_desc = self._clean_text(desc)
             clean_measure = self._normalize_tags(measure_val)
             
             payload = {
@@ -271,7 +295,7 @@ class DBManager:
                 "location": loc,
                 "manufacturer": clean_mfr, 
                 "measurement_item": clean_measure,
-                "description": clean_desc, # DB description 컬럼에 저장
+                "description": clean_desc,
                 "current_qty": 0 
             }
             res = self.supabase.table("inventory_items").insert(payload).execute()
@@ -315,43 +339,50 @@ class DBManager:
         except: return []
 
     # =========================================================
-    # [New V231] 🤖 챗봇용 재고 검색 함수 (여기가 추가된 부분!)
+    # [V234 Final] 🤖 챗봇용 재고 검색 함수 (분류 검색 추가 + 로직 강화)
     # =========================================================
     def search_inventory_for_chat(self, query_text):
         """
         사용자 질문에서 키워드를 뽑아 재고 DB를 검색하고 결과를 텍스트로 반환
         """
         try:
-            # 1. 불용어 제거 및 키워드 추출
-            stop_words = ['재고', '수량', '몇개', '몇', '개', '있어', '있나요', '알려줘', '확인', '조회', '어디', '있니', '현황', '보여줘']
+            # 1. 불용어 제거 (검색에 방해되는 단어 삭제)
+            stop_words = ['재고', '수량', '몇개', '몇', '개', '있어', '있나요', '알려줘', '확인', '조회', '어디', '있니', '현황', '보여줘', '소모품']
             keywords = [k for k in query_text.split() if k not in stop_words and len(k) >= 2]
 
             if not keywords: return None
 
-            # 2. Supabase 검색 (OR 조건)
-            # item_name, model_name, description, manufacturer, measurement_item 모두 검색
+            # 2. Supabase 검색 쿼리 생성
+            # [수정] 'category'(분류) 컬럼도 검색 대상에 반드시 포함해야 함!
+            # [수정] '3way valve' 처럼 띄어쓰기가 있어도, '3way'가 맞으면 나오게 OR 조건 유지
             query = self.supabase.table("inventory_items").select("*")
             
             or_filters = []
             for kw in keywords:
-                # 안전하게 다 검색
-                or_filters.append(f"item_name.ilike.%{kw}%")
-                or_filters.append(f"model_name.ilike.%{kw}%")
-                or_filters.append(f"description.ilike.%{kw}%")
-                or_filters.append(f"manufacturer.ilike.%{kw}%")
+                # category, item_name, model_name, description, manufacturer 5개 컬럼 전방위 수색
+                or_filters.append(f"category.ilike.%{kw}%")        # 분류 (ex: 발광박테리아)
+                or_filters.append(f"item_name.ilike.%{kw}%")       # 품명 (ex: 배양액)
+                or_filters.append(f"model_name.ilike.%{kw}%")      # 기기모델
+                or_filters.append(f"description.ilike.%{kw}%")     # 규격
+                or_filters.append(f"manufacturer.ilike.%{kw}%")    # 제조사
+                or_filters.append(f"measurement_item.ilike.%{kw}%") # 측정항목 (ex: TOC, TN)
             
             if not or_filters: return None
             
+            # 하나라도 걸리면 가져옴
             final_filter = ",".join(or_filters)
             res = query.or_(final_filter).execute()
             
-            if not res.data: return None
+            # [중요] 결과가 없어도 챗봇이 모른척하지 않고, "찾아봤는데 없다"고 말하게 함
+            if not res.data: 
+                return f"🔍 **'{', '.join(keywords)}'**에 대한 재고 정보가 없습니다.\n(혹시 오타가 있는지 확인해주세요. 예: valve vs vavle)"
             
-            # 3. 결과 포맷팅 (챗봇이 말하기 좋게)
+            # 3. 결과 포맷팅
             results = res.data
             msg = f"📦 **재고 검색 결과 ({len(results)}건):**\n"
             
             for item in results[:10]: # 너무 많으면 10개까지만
+                cat = item.get('category', '-')
                 name = item.get('item_name', '이름없음')
                 qty = item.get('current_qty', 0)
                 loc = item.get('location', '위치미정')
@@ -362,7 +393,8 @@ class DBManager:
                 if item.get('description'): extra_info.append(item['description'])
                 info_str = f"({' / '.join(extra_info)})" if extra_info else ""
                 
-                msg += f"- **{name}**: {qty}개 (위치: {loc}) {info_str}\n"
+                # 출력 포맷: [분류] 품명: N개 ...
+                msg += f"- [{cat}] **{name}**: {qty}개 (위치: {loc}) {info_str}\n"
             
             if len(results) > 10:
                 msg += f"\n(그 외 {len(results)-10}건 더 있음)"
