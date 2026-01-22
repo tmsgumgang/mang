@@ -223,14 +223,14 @@ class DBManager:
         except Exception as e: return (False, str(e))
 
     # =========================================================
-    # [V224] 📦 소모품 재고관리 (Inventory)
+    # [V225] 📦 소모품 재고관리 (Inventory)
     # =========================================================
     def get_inventory_items(self):
         try:
             return self.supabase.table("inventory_items").select("*").order("category").order("item_name").execute().data
         except: return []
 
-    # [NEW] 이미 있는 물건인지 확인 (품명 + 모델명 기준)
+    # [NEW V225] 이미 있는 물건인지 확인 (품명 + 모델명 기준)
     def check_item_exists(self, name, model):
         try:
             # 품명과 모델명이 모두 일치하는지 확인
@@ -240,7 +240,7 @@ class DBManager:
             return None
         except: return None
 
-    # [NEW] 기존 물건의 수량 갱신 (덮어쓰기)
+    # [NEW V225] 기존 물건의 수량 갱신 (덮어쓰기)
     def update_inventory_qty(self, item_id, new_qty, worker):
         try:
             # 1. 현재 수량 조회 (로그 기록용)
