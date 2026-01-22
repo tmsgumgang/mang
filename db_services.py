@@ -403,3 +403,44 @@ class DBManager:
             
         except Exception as e:
             return f"재고 검색 중 오류 발생: {str(e)}"
+
+    # =========================================================
+    # [V236] 🕸️ 지식 그래프(Knowledge Graph) 저장 및 조회
+    # =========================================================
+    def save_knowledge_triples(self, doc_id, triples):
+        """
+        AI가 추출한 트리플(관계 데이터)을 DB에 저장합니다.
+        """
+        if not triples: return False
+        
+        try:
+            # 대량 삽입 (Bulk Insert) 준비
+            data_to_insert = []
+            for t in triples:
+                if t.get('source') and t.get('target'):
+                    data_to_insert.append({
+                        "source": self._clean_text(t['source']),
+                        "relation": t.get('relation', 'related_to'),
+                        "target": self._clean_text(t['target']),
+                        "doc_id": doc_id
+                    })
+            
+            if data_to_insert:
+                self.supabase.table("knowledge_graph").insert(data_to_insert).execute()
+                return True
+            return False
+        except Exception as e:
+            print(f"Graph Save Error: {e}")
+            return False
+
+    def search_graph_relations(self, keyword):
+        """
+        특정 키워드와 연결된 지식 그래프(인과관계)를 검색합니다.
+        """
+        try:
+            # source나 target에 키워드가 포함된 모든 관계 조회
+            res = self.supabase.table("knowledge_graph").select("*")\
+                .or_(f"source.ilike.%{keyword}%,target.ilike.%{keyword}%")\
+                .limit(20).execute()
+            return res.data
+        except: return []
