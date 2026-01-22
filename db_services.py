@@ -1,446 +1,331 @@
-from collections import Counter
+import streamlit as st
+import io
+import time
+import pdfplumber 
 
-class DBManager:
-    def __init__(self, supabase_client):
-        self.supabase = supabase_client
+# OCR 라이브러리 (없으면 비활성화)
+try:
+    import pytesseract
+    from pdf2image import convert_from_bytes
+    OCR_AVAILABLE = True
+except ImportError:
+    OCR_AVAILABLE = False
 
-    # =========================================================
-    # [Helper] 데이터 정규화
-    # =========================================================
-    def _normalize_tags(self, raw_tags):
-        if not raw_tags or str(raw_tags).lower() in ['none', 'nan', 'null']:
-            return "공통"
-        tags = [t.strip() for t in str(raw_tags).split(',')]
-        seen = set()
-        clean_tags = []
-        for tag in tags:
-            if tag and tag not in seen:
-                clean_tags.append(tag)
-                seen.add(tag)
-        return ", ".join(clean_tags) if clean_tags else "공통"
+# [V238] extract_triples_from_text 추가 임포트
+from logic_ai import extract_metadata_ai, get_embedding, clean_text_for_db, semantic_split_v143, extract_triples_from_text
 
-    def _clean_text(self, text):
-        if not text or str(text).lower() in ['none', 'nan', 'null', '미지정']:
-            return "미지정"
-        return str(text).strip()
-
-    def keep_alive(self):
-        try: self.supabase.table("knowledge_base").select("id").limit(1).execute()
-        except: pass
-
-    def get_penalty_counts(self):
-        try:
-            res = self.supabase.table("knowledge_blacklist").select("source_id").execute()
-            return Counter([r['source_id'] for r in res.data])
-        except: return {}
-
-    def save_relevance_feedback(self, query, doc_id, t_name, score, query_vec=None, reason=None):
-        try:
-            payload = {
-                "query_text": query.strip(),
-                "doc_id": doc_id,
-                "table_name": t_name,
-                "relevance_score": score,
-                "reason": reason
-            }
-            if query_vec:
-                payload["query_embedding"] = query_vec
-            self.supabase.table("relevance_feedback").insert(payload).execute()
-            return True
-        except: return False
-
-    def get_semantic_context_blacklist(self, query_vec):
-        try:
-            res = self.supabase.rpc("match_relevance_feedback_batch", {
-                "input_embedding": query_vec,
-                "match_threshold": 0.95
-            }).execute()
-            if res.data:
-                return {(item['table_name'], item['doc_id']) for item in res.data if item['relevance_score'] < 0}
-            return set()
-        except: return set()
-
-    def update_record_labels(self, table_name, row_id, mfr, model, item):
-        try:
-            clean_mfr = self._clean_text(mfr)
-            clean_model = self._clean_text(model)
-            clean_item = self._normalize_tags(item)
-            payload = {
-                "manufacturer": clean_mfr, 
-                "model_name": clean_model, 
-                "measurement_item": clean_item, 
-                "semantic_version": 1, 
-                "review_required": False
-            }
-            res = self.supabase.table(table_name).update(payload).eq("id", row_id).execute()
-            return (True, "성공") if res.data else (False, "실패")
-        except Exception as e: return (False, str(e))
-
-    def match_filtered_db(self, rpc_name, query_vec, threshold, intent, query_text, context_blacklist=None):
-        try:
-            target_item = intent.get('target_item', '공통')
-            vector_results = self.supabase.rpc(rpc_name, {"query_embedding": query_vec, "match_threshold": threshold, "match_count": 40}).execute().data or []
-            
-            keyword_results = []
-            search_candidates = set()
-            if target_item and target_item not in ['공통', '미지정', 'none', 'unknown']:
-                search_candidates.add(target_item.strip())
-                search_candidates.add(target_item.replace(" ", ""))
-            
-            if not search_candidates:
-                words = query_text.split()
-                for w in words:
-                    if len(w) >= 2 and w not in ['알려줘', '어떻게', '교체', '방법', '준비물']:
-                        search_candidates.add(w)
-            
-            if search_candidates:
-                t_name = "manual_base" if "manual" in rpc_name else "knowledge_base"
-                query_builder = self.supabase.table(t_name).select("*")
-                or_conditions = []
-                for kw in search_candidates:
-                    if not kw: continue
-                    if t_name == "manual_base":
-                        or_conditions.append(f"measurement_item.ilike.%{kw}%")
-                        or_conditions.append(f"model_name.ilike.%{kw}%")
-                        or_conditions.append(f"content.ilike.%{kw}%")
-                    else:
-                        or_conditions.append(f"measurement_item.ilike.%{kw}%")
-                        or_conditions.append(f"issue.ilike.%{kw}%")
-                        or_conditions.append(f"solution.ilike.%{kw}%")
-                
-                if or_conditions:
-                    final_filter = ",".join(or_conditions)
-                    res = query_builder.or_(final_filter).limit(10).execute()
-                    if res.data:
-                        for d in res.data:
-                            d['similarity'] = 0.99
-                            keyword_results.append(d)
-
-            merged_map = {}
-            for d in vector_results: merged_map[d['id']] = d
-            for d in keyword_results: merged_map[d['id']] = d 
-                
-            final_results_list = list(merged_map.values())
-            filtered_results = []
-            keywords = [k for k in query_text.split() if len(k) > 1]
-            t_name = "manual_base" if "manual" in rpc_name else "knowledge_base"
-
-            for d in final_results_list:
-                if context_blacklist and (t_name, d['id']) in context_blacklist:
-                    continue
-                final_score = d.get('similarity') or 0
-                content = (d.get('content') or d.get('solution') or "").lower()
-                for kw in keywords:
-                    if kw.lower() in content: final_score += 0.1
-                d['similarity'] = final_score
-                filtered_results.append(d)
-            return filtered_results
-        except Exception as e: return []
-
-    def search_keyword_fallback(self, query_text):
-        keywords = [k for k in query_text.split() if len(k) >= 2]
-        if not keywords: return []
-        target_keyword = max(keywords, key=len)
-        try:
-            response = self.supabase.table("manual_base").select("*").or_(f"content.ilike.%{target_keyword}%,model_name.ilike.%{target_keyword}%").limit(5).execute()
-            docs = response.data
-            for d in docs:
-                d['similarity'] = 0.98; d['source_table'] = 'manual_base'; d['is_verified'] = False 
-            return docs
-        except: return []
-
-    def get_community_posts(self):
-        try: return self.supabase.table("community_posts").select("*").order("created_at", desc=True).execute().data
-        except: return []
-
-    def add_community_post(self, author, title, content, mfr, model, item):
-        try:
-            payload = {"author": author, "title": title, "content": content, "manufacturer": self._clean_text(mfr), "model_name": self._clean_text(model), "measurement_item": self._normalize_tags(item)}
-            res = self.supabase.table("community_posts").insert(payload).execute()
-            return True if res.data else False
-        except: return False
-
-    def update_community_post(self, post_id, title, content, mfr, model, item):
-        try:
-            payload = {"title": title, "content": content, "manufacturer": self._clean_text(mfr), "model_name": self._clean_text(model), "measurement_item": self._normalize_tags(item)}
-            res = self.supabase.table("community_posts").update(payload).eq("id", post_id).execute()
-            return True if res.data else False
-        except: return False
-
-    def delete_community_post(self, post_id):
-        try:
-            res = self.supabase.table("community_posts").delete().eq("id", post_id).execute()
-            return True if res.data else False
-        except: return False
-
-    def get_comments(self, post_id):
-        try: return self.supabase.table("community_comments").select("*").eq("post_id", post_id).order("created_at").execute().data
-        except: return []
-
-    def add_comment(self, post_id, author, content):
-        try:
-            res = self.supabase.table("community_comments").insert({"post_id": post_id, "author": author, "content": content}).execute()
-            return True if res.data else False
-        except: return False
-
-    def promote_to_knowledge(self, issue, solution, mfr, model, item, author="익명"):
-        try:
-            from logic_ai import get_embedding
-            payload = {
-                "domain": "기술지식", "issue": issue, "solution": solution, "embedding": get_embedding(issue), 
-                "semantic_version": 1, "is_verified": True, 
-                "manufacturer": self._clean_text(mfr), "model_name": self._clean_text(model), "measurement_item": self._normalize_tags(item),
-                "registered_by": author 
-            }
-            res = self.supabase.table("knowledge_base").insert(payload).execute()
-            return (True, "성공") if res.data else (False, "실패")
-        except Exception as e: return (False, str(e))
-
-    def update_file_labels(self, table_name, file_name, mfr, model, item):
-        try:
-            clean_mfr = self._clean_text(mfr)
-            clean_model = self._clean_text(model)
-            clean_item = self._normalize_tags(item)
-            payload = {
-                "manufacturer": clean_mfr, 
-                "model_name": clean_model, 
-                "measurement_item": clean_item, 
-                "semantic_version": 1, 
-                "review_required": False
-            }
-            res = self.supabase.table(table_name).update(payload).eq("file_name", file_name).or_(f'manufacturer.eq.미지정,manufacturer.is.null,manufacturer.eq.""').execute()
-            return True, f"{len(res.data)}건 일괄 분류 완료"
-        except Exception as e: return False, str(e)
-
-    def update_vector(self, table_name, row_id, vec):
-        try: self.supabase.table(table_name).update({"embedding": vec}).eq("id", row_id).execute(); return True
-        except: return False
-
-    def delete_record(self, table_name, row_id):
-        try:
-            res = self.supabase.table(table_name).delete().eq("id", row_id).execute()
-            return (True, "성공") if res.data else (False, "실패")
-        except Exception as e: return (False, str(e))
-
-    # =========================================================
-    # [V233] 📦 소모품 재고관리 (Inventory)
-    # =========================================================
-    def get_inventory_items(self):
-        try:
-            return self.supabase.table("inventory_items").select("*").order("category").order("item_name").execute().data
-        except: return []
-
-    def check_item_exists(self, name, model):
-        try:
-            res = self.supabase.table("inventory_items").select("*").eq("item_name", name).eq("model_name", model).execute()
-            if res.data and len(res.data) > 0:
-                return res.data[0] 
-            return None
-        except: return None
-
-    # [NEW V230] 대시보드 직접 수정을 위한 만능 업데이트 함수
-    def update_inventory_general(self, item_id, updates, worker):
-        try:
-            # 1. 현재 상태 조회 (로그용)
-            current = self.supabase.table("inventory_items").select("*").eq("id", item_id).execute()
-            if not current.data: return False, "항목을 찾을 수 없음"
-            
-            old_data = current.data[0]
-            old_qty = old_data.get('current_qty', 0)
-            
-            # 2. 업데이트 실행
-            self.supabase.table("inventory_items").update(updates).eq("id", item_id).execute()
-            
-            # 3. 수량 변경이 포함된 경우 로그 기록
-            if 'current_qty' in updates:
-                new_qty = updates['current_qty']
-                if old_qty != new_qty:
-                    diff = new_qty - old_qty
-                    log_type = "입고" if diff > 0 else "출고"
-                    reason = f"대시보드 직접 수정 ({old_qty} → {new_qty})"
-                    self.log_inventory_change(item_id, log_type, abs(diff), worker, reason)
-            
-            return True, "수정 성공"
-        except Exception as e:
-            return False, str(e)
-
-    def update_inventory_qty(self, item_id, new_qty, worker):
-        try:
-            current = self.supabase.table("inventory_items").select("current_qty").eq("id", item_id).execute()
-            old_qty = current.data[0]['current_qty'] if current.data else 0
-            
-            if old_qty == new_qty: return True, "변경 없음"
-
-            self.supabase.table("inventory_items").update({"current_qty": new_qty}).eq("id", item_id).execute()
-            
-            diff = new_qty - old_qty
-            log_type = "입고" if diff > 0 else "출고"
-            reason = f"엑셀 갱신 ({old_qty} → {new_qty})"
-            
-            self.log_inventory_change(item_id, log_type, abs(diff), worker, reason)
-            return True, "갱신 성공"
-        except Exception as e:
-            return False, str(e)
-
-    def add_inventory_item(self, cat, name, model, loc, mfr, measure_val, desc, initial_qty, worker):
-        try:
-            clean_mfr = self._clean_text(mfr)
-            clean_desc = self._clean_text(desc)
-            clean_measure = self._normalize_tags(measure_val)
-            
-            payload = {
-                "category": cat,
-                "item_name": name,
-                "model_name": model,
-                "location": loc,
-                "manufacturer": clean_mfr, 
-                "measurement_item": clean_measure,
-                "description": clean_desc,
-                "current_qty": 0 
-            }
-            res = self.supabase.table("inventory_items").insert(payload).execute()
-            
-            if res.data:
-                new_item_id = res.data[0]['id']
-                if initial_qty > 0:
-                    self.log_inventory_change(new_item_id, "입고", initial_qty, worker, "신규 품목 등록 (초기 재고)")
-                return True, "성공"
-            return False, "데이터베이스가 응답하지 않습니다."
-        except Exception as e: 
-            return False, str(e)
-
-    def log_inventory_change(self, item_id, c_type, qty, worker, reason):
-        try:
-            payload = {
-                "item_id": item_id,
-                "change_type": c_type,
-                "quantity": qty,
-                "worker_name": worker,
-                "reason": reason
-            }
-            res = self.supabase.table("inventory_logs").insert(payload).execute()
-            return True if res.data else False
-        except Exception as e:
-            print(f"Inventory Log Error: {e}")
-            return False
-
-    def delete_inventory_item(self, item_id):
-        try:
-            self.supabase.table("inventory_items").delete().eq("id", item_id).execute()
-            return True
-        except: return False
+def show_admin_ui(ai_model, db):
+    st.title("🔧 관리자 및 데이터 엔지니어링")
     
-    def get_inventory_logs(self, item_id=None):
+    # [V238] 탭 구성 변경 ('🔎 그래프 조회' 추가)
+    tabs = st.tabs(["🧹 현황", "📂 매뉴얼 학습", "📝 지식 등록", "🚨 분류실", "🏗️ 재건축", "🏷️ 승인", "🔎 그래프 조회"])
+    
+    # 1. 현황 대시보드
+    with tabs[0]:
+        st.subheader("🧹 데이터 현황 대시보드")
         try:
-            query = self.supabase.table("inventory_logs").select("*, inventory_items(item_name)").order("created_at", desc=True).limit(50)
-            if item_id:
-                query = query.eq("item_id", item_id)
-            return query.execute().data
-        except: return []
+            k_cnt = db.supabase.table("knowledge_base").select("id", count="exact").execute().count
+            m_cnt = db.supabase.table("manual_base").select("id", count="exact").execute().count
+            
+            # [New] 그래프 데이터 개수 확인 (테이블 없으면 에러 방지)
+            try:
+                g_cnt = db.supabase.table("knowledge_graph").select("id", count="exact").execute().count
+            except:
+                g_cnt = 0 
+            
+            c1, c2, c3 = st.columns(3)
+            c1.metric("경험 지식", f"{k_cnt}건")
+            c2.metric("매뉴얼 데이터", f"{m_cnt}건")
+            c3.metric("🕸️ 지식 그래프", f"{g_cnt}건")
+        except:
+            st.warning("DB 연결 상태를 확인해주세요.")
 
-    # =========================================================
-    # [V234 Final] 🤖 챗봇용 재고 검색 함수 (분류 검색 추가 + 로직 강화)
-    # =========================================================
-    def search_inventory_for_chat(self, query_text):
-        """
-        사용자 질문에서 키워드를 뽑아 재고 DB를 검색하고 결과를 텍스트로 반환
-        """
-        try:
-            # 1. 불용어 제거 (검색에 방해되는 단어 삭제)
-            stop_words = ['재고', '수량', '몇개', '몇', '개', '있어', '있나요', '알려줘', '확인', '조회', '어디', '있니', '현황', '보여줘', '소모품']
-            keywords = [k for k in query_text.split() if k not in stop_words and len(k) >= 2]
+    # 2. 매뉴얼 학습 (Graph 기능 추가됨)
+    with tabs[1]:
+        show_manual_upload_ui(ai_model, db)
 
-            if not keywords: return None
+    # 3. 지식 직접 등록
+    with tabs[2]:
+        show_knowledge_reg_ui(ai_model, db)
 
-            # 2. Supabase 검색 쿼리 생성
-            # [수정] 'category'(분류) 컬럼도 검색 대상에 반드시 포함해야 함!
-            # [수정] '3way valve' 처럼 띄어쓰기가 있어도, '3way'가 맞으면 나오게 OR 조건 유지
-            query = self.supabase.table("inventory_items").select("*")
-            
-            or_filters = []
-            for kw in keywords:
-                # category, item_name, model_name, description, manufacturer 5개 컬럼 전방위 수색
-                or_filters.append(f"category.ilike.%{kw}%")        # 분류 (ex: 발광박테리아)
-                or_filters.append(f"item_name.ilike.%{kw}%")       # 품명 (ex: 배양액)
-                or_filters.append(f"model_name.ilike.%{kw}%")      # 기기모델
-                or_filters.append(f"description.ilike.%{kw}%")     # 규격
-                or_filters.append(f"manufacturer.ilike.%{kw}%")    # 제조사
-                or_filters.append(f"measurement_item.ilike.%{kw}%") # 측정항목 (ex: TOC, TN)
-            
-            if not or_filters: return None
-            
-            # 하나라도 걸리면 가져옴
-            final_filter = ",".join(or_filters)
-            res = query.or_(final_filter).execute()
-            
-            # [중요] 결과가 없어도 챗봇이 모른척하지 않고, "찾아봤는데 없다"고 말하게 함
-            if not res.data: 
-                return f"🔍 **'{', '.join(keywords)}'**에 대한 재고 정보가 없습니다.\n(혹시 오타가 있는지 확인해주세요. 예: valve vs vavle)"
-            
-            # 3. 결과 포맷팅
-            results = res.data
-            msg = f"📦 **재고 검색 결과 ({len(results)}건):**\n"
-            
-            for item in results[:10]: # 너무 많으면 10개까지만
-                cat = item.get('category', '-')
-                name = item.get('item_name', '이름없음')
-                qty = item.get('current_qty', 0)
-                loc = item.get('location', '위치미정')
-                
-                # 정보 병기 (규격, 모델 등)
-                extra_info = []
-                if item.get('model_name'): extra_info.append(item['model_name'])
-                if item.get('description'): extra_info.append(item['description'])
-                info_str = f"({' / '.join(extra_info)})" if extra_info else ""
-                
-                # 출력 포맷: [분류] 품명: N개 ...
-                msg += f"- [{cat}] **{name}**: {qty}개 (위치: {loc}) {info_str}\n"
-            
-            if len(results) > 10:
-                msg += f"\n(그 외 {len(results)-10}건 더 있음)"
-                
-            return msg
-            
-        except Exception as e:
-            return f"재고 검색 중 오류 발생: {str(e)}"
-
-    # =========================================================
-    # [V236] 🕸️ 지식 그래프(Knowledge Graph) 저장 및 조회
-    # =========================================================
-    def save_knowledge_triples(self, doc_id, triples):
-        """
-        AI가 추출한 트리플(관계 데이터)을 DB에 저장합니다.
-        """
-        if not triples: return False
+    # 4. 수동 분류실
+    with tabs[3]:
+        st.subheader("🚨 제조사 미지정 데이터 정제")
+        target = st.radio("조회 대상", ["경험", "매뉴얼"], horizontal=True, key="admin_cls_target")
+        t_name = "knowledge_base" if target == "경험" else "manual_base"
         
         try:
-            # 대량 삽입 (Bulk Insert) 준비
-            data_to_insert = []
-            for t in triples:
-                if t.get('source') and t.get('target'):
-                    data_to_insert.append({
-                        "source": self._clean_text(t['source']),
-                        "relation": t.get('relation', 'related_to'),
-                        "target": self._clean_text(t['target']),
-                        "doc_id": doc_id
-                    })
-            
-            if data_to_insert:
-                self.supabase.table("knowledge_graph").insert(data_to_insert).execute()
-                return True
-            return False
-        except Exception as e:
-            print(f"Graph Save Error: {e}")
-            return False
+            unclass = db.supabase.table(t_name).select("*").or_(f'manufacturer.eq.미지정,manufacturer.is.null,manufacturer.eq.""').limit(5).execute().data
+            if unclass:
+                for r in unclass:
+                    with st.expander(f"ID {r['id']} 상세 내용"):
+                        st.write(r.get('content') or r.get('solution') or r.get('issue'))
+                        with st.form(key=f"admin_cls_{t_name}_{r['id']}"):
+                            c1, c2, c3 = st.columns(3)
+                            n_mfr = c1.text_input("제조사 (필수)", key=f"nm_{r['id']}")
+                            n_mod = c2.text_input("모델명", key=f"no_{r['id']}")
+                            n_itm = c3.text_input("항목", key=f"ni_{r['id']}")
+                            
+                            batch_apply = st.checkbox("이 파일 일괄 적용", key=f"batch_{r['id']}") if r.get('file_name') else False
+                            
+                            b1, b2 = st.columns(2)
+                            if b1.form_submit_button("✅ 저장"):
+                                if not n_mfr.strip(): st.error("제조사 필수")
+                                else:
+                                    res = db.update_file_labels(t_name, r['file_name'], n_mfr, n_mod, n_itm) if batch_apply else db.update_record_labels(t_name, r['id'], n_mfr, n_mod, n_itm)
+                                    if res[0]: st.success(f"{res[1]}!"); time.sleep(0.5); st.rerun()
+                            if b2.form_submit_button("🗑️ 폐기"):
+                                if db.delete_record(t_name, r['id'])[0]: st.warning("삭제됨"); time.sleep(0.5); st.rerun()
+            else: st.success("✅ 분류가 필요한 데이터가 없습니다.")
+        except: st.error("데이터 로드 실패")
 
-    def search_graph_relations(self, keyword):
-        """
-        특정 키워드와 연결된 지식 그래프(인과관계)를 검색합니다.
-        """
-        try:
-            # source나 target에 키워드가 포함된 모든 관계 조회
-            res = self.supabase.table("knowledge_graph").select("*")\
-                .or_(f"source.ilike.%{keyword}%,target.ilike.%{keyword}%")\
-                .limit(20).execute()
-            return res.data
-        except: return []
+    # 5. 지식 재건축 (Graph 일괄 생성 기능 추가)
+    with tabs[4]:
+        st.subheader("🏗️ 데이터 구조 재설계 및 확장")
+        
+        c_rb1, c_rb2 = st.columns(2)
+        
+        # [A] 기존 기능: 벡터 임베딩 재생성
+        with c_rb1:
+            st.info("🔢 **벡터 인덱스(검색용)** 재구성")
+            if st.button("🛠️ 벡터 재임베딩 시작", type="primary", use_container_width=True):
+                rows = db.supabase.table("manual_base").select("id, content").execute().data
+                if rows:
+                    pb = st.progress(0)
+                    for i, r in enumerate(rows):
+                        db.update_vector("manual_base", r['id'], get_embedding(r['content']))
+                        pb.progress((i+1)/len(rows))
+                    st.success("매뉴얼 벡터 갱신 완료!")
+        
+        # [B] 신규 기능: 지식 그래프 일괄 생성 (경험 데이터 포함)
+        with c_rb2:
+            st.info("🕸️ **지식 그래프(관계도)** 일괄 생성")
+            
+            # 대상 선택 (매뉴얼 or 경험지식)
+            target_src = st.selectbox("변환 대상 선택", ["사람이 입력한 지식 (knowledge_base)", "PDF 매뉴얼 (manual_base)"])
+            
+            if st.button("🚀 그래프 변환 시작 (Graph ETL)", type="secondary", use_container_width=True):
+                table = "knowledge_base" if "사람" in target_src else "manual_base"
+                source_type_val = "knowledge" if "사람" in target_src else "manual"
+                
+                with st.status(f"'{table}' 데이터를 분석하여 연결 고리를 추출합니다...", expanded=True) as status:
+                    # 1. 데이터 가져오기
+                    data = db.supabase.table(table).select("*").execute().data
+                    if not data:
+                        st.warning("데이터가 없습니다.")
+                    else:
+                        total = len(data)
+                        count = 0
+                        pb2 = st.progress(0)
+                        
+                        for i, row in enumerate(data):
+                            # 텍스트 조합 (경험 지식은 issue + solution 합쳐서 분석)
+                            if table == "knowledge_base":
+                                text_input = f"증상/이슈: {row.get('issue','')}\n해결책/노하우: {row.get('solution','')}"
+                            else:
+                                text_input = row.get('content', '')
+                            
+                            # 2. AI 관계 추출 (형사 모드)
+                            triples = extract_triples_from_text(ai_model, text_input)
+                            
+                            # 3. DB 저장 (source_type 추가)
+                            if triples:
+                                db.save_knowledge_triples(row['id'], triples)
+                                
+                                # source_type 업데이트 (SQL 후처리 방식)
+                                # (db_services.save_knowledge_triples가 insert만 하므로, 방금 넣은 걸 찾아 업데이트하거나
+                                #  애초에 save 함수에 인자를 넘기는 게 좋지만, 기존 함수 유지를 위해 쿼리로 처리)
+                                db.supabase.table("knowledge_graph")\
+                                    .update({"source_type": source_type_val})\
+                                    .eq("doc_id", row['id'])\
+                                    .eq("source_type", "manual")\
+                                    .execute() 
+                                
+                                count += len(triples)
+                                status.write(f"✅ ID {row['id']}: {len(triples)}개 관계 발견")
+                            
+                            pb2.progress((i+1)/total)
+                        
+                        st.success(f"작업 끝! 총 {count}개의 새로운 지식 연결고리가 생성되었습니다.")
+
+    # 6. 라벨 승인
+    with tabs[5]:
+        st.subheader("🏷️ AI 라벨링 승인 대기")
+        staging = db.supabase.table("manual_base").select("*").eq("semantic_version", 2).limit(3).execute().data
+        if staging:
+            for r in staging:
+                with st.form(key=f"admin_aprv_{r['id']}"):
+                    st.write(r.get('content')[:300])
+                    mfr = st.text_input("제조사", r.get('manufacturer',''))
+                    mod = st.text_input("모델명", r.get('model_name',''))
+                    itm = st.text_input("항목", r.get('measurement_item',''))
+                    if st.form_submit_button("✅ 승인"): 
+                        db.update_record_labels("manual_base", r['id'], mfr, mod, itm)
+                        st.rerun()
+        else: st.info("승인 대기 중인 데이터가 없습니다.")
+
+    # 7. [New] 그래프 조회 (테스트용)
+    with tabs[6]:
+        st.subheader("🔎 지식 그래프(Knowledge Graph) 탐색")
+        st.info("💡 구축된 인과관계 데이터를 검색하여 연결 고리를 확인합니다.")
+        
+        g_query = st.text_input("검색할 키워드 (예: 3way valve, 누수, 헌팅)", placeholder="엔터티 입력")
+        if st.button("🕸️ 관계 추적 시작") and g_query:
+            relations = db.search_graph_relations(g_query)
+            if relations:
+                st.write(f"총 {len(relations)}건의 연결 관계 발견:")
+                for rel in relations:
+                    # source_type이 있으면 표시, 없으면 manual로 간주
+                    src_type = rel.get('source_type', 'manual')
+                    icon = "👤" if src_type == 'knowledge' else "📄"
+                    
+                    st.markdown(f"{icon} **{rel['source']}** --[{rel['relation']}]--> **{rel['target']}**")
+            else:
+                st.warning("연관된 그래프 데이터가 없습니다. '매뉴얼 학습' 또는 '재건축' 탭에서 그래프 생성을 먼저 진행해주세요.")
+
+# [V205 -> V238] 스마트 업로드 함수 (Graph 기능 통합)
+def show_manual_upload_ui(ai_model, db):
+    st.subheader("📂 PDF 매뉴얼 업로드 & 지식 그래프 구축")
+    
+    col_u1, col_u2 = st.columns([3, 1])
+    up_f = col_u1.file_uploader("PDF 파일 선택", type=["pdf"])
+    use_ocr = col_u2.checkbox("강제 OCR 사용", value=False, help="글자가 드래그되지 않는 '통이미지' 파일일 때만 켜세요.")
+    
+    # 두 가지 모드 버튼 제공
+    c1, c2 = st.columns(2)
+    btn_vector = c1.button("🚀 기본 학습 (Vector RAG)", use_container_width=True, type="primary")
+    btn_graph = c2.button("🕸️ 지식 그래프 생성 (Graph RAG)", use_container_width=True)
+    
+    if up_f and (btn_vector or btn_graph):
+        with st.status("데이터 정밀 분석 중...", expanded=True) as status:
+            try:
+                raw_text = ""
+                
+                # A. 강제 OCR 모드
+                if use_ocr and OCR_AVAILABLE:
+                    status.write("📷 OCR 엔진 강제 구동 (이미지 스캔 중)...")
+                    images = convert_from_bytes(up_f.read())
+                    total_pages = len(images)
+                    prog = st.progress(0)
+                    for idx, img in enumerate(images):
+                        raw_text += pytesseract.image_to_string(img, lang='kor+eng') + "\n"
+                        prog.progress((idx+1)/total_pages)
+                
+                # B. 스마트 텍스트 추출 (pdfplumber)
+                else:
+                    status.write("📖 고정밀 텍스트 추출 중 (pdfplumber)...")
+                    with pdfplumber.open(up_f) as pdf:
+                        pages = pdf.pages
+                        total_pages = len(pages)
+                        prog = st.progress(0)
+                        
+                        for idx, page in enumerate(pages):
+                            page_text = page.extract_text()
+                            if page_text:
+                                raw_text += page_text + "\n"
+                            else:
+                                status.write(f"⚠️ {idx+1}페이지는 텍스트가 없습니다. (이미지 가능성)")
+                            
+                            prog.progress((idx+1)/total_pages)
+
+                if len(raw_text.strip()) < 100:
+                    st.error("❌ 추출된 텍스트가 거의 없습니다! '강제 OCR 사용'을 체크하고 다시 시도해보세요.")
+                    st.stop()
+
+                # 2. 청킹 (공통)
+                status.write("✂️ 문맥 단위 분할 중...")
+                chunks = semantic_split_v143(raw_text)
+                total = len(chunks)
+                progress_bar = st.progress(0)
+
+                # =========================================================
+                # [MODE 1] 기본 학습 (Vector DB 저장)
+                # =========================================================
+                if btn_vector:
+                    for i, chunk in enumerate(chunks):
+                        status.write(f"🧠 [Vector] 지식 생성 중 ({i+1}/{total})...")
+                        
+                        meta = extract_metadata_ai(ai_model, chunk)
+                        if isinstance(meta, list): meta = meta[0] if (len(meta) > 0 and isinstance(meta[0], dict)) else {}
+                        if not isinstance(meta, dict): meta = {}
+
+                        clean_mfr = db._clean_text(meta.get('manufacturer'))
+                        clean_model = db._clean_text(meta.get('model_name'))
+                        clean_item = db._normalize_tags(meta.get('measurement_item'))
+
+                        db.supabase.table("manual_base").insert({
+                            "domain": "기술지식", 
+                            "content": clean_text_for_db(chunk), 
+                            "file_name": up_f.name, 
+                            "manufacturer": clean_mfr, 
+                            "model_name": clean_model, 
+                            "measurement_item": clean_item, 
+                            "embedding": get_embedding(chunk), 
+                            "semantic_version": 2
+                        }).execute()
+                        
+                        progress_bar.progress((i + 1) / total)
+                    
+                    st.success(f"✅ [Vector] 총 {total}개의 지식 블록이 생성되었습니다.")
+
+                # =========================================================
+                # [MODE 2] 지식 그래프 생성 (Graph RAG)
+                # =========================================================
+                elif btn_graph:
+                    status.write("🕸️ [Graph] 관계 데이터 추출 시작 (시간이 걸릴 수 있습니다)...")
+                    graph_count = 0
+                    
+                    for i, chunk in enumerate(chunks):
+                        # 1) 문서 저장 및 ID 확보 (그래프의 근거)
+                        res = db.supabase.table("manual_base").insert({
+                            "domain": "기술지식_GraphSource", 
+                            "content": clean_text_for_db(chunk),
+                            "file_name": up_f.name,
+                            "semantic_version": 2
+                        }).select("id").execute()
+                        
+                        if res.data:
+                            doc_id = res.data[0]['id']
+                            
+                            # 2) AI에게 관계 추출 명령
+                            triples = extract_triples_from_text(ai_model, chunk)
+                            
+                            # 3) 추출된 관계 저장
+                            if triples:
+                                if db.save_knowledge_triples(doc_id, triples):
+                                    graph_count += len(triples)
+                                    status.write(f"🔗 {len(triples)}개의 관계 발견! -> DB 저장 완료")
+                        
+                        progress_bar.progress((i + 1) / total)
+                    
+                    st.success(f"✅ [Graph] 총 {graph_count}개의 인과관계 데이터(Triple)가 구축되었습니다!")
+
+                time.sleep(1)
+                st.rerun()
+                
+            except Exception as e:
+                st.error(f"오류 발생: {str(e)}")
+
+# [V164 -> V209] 지식 직접 등록 함수 (작성자 추가)
+def show_knowledge_reg_ui(ai_model, db):
+    st.subheader("📝 지식 직접 등록")
+    with st.form("admin_reg_knowledge_v209"):
+        st.info("💡 현장 경험 지식을 직접 데이터베이스에 등록합니다.")
+        
+        author = st.text_input("👤 지식 제공자 (등록자)", placeholder="본인의 이름을 입력하세요 (선택 사항)")
+        f_iss = st.text_input("제목(이슈)")
+        f_sol = st.text_area("해결방법/경험지식", height=200)
+        
+        c1, c2, c3 = st.columns(3)
+        mfr = c1.text_input("제조사")
+        mod = c2.text_input("모델명")
+        itm = c3.text_input("측정항목")
+        
+        if st.form_submit_button("💾 지식 저장"):
+            if f_iss and f_sol and mfr:
+                if not author.strip(): author = "익명"
+                success, msg = db.promote_to_knowledge(f_iss, f_sol, mfr, mod, itm, author)
+                if success: st.success("✅ 저장 완료!"); time.sleep(0.5); st.rerun()
+                else: st.error(f"저장 실패: {msg}")
+            else:
+                st.error("⚠️ 제목, 해결방법, 제조사는 필수 입력 항목입니다.")
