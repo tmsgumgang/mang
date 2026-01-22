@@ -35,9 +35,21 @@ def show_search_ui(ai_model, db):
     # ----------------------------------------------------------------------
     _, main_col, _ = st.columns([1, 2, 1])
     with main_col:
-        s_mode = st.radio("검색 모드", ["업무기술 🛠️", "생활정보 🍴"], horizontal=True, label_visibility="collapsed")
-        u_threshold = st.slider("정밀도 설정", 0.0, 1.0, 0.6, 0.05)
-        user_q = st.text_input("질문 입력", placeholder="예: 시마즈 TOC 재고 있어? 또는 고장 조치", label_visibility="collapsed")
+        # [수정 V235] 검색 모드 순서 변경 (업무기술 / 소모품 재고 / 생활정보)
+        s_mode = st.radio("검색 모드", ["업무기술 🛠️", "소모품 재고 📦", "생활정보 🍴"], horizontal=True, label_visibility="collapsed")
+        
+        # 재고 모드가 아닐 때만 정밀도 슬라이더 표시
+        if s_mode != "소모품 재고 📦":
+            u_threshold = st.slider("정밀도 설정", 0.0, 1.0, 0.6, 0.05)
+        else:
+            u_threshold = 0.0 # dummy
+            
+        # 플레이스홀더 문구도 모드에 따라 다르게
+        ph_text = "예: 시마즈 TOC 고장 조치"
+        if s_mode == "소모품 재고 📦":
+            ph_text = "예: 배양액, 3way valve (단어만 입력해도 됩니다)"
+            
+        user_q = st.text_input("질문 입력", placeholder=ph_text, label_visibility="collapsed")
         search_btn = st.button("🔍 검색", use_container_width=True, type="primary")
 
     # ----------------------------------------------------------------------
@@ -50,33 +62,32 @@ def show_search_ui(ai_model, db):
             if "full_report" in st.session_state: del st.session_state.full_report
             if "streamed_summary" in st.session_state: del st.session_state.streamed_summary
 
-        # [NEW] 1. 재고 검색 우선 처리 로직
-        # 사용자가 재고 관련 단어를 언급했는지 확인
-        inventory_triggers = ["재고", "수량", "몇개", "몇 개", "개수", "현황", "있나", "있어", "남았"]
-        is_inventory_intent = any(trigger in user_q for trigger in inventory_triggers)
-
-        if is_inventory_intent:
+        # =========================================================
+        # [CASE 1] 소모품 재고 검색 모드 (Explicit Mode)
+        # =========================================================
+        if s_mode == "소모품 재고 📦":
             with st.spinner("📦 창고 데이터를 조회하고 있습니다..."):
-                # db_services.py에 추가한 함수 호출
+                # 사용자가 입력한 검색어로 바로 DB 조회 (db_services.py의 V234 함수 사용)
                 inv_result = db.search_inventory_for_chat(user_q)
             
-            # 재고 결과가 존재하면 출력하고 종료 (기술 검색 스킵)
-            if inv_result:
-                _, res_col, _ = st.columns([0.5, 3, 0.5])
-                with res_col:
-                    st.subheader("📦 실시간 재고 확인")
+            _, res_col, _ = st.columns([0.5, 3, 0.5])
+            with res_col:
+                st.subheader("📦 실시간 재고 확인")
+                
+                # 결과가 있을 때 (문자열이 리턴됨)
+                if inv_result:
+                    # 결과 텍스트를 초록색 박스에 예쁘게 출력
                     st.markdown(f'<div class="inventory-box">{inv_result.replace(chr(10), "<br>")}</div>', unsafe_allow_html=True)
-                    
-                    st.info("💡 '재고' 관련 질문이 감지되어 기술 문서 대신 재고 현황을 보여드렸습니다.")
-                    
-                    # 사용자가 실수로 검색했을 수도 있으니, 기술 검색 버튼 제공
-                    if st.button("아니요, 관련 '기술 매뉴얼'을 검색하고 싶어요"):
-                        # 재고 의도가 아니라고 판단되면 아래 기술 검색 로직으로 통과시킴
-                        pass 
-                    else:
-                        return # 재고 보여주고 끝냄
+                else:
+                    # 결과가 없을 때 (None 리턴 시) - V234에서는 메시지를 리턴하므로 이쪽은 거의 안 탐
+                    st.warning("🔍 검색 결과가 없습니다.")
+            
+            # 재고 모드에서는 여기서 로직 종료 (기술 검색 안 함)
+            return 
 
-        # 2. 일반 기술/생활 정보 검색 (기존 로직)
+        # =========================================================
+        # [CASE 2] 일반 기술/생활 정보 검색 (기존 로직 유지)
+        # =========================================================
         with st.spinner("지식을 탐색 중입니다..."):
             final, intent, q_vec = perform_unified_search(ai_model, db, user_q, u_threshold)
 
