@@ -4,10 +4,9 @@ import pandas as pd
 
 def show_inventory_ui(db):
     """
-    [V225] 소모품 재고관리 시스템 UI - 스마트 업로드 탑재
-    - 엑셀 업로드 시 '품명+규격' 중복 체크 (db.check_item_exists 활용)
-    - 중복 시: 수량 갱신 (db.update_inventory_qty 활용) & 차이만큼 로그 기록
-    - 신규 시: 새 품목 등록 (db.add_inventory_item 활용)
+    [V226] 소모품 재고관리 시스템 UI - 엑셀 다운로드 기능 추가
+    1. Tab 1: '엑셀용 파일 다운로드' 버튼 추가 (한글 깨짐 방지 utf-8-sig 적용)
+    2. Tab 3: 스마트 업로드(중복 갱신) 로직 유지
     """
     st.title("📦 소모품 재고관리 센터")
     
@@ -30,12 +29,28 @@ def show_inventory_ui(db):
             
             if display_items:
                 df = pd.DataFrame(display_items)
+                
+                # 컬럼 안전 처리
                 if 'manufacturer' not in df.columns: df['manufacturer'] = '-'
                 if 'measurement_item' not in df.columns: df['measurement_item'] = '-'
 
+                # 보여줄 컬럼 선택 및 한글 이름 변경
                 df_show = df[['manufacturer', 'measurement_item', 'model_name', 'item_name', 'location', 'current_qty']].copy()
                 df_show.columns = ['제조사', '측정항목', '규격/모델', '품명', '위치', '현재 수량']
+                
+                # 1. 화면에 표 출력
                 st.dataframe(df_show, use_container_width=True, hide_index=True)
+                
+                # 2. [NEW] 엑셀 다운로드 버튼 추가
+                # utf-8-sig 인코딩을 사용하여 엑셀에서 한글이 깨지지 않게 함
+                csv = df_show.to_csv(index=False).encode('utf-8-sig')
+                
+                st.download_button(
+                    label="📥 엑셀용 파일 다운로드 (한글 깨짐 방지)",
+                    data=csv,
+                    file_name='전체_재고_현황.csv',
+                    mime='text/csv',
+                )
             else:
                 st.info("해당 카테고리의 품목이 없습니다.")
 
