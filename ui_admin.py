@@ -11,12 +11,14 @@ try:
 except ImportError:
     OCR_AVAILABLE = False
 
-from logic_ai import extract_metadata_ai, get_embedding, clean_text_for_db, semantic_split_v143
+# [V238] extract_triples_from_text 추가 임포트
+from logic_ai import extract_metadata_ai, get_embedding, clean_text_for_db, semantic_split_v143, extract_triples_from_text
 
 def show_admin_ui(ai_model, db):
     st.title("🔧 관리자 및 데이터 엔지니어링")
     
-    tabs = st.tabs(["🧹 현황", "📂 매뉴얼 학습", "📝 지식 등록", "🚨 분류실", "🏗️ 재건축", "🏷️ 승인"])
+    # [V238] 탭 구성 변경 ('🔎 그래프 조회' 추가)
+    tabs = st.tabs(["🧹 현황", "📂 매뉴얼 학습", "📝 지식 등록", "🚨 분류실", "🏗️ 재건축", "🏷️ 승인", "🔎 그래프 조회"])
     
     # 1. 현황 대시보드
     with tabs[0]:
@@ -24,17 +26,25 @@ def show_admin_ui(ai_model, db):
         try:
             k_cnt = db.supabase.table("knowledge_base").select("id", count="exact").execute().count
             m_cnt = db.supabase.table("manual_base").select("id", count="exact").execute().count
-            c1, c2 = st.columns(2)
+            
+            # [New] 그래프 데이터 개수 확인 (테이블 없으면 에러 방지)
+            try:
+                g_cnt = db.supabase.table("knowledge_graph").select("id", count="exact").execute().count
+            except:
+                g_cnt = 0 
+            
+            c1, c2, c3 = st.columns(3)
             c1.metric("경험 지식", f"{k_cnt}건")
             c2.metric("매뉴얼 데이터", f"{m_cnt}건")
+            c3.metric("🕸️ 지식 그래프", f"{g_cnt}건")
         except:
             st.warning("DB 연결 상태를 확인해주세요.")
 
-    # 2. 매뉴얼 학습
+    # 2. 매뉴얼 학습 (Graph 기능 추가됨)
     with tabs[1]:
         show_manual_upload_ui(ai_model, db)
 
-    # 3. 지식 직접 등록 (여기가 수정됨!)
+    # 3. 지식 직접 등록
     with tabs[2]:
         show_knowledge_reg_ui(ai_model, db)
 
@@ -69,17 +79,74 @@ def show_admin_ui(ai_model, db):
             else: st.success("✅ 분류가 필요한 데이터가 없습니다.")
         except: st.error("데이터 로드 실패")
 
-    # 5. 지식 재건축
+    # 5. 지식 재건축 (Graph 일괄 생성 기능 추가)
     with tabs[4]:
-        st.subheader("🏗️ 벡터 인덱스 재구성")
-        if st.button("🛠️ 지식 재인덱싱 시작", type="primary"):
-            rows = db.supabase.table("manual_base").select("id, content").execute().data
-            if rows:
-                pb = st.progress(0)
-                for i, r in enumerate(rows):
-                    db.update_vector("manual_base", r['id'], get_embedding(r['content']))
-                    pb.progress((i+1)/len(rows))
-                st.success("완료!")
+        st.subheader("🏗️ 데이터 구조 재설계 및 확장")
+        
+        c_rb1, c_rb2 = st.columns(2)
+        
+        # [A] 기존 기능: 벡터 임베딩 재생성
+        with c_rb1:
+            st.info("🔢 **벡터 인덱스(검색용)** 재구성")
+            if st.button("🛠️ 벡터 재임베딩 시작", type="primary", use_container_width=True):
+                rows = db.supabase.table("manual_base").select("id, content").execute().data
+                if rows:
+                    pb = st.progress(0)
+                    for i, r in enumerate(rows):
+                        db.update_vector("manual_base", r['id'], get_embedding(r['content']))
+                        pb.progress((i+1)/len(rows))
+                    st.success("매뉴얼 벡터 갱신 완료!")
+        
+        # [B] 신규 기능: 지식 그래프 일괄 생성 (경험 데이터 포함)
+        with c_rb2:
+            st.info("🕸️ **지식 그래프(관계도)** 일괄 생성")
+            
+            # 대상 선택 (매뉴얼 or 경험지식)
+            target_src = st.selectbox("변환 대상 선택", ["사람이 입력한 지식 (knowledge_base)", "PDF 매뉴얼 (manual_base)"])
+            
+            if st.button("🚀 그래프 변환 시작 (Graph ETL)", type="secondary", use_container_width=True):
+                table = "knowledge_base" if "사람" in target_src else "manual_base"
+                source_type_val = "knowledge" if "사람" in target_src else "manual"
+                
+                with st.status(f"'{table}' 데이터를 분석하여 연결 고리를 추출합니다...", expanded=True) as status:
+                    # 1. 데이터 가져오기
+                    data = db.supabase.table(table).select("*").execute().data
+                    if not data:
+                        st.warning("데이터가 없습니다.")
+                    else:
+                        total = len(data)
+                        count = 0
+                        pb2 = st.progress(0)
+                        
+                        for i, row in enumerate(data):
+                            # 텍스트 조합 (경험 지식은 issue + solution 합쳐서 분석)
+                            if table == "knowledge_base":
+                                text_input = f"증상/이슈: {row.get('issue','')}\n해결책/노하우: {row.get('solution','')}"
+                            else:
+                                text_input = row.get('content', '')
+                            
+                            # 2. AI 관계 추출 (형사 모드)
+                            triples = extract_triples_from_text(ai_model, text_input)
+                            
+                            # 3. DB 저장 (source_type 추가)
+                            if triples:
+                                db.save_knowledge_triples(row['id'], triples)
+                                
+                                # source_type 업데이트 (SQL 후처리 방식)
+                                # (db_services.save_knowledge_triples가 insert만 하므로, 방금 넣은 걸 찾아 업데이트하거나
+                                #  애초에 save 함수에 인자를 넘기는 게 좋지만, 기존 함수 유지를 위해 쿼리로 처리)
+                                db.supabase.table("knowledge_graph")\
+                                    .update({"source_type": source_type_val})\
+                                    .eq("doc_id", row['id'])\
+                                    .eq("source_type", "manual")\
+                                    .execute() 
+                                
+                                count += len(triples)
+                                status.write(f"✅ ID {row['id']}: {len(triples)}개 관계 발견")
+                            
+                            pb2.progress((i+1)/total)
+                        
+                        st.success(f"작업 끝! 총 {count}개의 새로운 지식 연결고리가 생성되었습니다.")
 
     # 6. 라벨 승인
     with tabs[5]:
@@ -97,15 +164,39 @@ def show_admin_ui(ai_model, db):
                         st.rerun()
         else: st.info("승인 대기 중인 데이터가 없습니다.")
 
-# [V205] 스마트 업로드 함수
+    # 7. [New] 그래프 조회 (테스트용)
+    with tabs[6]:
+        st.subheader("🔎 지식 그래프(Knowledge Graph) 탐색")
+        st.info("💡 구축된 인과관계 데이터를 검색하여 연결 고리를 확인합니다.")
+        
+        g_query = st.text_input("검색할 키워드 (예: 3way valve, 누수, 헌팅)", placeholder="엔터티 입력")
+        if st.button("🕸️ 관계 추적 시작") and g_query:
+            relations = db.search_graph_relations(g_query)
+            if relations:
+                st.write(f"총 {len(relations)}건의 연결 관계 발견:")
+                for rel in relations:
+                    # source_type이 있으면 표시, 없으면 manual로 간주
+                    src_type = rel.get('source_type', 'manual')
+                    icon = "👤" if src_type == 'knowledge' else "📄"
+                    
+                    st.markdown(f"{icon} **{rel['source']}** --[{rel['relation']}]--> **{rel['target']}**")
+            else:
+                st.warning("연관된 그래프 데이터가 없습니다. '매뉴얼 학습' 또는 '재건축' 탭에서 그래프 생성을 먼저 진행해주세요.")
+
+# [V205 -> V238] 스마트 업로드 함수 (Graph 기능 통합)
 def show_manual_upload_ui(ai_model, db):
-    st.subheader("📂 PDF 매뉴얼 업로드 (V205 Smart Engine)")
+    st.subheader("📂 PDF 매뉴얼 업로드 & 지식 그래프 구축")
     
     col_u1, col_u2 = st.columns([3, 1])
     up_f = col_u1.file_uploader("PDF 파일 선택", type=["pdf"])
     use_ocr = col_u2.checkbox("강제 OCR 사용", value=False, help="글자가 드래그되지 않는 '통이미지' 파일일 때만 켜세요.")
     
-    if up_f and st.button("🚀 학습 시작", use_container_width=True, type="primary"):
+    # 두 가지 모드 버튼 제공
+    c1, c2 = st.columns(2)
+    btn_vector = c1.button("🚀 기본 학습 (Vector RAG)", use_container_width=True, type="primary")
+    btn_graph = c2.button("🕸️ 지식 그래프 생성 (Graph RAG)", use_container_width=True)
+    
+    if up_f and (btn_vector or btn_graph):
         with st.status("데이터 정밀 분석 중...", expanded=True) as status:
             try:
                 raw_text = ""
@@ -137,47 +228,78 @@ def show_manual_upload_ui(ai_model, db):
                             
                             prog.progress((idx+1)/total_pages)
 
-                # 텍스트 품질 점검
                 if len(raw_text.strip()) < 100:
                     st.error("❌ 추출된 텍스트가 거의 없습니다! '강제 OCR 사용'을 체크하고 다시 시도해보세요.")
                     st.stop()
 
-                # 2. 청킹
+                # 2. 청킹 (공통)
                 status.write("✂️ 문맥 단위 분할 중...")
                 chunks = semantic_split_v143(raw_text)
-                
-                # 3. AI 분석 및 저장
-                progress_bar = st.progress(0)
                 total = len(chunks)
-                
-                for i, chunk in enumerate(chunks):
-                    status.write(f"🧠 지식 생성 중 ({i+1}/{total})...")
-                    
-                    meta = extract_metadata_ai(ai_model, chunk)
-                    
-                    if isinstance(meta, list):
-                        meta = meta[0] if (len(meta) > 0 and isinstance(meta[0], dict)) else {}
-                    if not isinstance(meta, dict): meta = {}
+                progress_bar = st.progress(0)
 
-                    clean_mfr = db._clean_text(meta.get('manufacturer'))
-                    clean_model = db._clean_text(meta.get('model_name'))
-                    clean_item = db._normalize_tags(meta.get('measurement_item'))
+                # =========================================================
+                # [MODE 1] 기본 학습 (Vector DB 저장)
+                # =========================================================
+                if btn_vector:
+                    for i, chunk in enumerate(chunks):
+                        status.write(f"🧠 [Vector] 지식 생성 중 ({i+1}/{total})...")
+                        
+                        meta = extract_metadata_ai(ai_model, chunk)
+                        if isinstance(meta, list): meta = meta[0] if (len(meta) > 0 and isinstance(meta[0], dict)) else {}
+                        if not isinstance(meta, dict): meta = {}
 
-                    db.supabase.table("manual_base").insert({
-                        "domain": "기술지식", 
-                        "content": clean_text_for_db(chunk), 
-                        "file_name": up_f.name, 
-                        "manufacturer": clean_mfr, 
-                        "model_name": clean_model, 
-                        "measurement_item": clean_item, 
-                        "embedding": get_embedding(chunk), 
-                        "semantic_version": 2
-                    }).execute()
+                        clean_mfr = db._clean_text(meta.get('manufacturer'))
+                        clean_model = db._clean_text(meta.get('model_name'))
+                        clean_item = db._normalize_tags(meta.get('measurement_item'))
+
+                        db.supabase.table("manual_base").insert({
+                            "domain": "기술지식", 
+                            "content": clean_text_for_db(chunk), 
+                            "file_name": up_f.name, 
+                            "manufacturer": clean_mfr, 
+                            "model_name": clean_model, 
+                            "measurement_item": clean_item, 
+                            "embedding": get_embedding(chunk), 
+                            "semantic_version": 2
+                        }).execute()
+                        
+                        progress_bar.progress((i + 1) / total)
                     
-                    progress_bar.progress((i + 1) / total)
-                
-                status.update(label="✅ 학습 완료! 완벽하게 추출되었습니다.", state="complete", expanded=False)
-                st.success(f"총 {total}개의 고품질 지식 블록이 생성되었습니다.")
+                    st.success(f"✅ [Vector] 총 {total}개의 지식 블록이 생성되었습니다.")
+
+                # =========================================================
+                # [MODE 2] 지식 그래프 생성 (Graph RAG)
+                # =========================================================
+                elif btn_graph:
+                    status.write("🕸️ [Graph] 관계 데이터 추출 시작 (시간이 걸릴 수 있습니다)...")
+                    graph_count = 0
+                    
+                    for i, chunk in enumerate(chunks):
+                        # 1) 문서 저장 및 ID 확보 (그래프의 근거)
+                        res = db.supabase.table("manual_base").insert({
+                            "domain": "기술지식_GraphSource", 
+                            "content": clean_text_for_db(chunk),
+                            "file_name": up_f.name,
+                            "semantic_version": 2
+                        }).select("id").execute()
+                        
+                        if res.data:
+                            doc_id = res.data[0]['id']
+                            
+                            # 2) AI에게 관계 추출 명령
+                            triples = extract_triples_from_text(ai_model, chunk)
+                            
+                            # 3) 추출된 관계 저장
+                            if triples:
+                                if db.save_knowledge_triples(doc_id, triples):
+                                    graph_count += len(triples)
+                                    status.write(f"🔗 {len(triples)}개의 관계 발견! -> DB 저장 완료")
+                        
+                        progress_bar.progress((i + 1) / total)
+                    
+                    st.success(f"✅ [Graph] 총 {graph_count}개의 인과관계 데이터(Triple)가 구축되었습니다!")
+
                 time.sleep(1)
                 st.rerun()
                 
@@ -190,9 +312,7 @@ def show_knowledge_reg_ui(ai_model, db):
     with st.form("admin_reg_knowledge_v209"):
         st.info("💡 현장 경험 지식을 직접 데이터베이스에 등록합니다.")
         
-        # [NEW] 작성자(등록자) 입력칸 추가
         author = st.text_input("👤 지식 제공자 (등록자)", placeholder="본인의 이름을 입력하세요 (선택 사항)")
-        
         f_iss = st.text_input("제목(이슈)")
         f_sol = st.text_area("해결방법/경험지식", height=200)
         
@@ -203,12 +323,8 @@ def show_knowledge_reg_ui(ai_model, db):
         
         if st.form_submit_button("💾 지식 저장"):
             if f_iss and f_sol and mfr:
-                # [Update] author(등록자)를 마지막 인자로 전달 (없으면 '익명' 처리됨)
-                if not author.strip():
-                    author = "익명"
-                    
+                if not author.strip(): author = "익명"
                 success, msg = db.promote_to_knowledge(f_iss, f_sol, mfr, mod, itm, author)
-                
                 if success: st.success("✅ 저장 완료!"); time.sleep(0.5); st.rerun()
                 else: st.error(f"저장 실패: {msg}")
             else:
