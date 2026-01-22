@@ -224,7 +224,7 @@ def show_manual_upload_ui(ai_model, db):
                             if page_text:
                                 raw_text += page_text + "\n"
                             else:
-                                status.write(f"⚠️ {idx+1}페이지는 텍스트가 없습니다. (이미지일 가능성)")
+                                status.write(f"⚠️ {idx+1}페이지는 텍스트가 없습니다. (이미지 가능성)")
                             
                             prog.progress((idx+1)/total_pages)
 
