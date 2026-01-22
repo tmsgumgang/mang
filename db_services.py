@@ -313,3 +313,61 @@ class DBManager:
                 query = query.eq("item_id", item_id)
             return query.execute().data
         except: return []
+
+    # =========================================================
+    # [New V231] 🤖 챗봇용 재고 검색 함수 (여기가 추가된 부분!)
+    # =========================================================
+    def search_inventory_for_chat(self, query_text):
+        """
+        사용자 질문에서 키워드를 뽑아 재고 DB를 검색하고 결과를 텍스트로 반환
+        """
+        try:
+            # 1. 불용어 제거 및 키워드 추출
+            stop_words = ['재고', '수량', '몇개', '몇', '개', '있어', '있나요', '알려줘', '확인', '조회', '어디', '있니', '현황', '보여줘']
+            keywords = [k for k in query_text.split() if k not in stop_words and len(k) >= 2]
+
+            if not keywords: return None
+
+            # 2. Supabase 검색 (OR 조건)
+            # item_name, model_name, description, manufacturer, measurement_item 모두 검색
+            query = self.supabase.table("inventory_items").select("*")
+            
+            or_filters = []
+            for kw in keywords:
+                # 안전하게 다 검색
+                or_filters.append(f"item_name.ilike.%{kw}%")
+                or_filters.append(f"model_name.ilike.%{kw}%")
+                or_filters.append(f"description.ilike.%{kw}%")
+                or_filters.append(f"manufacturer.ilike.%{kw}%")
+            
+            if not or_filters: return None
+            
+            final_filter = ",".join(or_filters)
+            res = query.or_(final_filter).execute()
+            
+            if not res.data: return None
+            
+            # 3. 결과 포맷팅 (챗봇이 말하기 좋게)
+            results = res.data
+            msg = f"📦 **재고 검색 결과 ({len(results)}건):**\n"
+            
+            for item in results[:10]: # 너무 많으면 10개까지만
+                name = item.get('item_name', '이름없음')
+                qty = item.get('current_qty', 0)
+                loc = item.get('location', '위치미정')
+                
+                # 정보 병기 (규격, 모델 등)
+                extra_info = []
+                if item.get('model_name'): extra_info.append(item['model_name'])
+                if item.get('description'): extra_info.append(item['description'])
+                info_str = f"({' / '.join(extra_info)})" if extra_info else ""
+                
+                msg += f"- **{name}**: {qty}개 (위치: {loc}) {info_str}\n"
+            
+            if len(results) > 10:
+                msg += f"\n(그 외 {len(results)-10}건 더 있음)"
+                
+            return msg
+            
+        except Exception as e:
+            return f"재고 검색 중 오류 발생: {str(e)}"
