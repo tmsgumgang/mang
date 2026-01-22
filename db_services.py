@@ -76,7 +76,6 @@ class DBManager:
             return (True, "성공") if res.data else (False, "실패")
         except Exception as e: return (False, str(e))
 
-    # [V198] 검색 엔진
     def match_filtered_db(self, rpc_name, query_vec, threshold, intent, query_text, context_blacklist=None):
         try:
             target_item = intent.get('target_item', '공통')
@@ -224,17 +223,51 @@ class DBManager:
         except Exception as e: return (False, str(e))
 
     # =========================================================
-    # [V223] 📦 소모품 재고관리 (Inventory)
+    # [V224] 📦 소모품 재고관리 (Inventory)
     # =========================================================
     def get_inventory_items(self):
         try:
             return self.supabase.table("inventory_items").select("*").order("category").order("item_name").execute().data
         except: return []
 
-    # [수정됨 V223] 인자 변경: mfr(제조사), measure_val(측정항목) 추가
+    # [NEW] 이미 있는 물건인지 확인 (품명 + 모델명 기준)
+    def check_item_exists(self, name, model):
+        try:
+            # 품명과 모델명이 모두 일치하는지 확인
+            res = self.supabase.table("inventory_items").select("*").eq("item_name", name).eq("model_name", model).execute()
+            if res.data and len(res.data) > 0:
+                return res.data[0] # 찾은 물건의 전체 정보 반환
+            return None
+        except: return None
+
+    # [NEW] 기존 물건의 수량 갱신 (덮어쓰기)
+    def update_inventory_qty(self, item_id, new_qty, worker):
+        try:
+            # 1. 현재 수량 조회 (로그 기록용)
+            current = self.supabase.table("inventory_items").select("current_qty").eq("id", item_id).execute()
+            old_qty = current.data[0]['current_qty'] if current.data else 0
+            
+            # 2. 변동이 없으면 패스
+            if old_qty == new_qty:
+                return True, "변경 없음"
+
+            # 3. 수량 업데이트 (DB 반영)
+            self.supabase.table("inventory_items").update({"current_qty": new_qty}).eq("id", item_id).execute()
+            
+            # 4. 차이만큼 로그 기록
+            diff = new_qty - old_qty
+            log_type = "입고" if diff > 0 else "출고"
+            reason = f"엑셀 갱신 ({old_qty} → {new_qty})"
+            
+            self.log_inventory_change(item_id, log_type, abs(diff), worker, reason)
+            
+            return True, "갱신 성공"
+        except Exception as e:
+            return False, str(e)
+
+    # [기존] 신규 등록
     def add_inventory_item(self, cat, name, model, loc, mfr, measure_val, initial_qty, worker):
         try:
-            # 제조사와 측정항목 문자열 처리
             clean_mfr = self._clean_text(mfr)
             clean_measure = self._normalize_tags(measure_val)
             
@@ -243,11 +276,10 @@ class DBManager:
                 "item_name": name,
                 "model_name": model,
                 "location": loc,
-                "manufacturer": clean_mfr,       # DB 'manufacturer' 매핑
-                "measurement_item": clean_measure, # DB 'measurement_item' 매핑
+                "manufacturer": clean_mfr, 
+                "measurement_item": clean_measure, 
                 "current_qty": 0 
             }
-            # Insert 실행
             res = self.supabase.table("inventory_items").insert(payload).execute()
             
             if res.data:
