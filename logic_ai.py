@@ -155,4 +155,40 @@ def generate_relevant_summary(ai_model, query, data):
     res = ai_model.generate_content(prompt)
     return res.text
 
-# [End of File]
+# --------------------------------------------------------------------------------
+# [NEW V236] Graph RAG 관계 추출 엔진 (형사 모드 🕵️‍♂️)
+# --------------------------------------------------------------------------------
+def extract_triples_from_text(ai_model, text):
+    """
+    텍스트에서 (주어) -> [관계] -> (목적어) 트리플을 추출합니다.
+    """
+    # Graph Extraction 전용 프롬프트 (여기에 직접 정의하여 의존성 제거)
+    graph_prompt = f"""
+    You are an expert Data Engineer specializing in Knowledge Graphs.
+    Analyze the provided technical text and extract relationships between entities.
+    
+    Target Entities: Device, Part, Symptom, Cause, Solution, Action, Value, Location.
+    Target Relations: 
+    - causes (원인이다)
+    - part_of (의 부품이다)
+    - located_in (에 위치한다)
+    - solved_by (로 해결된다)
+    - has_status (상태를 가진다)
+    - requires (을 필요로 한다)
+
+    Return ONLY a JSON array of objects. No markdown, no explanations.
+    Format: [{{"source": "Entity A", "relation": "relation_type", "target": "Entity B"}}]
+
+    Text to Analyze:
+    {text[:2500]}
+    """
+    
+    try:
+        res = ai_model.generate_content(graph_prompt)
+        triples = extract_json(res.text)
+        if triples and isinstance(triples, list):
+            return triples
+        return []
+    except Exception as e:
+        print(f"Graph Extraction Error: {e}")
+        return []
