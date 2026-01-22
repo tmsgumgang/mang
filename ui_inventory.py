@@ -4,10 +4,10 @@ import pandas as pd
 
 def show_inventory_ui(db):
     """
-    [V224] 소모품 재고관리 시스템 UI - 스마트 업로드 탑재
-    - 엑셀 업로드 시 '품명+규격' 중복 체크
-    - 중복 시: 수량 갱신 (Update) & 차이만큼 로그 기록
-    - 신규 시: 새 품목 등록 (Insert)
+    [V225] 소모품 재고관리 시스템 UI - 스마트 업로드 탑재
+    - 엑셀 업로드 시 '품명+규격' 중복 체크 (db.check_item_exists 활용)
+    - 중복 시: 수량 갱신 (db.update_inventory_qty 활용) & 차이만큼 로그 기록
+    - 신규 시: 새 품목 등록 (db.add_inventory_item 활용)
     """
     st.title("📦 소모품 재고관리 센터")
     
@@ -93,7 +93,7 @@ def show_inventory_ui(db):
         # [3-1] 개별 등록
         with sub_tab1:
             st.markdown("### ⚙️ 신규 품목 등록 (초기 입고)")
-            with st.form("add_item_form_v224"):
+            with st.form("add_item_form_v225"):
                 st.markdown("#### 1. 품목 기본 정보")
                 c1, c2 = st.columns(2)
                 cat = c1.selectbox("분류", ["시약", "필터", "튜브/배관", "센서/전극", "기타 소모품"])
