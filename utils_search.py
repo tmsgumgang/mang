@@ -39,7 +39,9 @@ def filter_candidates_logic(candidates, intent, penalties, strict_mode=True):
 
     for d in candidates:
         u_key = f"{'EXP' if 'solution' in d else 'MAN'}_{d.get('id')}"
-        if d.get('semantic_version') != 1: continue
+        if d.get('semantic_version') != 1 and d.get('source_table') != 'knowledge_graph': # [V239] 그래프 데이터는 버전체크 패스
+            if d.get('semantic_version') != 1 and d.get('semantic_version') != 2: # V237부터 semantic_version 2 사용함
+                continue
 
         # 2. 문서(Doc) 데이터 정규화
         d_mfr_raw = str(d.get('manufacturer') or '')
@@ -62,8 +64,9 @@ def filter_candidates_logic(candidates, intent, penalties, strict_mode=True):
         if strict_mode:
             # ---------------------------------------------------------------
             # [V205 핵심] 키워드 히트(강제발굴) 데이터는 필터 검사를 면제
+            # [V239 추가] 지식 그래프(knowledge_graph) 데이터도 면제 (유사도 0.99)
             # ---------------------------------------------------------------
-            if not is_keyword_hit:
+            if not is_keyword_hit and d.get('source_table') != 'knowledge_graph':
                 # 1. 모델 독점 모드 체크
                 if is_model_locked and not is_doc_model_common:
                     if d_model != '' and t_model not in d_model and d_model not in t_model:
@@ -84,7 +87,6 @@ def filter_candidates_logic(candidates, intent, penalties, strict_mode=True):
                     if is_identity_mismatch: continue
 
                 # 3. SQL 검증 및 키워드 확인
-                # 타겟이 명확한데, 문서 내용에 그 단어가 없으면 탈락
                 if is_specific_target and not is_hybrid_hit:
                     d_content_full = (d_mfr_raw + d_model_raw + d_item_raw + str(d.get('content') or '')).lower().replace(" ", "")
                     if normalized_target not in d_content_full:
@@ -117,10 +119,8 @@ def filter_candidates_logic(candidates, intent, penalties, strict_mode=True):
 
 def perform_unified_search(ai_model, db, user_q, u_threshold):
     """
-    [V205] 3단 순차 검색 프로토콜 (Triple-Safety Search)
-    Step 1: AI Intent & Metadata Index Search (정밀)
-    Step 2: Vector Similarity Search (광범위)
-    Step 3: Keyword Text Search (강제 발굴 - Fallback)
+    [V239] 4단 하이브리드 검색 (Graph + Vector + Metadata + Keyword)
+    - 그래프 DB를 조회하여 인과관계를 '가상 문서'로 주입
     """
     # 1. 초기 진입 (병렬 처리)
     with ThreadPoolExecutor() as executor:
@@ -143,6 +143,60 @@ def perform_unified_search(ai_model, db, user_q, u_threshold):
         penalties = future_penalties.result()
 
     # -----------------------------------------------------------
+    # [Step 0] 🕸️ 지식 그래프(Graph RAG) 동시 수색 (V239 NEW)
+    # -----------------------------------------------------------
+    keywords = [k for k in user_q.split() if len(k) >= 2]
+    if intent.get('target_item') and intent.get('target_item') != '공통':
+        keywords.append(intent.get('target_item'))
+    
+    graph_docs = []
+    if keywords:
+        graph_relations = []
+        for kw in set(keywords):
+            # db_services에 있는 그래프 검색 함수 호출
+            rels = db.search_graph_relations(kw)
+            if rels: graph_relations.extend(rels)
+        
+        # 중복 제거 및 텍스트화
+        if graph_relations:
+            unique_graphs = []
+            seen_graphs = set()
+            for rel in graph_relations:
+                g_key = f"{rel['source']}_{rel['relation']}_{rel['target']}"
+                if g_key not in seen_graphs:
+                    seen_graphs.add(g_key)
+                    unique_graphs.append(rel)
+            
+            # 그래프 데이터를 하나의 '가상 문서'로 압축
+            if unique_graphs:
+                graph_text = "💡 [Graph DB 인과관계 분석결과]\n"
+                for rel in unique_graphs[:7]: # 너무 길어지지 않게 7개 제한
+                    rel_type = rel['relation']
+                    # 관계 이름을 한국어로 자연스럽게 매핑
+                    rel_korean = {
+                        "causes": "원인이다",
+                        "part_of": "부품이다",
+                        "solved_by": "해결책이다",
+                        "requires": "필요로 한다",
+                        "has_status": "상태를 보인다",
+                        "located_in": "에 위치한다"
+                    }.get(rel_type, rel_type)
+                    
+                    graph_text += f"- [{rel['source']}]는(은) [{rel['target']}]의 '{rel_korean}'.\n"
+
+                graph_docs.append({
+                    'id': 999999, # 임시 ID
+                    'source_table': 'knowledge_graph',
+                    'manufacturer': intent.get('target_mfr', '공통'),
+                    'model_name': intent.get('target_model', '공통'),
+                    'measurement_item': intent.get('target_item', '공통'),
+                    'content': graph_text,
+                    'similarity': 0.99, # 신뢰도 최상으로 설정하여 필터링 통과
+                    'is_verified': True,
+                    'semantic_version': 2
+                })
+
+    # -----------------------------------------------------------
     # [Step 1] 정밀 검색 (인덱스/필터 기반)
     # -----------------------------------------------------------
     with ThreadPoolExecutor() as executor:
@@ -154,36 +208,28 @@ def perform_unified_search(ai_model, db, user_q, u_threshold):
     # -----------------------------------------------------------
     # [Step 2] 광범위 검색 (인덱스 무시, 벡터 유사도 기반)
     # -----------------------------------------------------------
-    # 결과가 3개 미만이면, 필터를 떼고 내용만으로 다시 찾음
     if len(m_res) + len(k_res) < 3:
-        # print("⚠️ 1단계 실패 -> 2단계 광범위 검색 가동")
         relaxed_intent = {"target_mfr": "미지정", "target_model": "미지정", "target_item": "공통"}
-        
         with ThreadPoolExecutor() as executor:
             future_m_broad = executor.submit(db.match_filtered_db, "match_manual", q_vec, effective_threshold, relaxed_intent, user_q, context_blacklist)
             future_k_broad = executor.submit(db.match_filtered_db, "match_knowledge", q_vec, effective_threshold, relaxed_intent, user_q, context_blacklist)
-            
-            # 리스트 확장
             m_res += future_m_broad.result()
             k_res += future_k_broad.result()
 
     # -----------------------------------------------------------
-    # [Step 3] 키워드 강제 발굴 (최후의 보루 - Keyword Fallback)
+    # [Step 3] 키워드 강제 발굴 (최후의 보루)
     # -----------------------------------------------------------
-    # 2단계까지 했는데도 결과가 영 시원찮으면(3개 미만), 텍스트 매칭으로 강제 수색
     if len(m_res) + len(k_res) < 3:
-        # print("⚠️ 2단계 실패 -> 3단계 키워드 강제 수색 가동")
-        # [NEW] db_services.py에 만든 함수 호출
         keyword_docs = db.search_keyword_fallback(user_q) 
         if keyword_docs:
-            m_res += keyword_docs  # 결과에 강제 병합
+            m_res += keyword_docs 
 
-    # 4. 데이터 통합 및 중복 제거
-    # 출처 태깅
+    # 4. 데이터 통합 (그래프 결과 최우선 삽입)
     for r in m_res: r['source_table'] = 'manual_base'
     for r in k_res: r['source_table'] = 'knowledge_base'
     
-    combined_raw = m_res + k_res
+    # [중요] 그래프 결과를 맨 앞에 배치
+    combined_raw = graph_docs + m_res + k_res
     
     # ID 기반 중복 제거
     all_docs = []
@@ -195,15 +241,13 @@ def perform_unified_search(ai_model, db, user_q, u_threshold):
             all_docs.append(doc)
 
     # 5. 필터링 및 리랭킹
-    # 1차 필터링 (엄격 모드)
     raw_candidates = filter_candidates_logic(all_docs, intent, penalties, strict_mode=True)
     
-    # 결과가 없으면 유연 모드 (Fallback)
     if not raw_candidates:
         fallback_candidates = filter_candidates_logic(all_docs, intent, penalties, strict_mode=False)
         raw_candidates = [d for d in fallback_candidates if d['final_score'] > 0.65]
 
-    # 최종 순위 결정 (LLM Rerank)
+    # 최종 순위 결정 (LLM Rerank) - 그래프 데이터가 포함된 채로 요약됨
     final_results = quick_rerank_ai(ai_model, user_q, raw_candidates, intent)
     
     return final_results, intent, q_vec
