@@ -17,8 +17,8 @@ from logic_ai import extract_metadata_ai, get_embedding, clean_text_for_db, sema
 def show_admin_ui(ai_model, db):
     st.title("🔧 관리자 및 데이터 엔지니어링")
     
-    # [V238] 탭 구성 변경 ('🔎 그래프 조회' 추가)
-    tabs = st.tabs(["🧹 현황", "📂 매뉴얼 학습", "📝 지식 등록", "🚨 분류실", "🏗️ 재건축", "🏷️ 승인", "🔎 그래프 조회"])
+    # [V238 -> V240] 탭 구성 변경 ('🛠️ 그래프 교정'으로 업그레이드)
+    tabs = st.tabs(["🧹 현황", "📂 매뉴얼 학습", "📝 지식 등록", "🚨 분류실", "🏗️ 재건축", "🏷️ 승인", "🛠️ 그래프 교정"])
     
     # 1. 현황 대시보드
     with tabs[0]:
@@ -79,7 +79,7 @@ def show_admin_ui(ai_model, db):
             else: st.success("✅ 분류가 필요한 데이터가 없습니다.")
         except: st.error("데이터 로드 실패")
 
-    # 5. 지식 재건축 (Graph 일괄 생성 기능 추가)
+    # 5. 지식 재건축 (Graph 일괄 생성 기능 포함)
     with tabs[4]:
         st.subheader("🏗️ 데이터 구조 재설계 및 확장")
         
@@ -133,8 +133,6 @@ def show_admin_ui(ai_model, db):
                                 db.save_knowledge_triples(row['id'], triples)
                                 
                                 # source_type 업데이트 (SQL 후처리 방식)
-                                # (db_services.save_knowledge_triples가 insert만 하므로, 방금 넣은 걸 찾아 업데이트하거나
-                                #  애초에 save 함수에 인자를 넘기는 게 좋지만, 기존 함수 유지를 위해 쿼리로 처리)
                                 db.supabase.table("knowledge_graph")\
                                     .update({"source_type": source_type_val})\
                                     .eq("doc_id", row['id'])\
@@ -164,22 +162,58 @@ def show_admin_ui(ai_model, db):
                         st.rerun()
         else: st.info("승인 대기 중인 데이터가 없습니다.")
 
-    # 7. [New] 그래프 조회 (테스트용)
+    # 7. [V240] 🛠️ 그래프 조회 및 직접 교정 (Graph Editor)
     with tabs[6]:
-        st.subheader("🔎 지식 그래프(Knowledge Graph) 탐색")
-        st.info("💡 구축된 인과관계 데이터를 검색하여 연결 고리를 확인합니다.")
+        st.subheader("🛠️ 지식 그래프(Graph RAG) 탐색 및 교정")
+        st.info("💡 AI가 잘못 연결한 지식(예: 소프트웨어 설정을 부품으로 오해한 경우)을 검색하여 수정하거나 삭제하세요.")
         
-        g_query = st.text_input("검색할 키워드 (예: 3way valve, 누수, 헌팅)", placeholder="엔터티 입력")
-        if st.button("🕸️ 관계 추적 시작") and g_query:
+        g_query = st.text_input("검색할 키워드 (예: 볼륨팩터, 3way valve)", placeholder="수정하고 싶은 엔터티를 입력하세요")
+        
+        if st.button("🕸️ 관계 추적 및 수정창 열기", type="primary") and g_query:
             relations = db.search_graph_relations(g_query)
             if relations:
-                st.write(f"총 {len(relations)}건의 연결 관계 발견:")
+                st.success(f"총 {len(relations)}건의 연결 관계 발견! 수정할 항목을 고치고 저장하세요.")
+                st.markdown("---")
+                
+                # 표 헤더
+                hc1, hc2, hc3, hc4 = st.columns([2.5, 1.5, 2.5, 1.5])
+                hc1.caption("🔹 출발 노드 (Source)")
+                hc2.caption("➡️ 관계 (Relation)")
+                hc3.caption("🔸 도착 노드 (Target)")
+                hc4.caption("🛠️ 관리")
+
+                relation_types = ["causes", "part_of", "solved_by", "requires", "has_status", "located_in", "related_to"]
+
+                # 각 관계마다 수정 폼 제공
                 for rel in relations:
-                    # source_type이 있으면 표시, 없으면 manual로 간주
-                    src_type = rel.get('source_type', 'manual')
-                    icon = "👤" if src_type == 'knowledge' else "📄"
-                    
-                    st.markdown(f"{icon} **{rel['source']}** --[{rel['relation']}]--> **{rel['target']}**")
+                    rid = rel['id']
+                    with st.form(key=f"edit_graph_{rid}"):
+                        c1, c2, c3, c4 = st.columns([2.5, 1.5, 2.5, 1.5])
+                        
+                        # 기존 값 로드
+                        e_src = c1.text_input("출발", value=rel['source'], label_visibility="collapsed")
+                        
+                        # 관계가 목록에 없으면 추가해서라도 보여줌
+                        curr_rel = rel['relation']
+                        opts = relation_types if curr_rel in relation_types else relation_types + [curr_rel]
+                        e_rel = c2.selectbox("관계", options=opts, index=opts.index(curr_rel), label_visibility="collapsed")
+                        
+                        e_tgt = c3.text_input("도착", value=rel['target'], label_visibility="collapsed")
+                        
+                        # 버튼 영역
+                        bc1, bc2 = c4.columns(2)
+                        save_btn = bc1.form_submit_button("💾 수정")
+                        del_btn = bc2.form_submit_button("🗑️ 삭제")
+
+                        if save_btn:
+                            if db.update_graph_triple(rid, e_src, e_rel, e_tgt):
+                                st.success("✅ 관계 수정 완료!"); time.sleep(0.5); st.rerun()
+                            else: st.error("수정 실패")
+                        
+                        if del_btn:
+                            if db.delete_graph_triple(rid):
+                                st.warning("🗑️ 관계 삭제 완료 (노이즈 제거)!"); time.sleep(0.5); st.rerun()
+                            else: st.error("삭제 실패")
             else:
                 st.warning("연관된 그래프 데이터가 없습니다. '매뉴얼 학습' 또는 '재건축' 탭에서 그래프 생성을 먼저 진행해주세요.")
 
