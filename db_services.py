@@ -426,3 +426,33 @@ class DBManager:
                 .limit(20).execute()
             return res.data
         except: return []
+
+    # =========================================================
+    # [V240] 🛠️ 지식 그래프 교정 및 삭제 기능 추가
+    # =========================================================
+    def update_graph_triple(self, rel_id, new_source, new_relation, new_target):
+        """
+        [NEW] 그래프의 특정 관계(노드 및 엣지)를 수정합니다.
+        """
+        try:
+            payload = {
+                "source": self._clean_text(new_source),
+                "relation": new_relation,
+                "target": self._clean_text(new_target)
+            }
+            res = self.supabase.table("knowledge_graph").update(payload).eq("id", rel_id).execute()
+            return True if res.data else False
+        except Exception as e:
+            print(f"Graph Update Error: {e}")
+            return False
+
+    def delete_graph_triple(self, rel_id):
+        """
+        [NEW] 잘못 추출된 그래프 관계를 완전히 삭제(노이즈 제거)합니다.
+        """
+        try:
+            res = self.supabase.table("knowledge_graph").delete().eq("id", rel_id).execute()
+            return True if res.data else False
+        except Exception as e:
+            print(f"Graph Delete Error: {e}")
+            return False
