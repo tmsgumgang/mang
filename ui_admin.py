@@ -14,10 +14,23 @@ except ImportError:
 # [V238] extract_triples_from_text 추가 임포트
 from logic_ai import extract_metadata_ai, get_embedding, clean_text_for_db, semantic_split_v143, extract_triples_from_text
 
+# =========================================================================
+# [V241] 그래프 관계 매핑 (영어 DB값 -> 직관적인 한국어 UI)
+# =========================================================================
+REL_MAP = {
+    "causes": "원인이다 (A가 B를 유발)",
+    "part_of": "부품이다 (A는 B의 일부)",
+    "solved_by": "해결된다 (A는 B로 해결)",
+    "requires": "필요로 한다 (A는 B가 필요)",
+    "has_status": "상태다 (A는 B라는 증상/상태)",
+    "located_in": "위치한다 (A는 B에 있음)",
+    "related_to": "관련되어 있다 (A와 B 연관)"
+}
+
 def show_admin_ui(ai_model, db):
     st.title("🔧 관리자 및 데이터 엔지니어링")
     
-    # [V238 -> V240] 탭 구성 변경 ('🛠️ 그래프 교정'으로 업그레이드)
+    # [V240] 탭 구성 유지
     tabs = st.tabs(["🧹 현황", "📂 매뉴얼 학습", "📝 지식 등록", "🚨 분류실", "🏗️ 재건축", "🏷️ 승인", "🛠️ 그래프 교정"])
     
     # 1. 현황 대시보드
@@ -101,7 +114,6 @@ def show_admin_ui(ai_model, db):
         with c_rb2:
             st.info("🕸️ **지식 그래프(관계도)** 일괄 생성")
             
-            # 대상 선택 (매뉴얼 or 경험지식)
             target_src = st.selectbox("변환 대상 선택", ["사람이 입력한 지식 (knowledge_base)", "PDF 매뉴얼 (manual_base)"])
             
             if st.button("🚀 그래프 변환 시작 (Graph ETL)", type="secondary", use_container_width=True):
@@ -109,7 +121,6 @@ def show_admin_ui(ai_model, db):
                 source_type_val = "knowledge" if "사람" in target_src else "manual"
                 
                 with st.status(f"'{table}' 데이터를 분석하여 연결 고리를 추출합니다...", expanded=True) as status:
-                    # 1. 데이터 가져오기
                     data = db.supabase.table(table).select("*").execute().data
                     if not data:
                         st.warning("데이터가 없습니다.")
@@ -119,31 +130,24 @@ def show_admin_ui(ai_model, db):
                         pb2 = st.progress(0)
                         
                         for i, row in enumerate(data):
-                            # 텍스트 조합 (경험 지식은 issue + solution 합쳐서 분석)
                             if table == "knowledge_base":
                                 text_input = f"증상/이슈: {row.get('issue','')}\n해결책/노하우: {row.get('solution','')}"
                             else:
                                 text_input = row.get('content', '')
                             
-                            # 2. AI 관계 추출 (형사 모드)
                             triples = extract_triples_from_text(ai_model, text_input)
                             
-                            # 3. DB 저장 (source_type 추가)
                             if triples:
                                 db.save_knowledge_triples(row['id'], triples)
-                                
-                                # source_type 업데이트 (SQL 후처리 방식)
                                 db.supabase.table("knowledge_graph")\
                                     .update({"source_type": source_type_val})\
                                     .eq("doc_id", row['id'])\
                                     .eq("source_type", "manual")\
                                     .execute() 
-                                
                                 count += len(triples)
                                 status.write(f"✅ ID {row['id']}: {len(triples)}개 관계 발견")
                             
                             pb2.progress((i+1)/total)
-                        
                         st.success(f"작업 끝! 총 {count}개의 새로운 지식 연결고리가 생성되었습니다.")
 
     # 6. 라벨 승인
@@ -162,60 +166,66 @@ def show_admin_ui(ai_model, db):
                         st.rerun()
         else: st.info("승인 대기 중인 데이터가 없습니다.")
 
-    # 7. [V240] 🛠️ 그래프 조회 및 직접 교정 (Graph Editor)
+    # 7. [V241] 🛠️ 그래프 조회 및 직접 교정 (직관적 한국어 UI 적용)
     with tabs[6]:
         st.subheader("🛠️ 지식 그래프(Graph RAG) 탐색 및 교정")
-        st.info("💡 AI가 잘못 연결한 지식(예: 소프트웨어 설정을 부품으로 오해한 경우)을 검색하여 수정하거나 삭제하세요.")
+        st.info("💡 관계식을 자연스러운 문장(예: A는 B의 부품이다)으로 읽고 수정하세요.")
         
-        g_query = st.text_input("검색할 키워드 (예: 볼륨팩터, 3way valve)", placeholder="수정하고 싶은 엔터티를 입력하세요")
+        g_query = st.text_input("검색할 키워드 (예: 볼륨팩터, 케이블타이, 누수)", placeholder="수정하고 싶은 단어 입력")
         
-        if st.button("🕸️ 관계 추적 및 수정창 열기", type="primary") and g_query:
+        if st.button("🕸️ 관계 검색") and g_query:
             relations = db.search_graph_relations(g_query)
             if relations:
-                st.success(f"총 {len(relations)}건의 연결 관계 발견! 수정할 항목을 고치고 저장하세요.")
+                st.success(f"총 {len(relations)}건의 연결 관계 발견!")
                 st.markdown("---")
                 
-                # 표 헤더
-                hc1, hc2, hc3, hc4 = st.columns([2.5, 1.5, 2.5, 1.5])
-                hc1.caption("🔹 출발 노드 (Source)")
-                hc2.caption("➡️ 관계 (Relation)")
-                hc3.caption("🔸 도착 노드 (Target)")
+                # [V241] 직관적인 헤더 레이아웃 (주어 - 연결어 - 목적어 - 연결어 - 관계)
+                hc1, hc_mid1, hc2, hc_mid2, hc3, hc4 = st.columns([2.5, 0.5, 2.5, 0.5, 2.5, 1.5])
+                hc1.caption("🔸 [A] 주어")
+                hc_mid1.caption("는(은)")
+                hc2.caption("🔸 [B] 목적어")
+                hc_mid2.caption("의(로/에)")
+                hc3.caption("➡️ 관계")
                 hc4.caption("🛠️ 관리")
 
-                relation_types = ["causes", "part_of", "solved_by", "requires", "has_status", "located_in", "related_to"]
+                relation_keys = list(REL_MAP.keys())
 
-                # 각 관계마다 수정 폼 제공
                 for rel in relations:
                     rid = rel['id']
                     with st.form(key=f"edit_graph_{rid}"):
-                        c1, c2, c3, c4 = st.columns([2.5, 1.5, 2.5, 1.5])
+                        c1, c_mid1, c2, c_mid2, c3, c4 = st.columns([2.5, 0.5, 2.5, 0.5, 2.5, 1.5])
                         
-                        # 기존 값 로드
-                        e_src = c1.text_input("출발", value=rel['source'], label_visibility="collapsed")
+                        e_src = c1.text_input("주어", value=rel['source'], label_visibility="collapsed")
+                        c_mid1.markdown("<div style='text-align: center; margin-top: 10px;'>는(은)</div>", unsafe_allow_html=True)
                         
-                        # 관계가 목록에 없으면 추가해서라도 보여줌
+                        e_tgt = c2.text_input("목적어", value=rel['target'], label_visibility="collapsed")
+                        c_mid2.markdown("<div style='text-align: center; margin-top: 10px;'>의(로/에)</div>", unsafe_allow_html=True)
+                        
                         curr_rel = rel['relation']
-                        opts = relation_types if curr_rel in relation_types else relation_types + [curr_rel]
-                        e_rel = c2.selectbox("관계", options=opts, index=opts.index(curr_rel), label_visibility="collapsed")
+                        opts = relation_keys if curr_rel in relation_keys else relation_keys + [curr_rel]
                         
-                        e_tgt = c3.text_input("도착", value=rel['target'], label_visibility="collapsed")
+                        # [V241 핵심] DB에는 영어로 저장하지만, 화면에는 한국어(REL_MAP)로 보여줌
+                        e_rel = c3.selectbox(
+                            "관계", 
+                            options=opts, 
+                            index=opts.index(curr_rel), 
+                            format_func=lambda x: REL_MAP.get(x, x), # 한국어 번역 함수
+                            label_visibility="collapsed"
+                        )
                         
-                        # 버튼 영역
                         bc1, bc2 = c4.columns(2)
-                        save_btn = bc1.form_submit_button("💾 수정")
-                        del_btn = bc2.form_submit_button("🗑️ 삭제")
+                        save_btn = bc1.form_submit_button("💾")
+                        del_btn = bc2.form_submit_button("🗑️")
 
                         if save_btn:
                             if db.update_graph_triple(rid, e_src, e_rel, e_tgt):
-                                st.success("✅ 관계 수정 완료!"); time.sleep(0.5); st.rerun()
-                            else: st.error("수정 실패")
+                                st.success("✅ 저장됨!"); time.sleep(0.5); st.rerun()
                         
                         if del_btn:
                             if db.delete_graph_triple(rid):
-                                st.warning("🗑️ 관계 삭제 완료 (노이즈 제거)!"); time.sleep(0.5); st.rerun()
-                            else: st.error("삭제 실패")
+                                st.warning("🗑️ 삭제됨!"); time.sleep(0.5); st.rerun()
             else:
-                st.warning("연관된 그래프 데이터가 없습니다. '매뉴얼 학습' 또는 '재건축' 탭에서 그래프 생성을 먼저 진행해주세요.")
+                st.warning("검색된 관계가 없습니다.")
 
 # [V205 -> V238] 스마트 업로드 함수 (Graph 기능 통합)
 def show_manual_upload_ui(ai_model, db):
