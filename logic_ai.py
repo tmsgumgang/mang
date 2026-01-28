@@ -7,8 +7,23 @@ from prompts import PROMPTS
 
 @st.cache_data(show_spinner=False)
 def get_embedding(text):
-    result = genai.embed_content(model="models/text-embedding-004", content=clean_text_for_db(text), task_type="retrieval_document")
-    return result['embedding']
+    """
+    [V243] 임베딩 모델 Fallback 로직 추가 (004 모델 실패 시 001 사용)
+    """
+    cleaned_text = clean_text_for_db(text)
+    try:
+        # 1순위: 최신 모델 시도
+        result = genai.embed_content(model="models/text-embedding-004", content=cleaned_text, task_type="retrieval_document")
+        return result['embedding']
+    except Exception as e:
+        # 2순위: 실패 시 안정화(구형) 모델 사용 (NotFound 에러 방지)
+        # print(f"⚠️ 임베딩 모델 004 실패 -> 001로 전환: {e}")
+        try:
+            result = genai.embed_content(model="models/embedding-001", content=cleaned_text, task_type="retrieval_document")
+            return result['embedding']
+        except Exception as e2:
+            print(f"❌ 모든 임베딩 모델 실패: {e2}")
+            return []
 
 def semantic_split_v143(text, target_size=1200, min_size=600):
     flat_text = " ".join(text.split())
@@ -162,7 +177,7 @@ def extract_triples_from_text(ai_model, text):
     """
     텍스트에서 (주어) -> [관계] -> (목적어) 트리플을 추출합니다.
     """
-    # Graph Extraction 전용 프롬프트 (여기에 직접 정의하여 의존성 제거)
+    # Graph Extraction 전용 프롬프트
     graph_prompt = f"""
     You are an expert Data Engineer specializing in Knowledge Graphs.
     Analyze the provided technical text and extract relationships between entities.
@@ -175,6 +190,11 @@ def extract_triples_from_text(ai_model, text):
     - solved_by (로 해결된다)
     - has_status (상태를 가진다)
     - requires (을 필요로 한다)
+
+    IMPORTANT: 
+    - Entities MUST be single nouns or short phrases (under 5 words). 
+    - Do NOT include full sentences as entities.
+    - If a sentence is "Use cable ties for pump replacement", extract: {{"source": "Pump replacement", "relation": "requires", "target": "Cable ties"}}
 
     Return ONLY a JSON array of objects. No markdown, no explanations.
     Format: [{{"source": "Entity A", "relation": "relation_type", "target": "Entity B"}}]
