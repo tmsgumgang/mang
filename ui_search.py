@@ -5,6 +5,19 @@ import re
 from logic_ai import *
 from utils_search import perform_unified_search
 
+# =========================================================================
+# [V245] 그래프 관계 매핑 (채팅창에서도 한국어로 직관적 표시)
+# =========================================================================
+REL_MAP = {
+    "causes": "원인이다 (A가 B를 유발)",
+    "part_of": "부품이다 (A는 B의 일부)",
+    "solved_by": "해결된다 (A는 B로 해결)",
+    "requires": "필요로 한다 (A는 B가 필요)",
+    "has_status": "상태다 (A는 B라는 증상/상태)",
+    "located_in": "위치한다 (A는 B에 있음)",
+    "related_to": "관련되어 있다 (A와 B 연관)"
+}
+
 # [Helper] 하이라이팅 함수
 def highlight_text(text, keywords):
     if not text: return ""
@@ -24,10 +37,11 @@ def show_search_ui(ai_model, db):
     st.markdown("""<style>
         .summary-box { background-color: #f8fafc; border: 2px solid #166534; padding: 20px; border-radius: 12px; color: #0f172a !important; margin-bottom: 10px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); line-height: 1.8; }
         .inventory-box { background-color: #ecfdf5; border: 2px solid #10b981; padding: 20px; border-radius: 12px; color: #064e3b !important; margin-bottom: 20px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); line-height: 1.6; }
-        .meta-bar { background-color: #004a99 !important; padding: 12px; border-radius: 6px; font-size: 0.9rem; margin-bottom: 12px; color: #ffffff !important; display: flex; gap: 15px; flex-wrap: wrap; }
+        .meta-bar { background-color: #004a99 !important; padding: 8px 12px; border-radius: 6px; font-size: 0.85rem; margin-bottom: 8px; color: #ffffff !important; display: flex; gap: 10px; flex-wrap: wrap; }
         .report-box { background-color: #ffffff; border: 1px solid #004a99; padding: 25px; border-radius: 12px; color: #0f172a !important; box-shadow: inset 0 2px 4px 0 rgba(0, 0, 0, 0.05); line-height: 1.8; }
-        .doc-feedback-area { background-color: #f1f5f9; padding: 15px; border-radius: 8px; margin-top: 15px; border: 1px solid #e2e8f0; }
-        .stSelectbox, .stTextInput { margin-bottom: 10px !important; }
+        .doc-feedback-area { background-color: #f1f5f9; padding: 10px; border-radius: 8px; margin-top: 10px; border: 1px solid #e2e8f0; font-size: 0.9rem;}
+        .graph-insight-box { background-color: #fff7ed; border-left: 4px solid #f97316; padding: 15px; border-radius: 4px; margin-bottom: 15px; color: #431407; }
+        .stSelectbox, .stTextInput { margin-bottom: 5px !important; }
     </style>""", unsafe_allow_html=True)
 
     # ----------------------------------------------------------------------
@@ -75,7 +89,7 @@ def show_search_ui(ai_model, db):
             return 
 
         # =========================================================
-        # [CASE 2] 일반 기술/생활 정보 검색 (Graph RAG V244)
+        # [CASE 2] 일반 기술/생활 정보 검색 (Graph RAG V245)
         # =========================================================
         with st.spinner("지식을 탐색 중입니다... (Graph + Vector)"):
             try:
@@ -116,97 +130,115 @@ def show_search_ui(ai_model, db):
                     st.write(st.session_state.full_report)
                     st.markdown('</div>', unsafe_allow_html=True)
 
+                # (3) [V245 개선] 참조 데이터 및 연관성 평가 (그래프/원본 분리 표시)
+                st.subheader("📚 참조 근거 자료 (Reference)")
+                search_keywords = user_q.split()
+
+                # -- A. 그래프 지식 (Insights) --
+                graph_docs = [d for d in final if d.get('source_table') == 'knowledge_graph']
+                if graph_docs:
+                    with st.expander("💡 [그래프 분석] AI가 발견한 인과관계", expanded=True):
+                        for gd in graph_docs:
+                            content = gd.get('content','').replace("\n", "<br>")
+                            st.markdown(f'<div class="graph-insight-box">{content}</div>', unsafe_allow_html=True)
+
+                # -- B. 원본 문서 (Original Source) --
+                normal_docs = [d for d in final if d.get('source_table') != 'knowledge_graph']
+                if normal_docs:
+                    for d in normal_docs[:5]:
+                        v_mark = ' ✅ 인증' if d.get('is_verified') else ''
+                        score = d.get('rerank_score', 0)
+                        
+                        # 아이콘 및 출처 표시
+                        icon = "💡"
+                        source_label = "지식 베이스(경험)"
+                        if d.get('source_table') == 'manual_base': 
+                            icon = "📄"
+                            source_label = "PDF 매뉴얼"
+                        
+                        with st.expander(f"{icon} [{source_label}] {d.get('measurement_item','-')} - {d.get('model_name','공통')} (연관도: {score}%) {v_mark}"):
+                            # 메타 정보 바
+                            st.markdown(f'''<div class="meta-bar">
+                                <span>🏢 제조사: <b>{d.get("manufacturer","미지정")}</b></span>
+                                <span>🧪 항목: <b>{d.get("measurement_item","공통")}</b></span>
+                                <span>🏷️ 모델: <b>{d.get("model_name","공통")}</b></span>
+                            </div>''', unsafe_allow_html=True)
+                            
+                            # 원본 내용 표시
+                            raw_content = d.get('content') or d.get('solution') or ""
+                            # 이슈 내용이 별도로 있으면 병기 (지식베이스 경우)
+                            if d.get('issue'):
+                                raw_content = f"<b>[증상/이슈]</b> {d['issue']}<br><br><b>[해결/내용]</b> {raw_content}"
+                                
+                            safe_content = raw_content.replace("\n", "<br>") 
+                            highlighted_content = highlight_text(safe_content, search_keywords)
+                            
+                            st.markdown(highlighted_content, unsafe_allow_html=True)
+                            
+                            # 문서 평가 UI
+                            t_name = d.get('source_table', 'manual_base') 
+                            unique_k = d.get('u_key', d['id']) 
+
+                            st.markdown('<div class="doc-feedback-area">', unsafe_allow_html=True)
+                            c_fb1, c_fb2 = st.columns([3, 1])
+                            with c_fb1:
+                                st.caption("이 정보가 도움이 되었나요?")
+                            with c_fb2:
+                                if st.button("👍", key=f"up_{unique_k}"):
+                                    db.save_relevance_feedback(user_q, d['id'], t_name, 1, q_vec, reason="good")
+                                    st.toast("기록됨")
+                            st.markdown('</div>', unsafe_allow_html=True)
+
                 # -------------------------------------------------------------
-                # [V244] 🛠️ 채팅창 내 그래프 즉시 수정 (Chat-Editor)
+                # [V245] 🛠️ 채팅창 내 그래프 즉시 수정 (수정+삭제 기능)
                 # -------------------------------------------------------------
-                # 답변에 그래프 지식이 활용되었거나, 사용자가 수정 의도가 있을 때 표시
-                keywords = user_q.split()
+                # 키워드 관련 그래프 지식을 불러와서 바로 수정할 수 있게 함
+                keywords = [k for k in user_q.split() if len(k) >= 2]
                 graph_hits = []
                 for kw in keywords:
-                    if len(kw) >= 2:
-                        rels = db.search_graph_relations(kw)
-                        if rels: graph_hits.extend(rels[:2]) # 키워드당 2개씩만
+                    rels = db.search_graph_relations(kw)
+                    if rels: graph_hits.extend(rels[:2]) # 너무 많이 뜨지 않게 조절
 
                 if graph_hits:
-                    with st.expander("🛠️ 그래프 지식 즉시 수정 (전문가 모드)", expanded=False):
-                        st.info("AI가 참고한 '인과관계' 중 틀린 것이 있다면 바로 삭제하세요.")
+                    st.divider()
+                    with st.expander("🛠️ 그래프 지식 즉시 교정 (전문가 모드)", expanded=False):
+                        st.info("AI가 분석한 인과관계가 틀렸다면 여기서 바로 수정하거나 삭제하세요.")
                         
                         # 중복 제거
                         unique_hits = {v['id']:v for v in graph_hits}.values()
-                        
+                        relation_keys = list(REL_MAP.keys())
+
                         for rel in unique_hits:
-                            c1, c2, c3 = st.columns([3, 2, 1])
-                            with c1:
-                                st.markdown(f"**{rel['source']}** → **{rel['target']}**")
-                            with c2:
-                                st.caption(f"관계: {rel['relation']}")
-                            with c3:
-                                if st.button("🗑️ 삭제", key=f"chat_del_{rel['id']}"):
-                                    if db.delete_graph_triple(rel['id']):
-                                        st.toast("✅ 관계가 삭제되었습니다!")
-                                        time.sleep(1)
-                                        st.rerun()
-                                    else:
-                                        st.error("삭제 실패")
+                            rid = rel['id']
+                            with st.form(key=f"chat_edit_graph_{rid}"):
+                                c1, c_mid1, c2, c_mid2, c3, c4 = st.columns([2.5, 0.5, 2.5, 0.5, 2.5, 1.5])
+                                
+                                # 수정 입력창
+                                e_src = c1.text_input("주어", value=rel['source'], label_visibility="collapsed")
+                                c_mid1.markdown("<div style='text-align: center; margin-top: 10px; font-size: 0.8rem;'>는(은)</div>", unsafe_allow_html=True)
+                                
+                                e_tgt = c2.text_input("목적어", value=rel['target'], label_visibility="collapsed")
+                                c_mid2.markdown("<div style='text-align: center; margin-top: 10px; font-size: 0.8rem;'>의</div>", unsafe_allow_html=True)
+                                
+                                # 관계 선택 (한국어)
+                                curr_rel = rel['relation']
+                                opts = relation_keys if curr_rel in relation_keys else relation_keys + [curr_rel]
+                                e_rel = c3.selectbox("관계", options=opts, index=opts.index(curr_rel), 
+                                                   format_func=lambda x: REL_MAP.get(x, x), label_visibility="collapsed")
+                                
+                                # 버튼
+                                bc1, bc2 = c4.columns(2)
+                                save = bc1.form_submit_button("💾")
+                                delete = bc2.form_submit_button("🗑️")
 
-                # (3) 개별 문서 리스트
-                st.subheader("📋 참조 데이터 및 연관성 평가")
-                search_keywords = user_q.split()
-
-                for d in final[:6]:
-                    v_mark = ' ✅ 인증' if d.get('is_verified') else ''
-                    score = d.get('rerank_score', 0)
-                    
-                    # 아이콘 처리 (그래프/매뉴얼/지식)
-                    icon = "💡"
-                    if d.get('source_table') == 'knowledge_graph': icon = "🕸️"
-                    elif d.get('source_table') == 'manual_base': icon = "📄"
-                    
-                    with st.expander(f"{icon} [{d.get('measurement_item','-')}] {d.get('model_name','공통')} (신뢰도: {score}%) {v_mark}"):
-                        st.markdown(f'''<div class="meta-bar">
-                            <span>🏢 제조사: <b>{d.get("manufacturer","미지정")}</b></span>
-                            <span>🧪 항목: <b>{d.get("measurement_item","공통")}</b></span>
-                            <span>🏷️ 모델: <b>{d.get("model_name","공통")}</b></span>
-                        </div>''', unsafe_allow_html=True)
-                        
-                        raw_content = d.get('content') or d.get('solution') or ""
-                        safe_content = raw_content.replace("\n", "<br>") 
-                        highlighted_content = highlight_text(safe_content, search_keywords)
-                        
-                        st.markdown(highlighted_content, unsafe_allow_html=True)
-                        
-                        t_name = d.get('source_table', 'manual_base') 
-                        unique_k = d.get('u_key', d['id']) 
-
-                        # 문서 평가 영역 (그래프 데이터는 평가 제외)
-                        if t_name != 'knowledge_graph':
-                            st.markdown('<div class="doc-feedback-area">', unsafe_allow_html=True)
-                            with st.expander("📝 이 문서 평가하기 (클릭)"):
-                                f_col1, f_col2 = st.columns([3, 1])
-                                with f_col1:
-                                    reason_type = st.selectbox("평가 사유", ["선택 안 함", "정확한 해결책임", "관련 없는 문서", "모델명 다름", "내용 부실", "직접 입력"], key=f"rs_{unique_k}", label_visibility="collapsed")
-                                    feedback_reason = reason_type
-                                    if reason_type == "직접 입력":
-                                        feedback_reason = st.text_input("사유 입력", key=f"rt_{unique_k}")
-                                with f_col2:
-                                    if st.button("👍 도움됨", key=f"up_{unique_k}", use_container_width=True):
-                                        db.save_relevance_feedback(user_q, d['id'], t_name, 1, q_vec, reason=feedback_reason)
-                                        st.toast("✅ 기록됨")
-                                    if st.button("👎 무관함", key=f"dn_{unique_k}", use_container_width=True):
-                                        db.save_relevance_feedback(user_q, d['id'], t_name, -1, q_vec, reason=feedback_reason)
-                                        st.toast("📉 제외됨")
-                            st.markdown('</div>', unsafe_allow_html=True)
-                            
-                            # (관리자용) 수정 폼
-                            st.markdown("---")
-                            with st.form(key=f"edit_{unique_k}"):
-                                st.caption("🛠️ 데이터 교정")
-                                c1, c2, c3 = st.columns(3)
-                                e_mfr = c1.text_input("제조사", d.get('manufacturer',''), key=f"em_{unique_k}")
-                                e_mod = c2.text_input("모델명", d.get('model_name',''), key=f"eo_{unique_k}")
-                                e_itm = c3.text_input("항목", d.get('measurement_item',''), key=f"ei_{unique_k}")
-                                if st.form_submit_button("💾 교정"):
-                                    if db.update_record_labels(t_name, d['id'], e_mfr, e_mod, e_itm)[0]:
-                                        st.success("완료"); time.sleep(0.5); st.rerun()
+                                if save:
+                                    if db.update_graph_triple(rid, e_src, e_rel, e_tgt):
+                                        st.success("수정 완료!"); time.sleep(0.5); st.rerun()
+                                    else: st.error("실패")
+                                
+                                if delete:
+                                    if db.delete_graph_triple(rid):
+                                        st.warning("삭제 완료!"); time.sleep(0.5); st.rerun()
+                                    else: st.error("실패")
         else:
             st.warning("🔍 검색 결과가 없습니다.")
