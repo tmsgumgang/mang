@@ -15,7 +15,7 @@ except ImportError:
 from logic_ai import extract_metadata_ai, get_embedding, clean_text_for_db, semantic_split_v143, extract_triples_from_text
 
 # =========================================================================
-# [V241] 그래프 관계 매핑 (영어 DB값 -> 직관적인 한국어 UI)
+# [V246] 그래프 관계 매핑 (영어 DB값 -> 직관적인 한국어 UI)
 # =========================================================================
 REL_MAP = {
     "causes": "원인이다 (A가 B를 유발)",
@@ -24,7 +24,8 @@ REL_MAP = {
     "requires": "필요로 한다 (A는 B가 필요)",
     "has_status": "상태다 (A는 B라는 증상/상태)",
     "located_in": "위치한다 (A는 B에 있음)",
-    "related_to": "관련되어 있다 (A와 B 연관)"
+    "related_to": "관련되어 있다 (A와 B 연관)",
+    "manufactured_by": "제품이다 (A는 B가 제조함)"  # 👈 [NEW] 제조사 관계 추가
 }
 
 def show_admin_ui(ai_model, db):
@@ -222,6 +223,7 @@ def show_admin_ui(ai_model, db):
                         c_mid2.markdown("<div style='text-align: center; margin-top: 10px;'>의</div>", unsafe_allow_html=True)
                         
                         curr_rel = rel['relation']
+                        # 관계 키가 없을 경우를 대비한 안전장치
                         opts = relation_keys if curr_rel in relation_keys else relation_keys + [curr_rel]
                         
                         e_rel = c3.selectbox(
