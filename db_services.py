@@ -480,3 +480,18 @@ class DBManager:
             return True, count
         except Exception as e:
             return False, str(e)
+
+    # =========================================================
+    # [V250 New] 그래프 노드 부모 문서 메타데이터 조회
+    # =========================================================
+    def get_doc_metadata_by_id(self, doc_id, source_type):
+        """
+        doc_id와 source_type(manual/knowledge)을 받아 제조사, 모델명, 항목을 반환
+        """
+        try:
+            t_name = "knowledge_base" if source_type == "knowledge" else "manual_base"
+            res = self.supabase.table(t_name).select("manufacturer, model_name, measurement_item").eq("id", doc_id).execute()
+            if res.data:
+                return res.data[0]
+            return {}
+        except: return {}
