@@ -2,6 +2,7 @@ import re
 import json
 import google.generativeai as genai
 import streamlit as st
+# [New] 프롬프트 파일 불러오기
 from prompts import PROMPTS 
 
 @st.cache_data(show_spinner=False)
@@ -57,6 +58,7 @@ def extract_json(text):
 # --------------------------------------------------------------------------------
 def extract_metadata_ai(ai_model, content):
     try:
+        # [수정] 프롬프트 분리 적용
         prompt = PROMPTS["extract_metadata"].format(content=content[:2000])
         res = ai_model.generate_content(prompt)
         return extract_json(res.text)
@@ -68,9 +70,10 @@ def analyze_search_intent(_ai_model, query):
         "target_mfr": "미지정", 
         "target_model": "미지정", 
         "target_item": "공통",
-        "target_action": "일반"
+        "target_action": "일반" # [New] 프롬프트에 맞춰 필드 추가
     }
     try:
+        # [수정] 프롬프트 분리 적용
         prompt = PROMPTS["search_intent"].format(query=query)
         res = _ai_model.generate_content(prompt)
         intent_res = extract_json(res.text)
@@ -94,6 +97,7 @@ def quick_rerank_ai(_ai_model, query, results, intent):
             "content": (r.get('content') or r.get('solution'))[:200]
         })
 
+    # [수정] 프롬프트 분리 적용
     prompt = PROMPTS["rerank_score"].format(
         query=query, 
         mfr=safe_intent.get('target_mfr'), 
@@ -109,11 +113,13 @@ def quick_rerank_ai(_ai_model, query, results, intent):
         return sorted(results, key=lambda x: x['rerank_score'], reverse=True)
     except: return results
 
+# [V200 핵심] 팩트 고정(Fact-Lock) 스트리밍 요약 생성기
 def generate_3line_summary_stream(ai_model, query, results):
     if not results:
         yield "검색 결과가 부족하여 요약을 생성할 수 없습니다."
         return
 
+    # [Fact-Lock] 상위 1위 문서(가장 정확한 문서)를 'Primary Source'로 지정
     top_doc = results[0]
     top_content = f"★최우선참고자료(Fact Source): {top_doc.get('content') or top_doc.get('solution')}"
     
@@ -123,6 +129,7 @@ def generate_3line_summary_stream(ai_model, query, results):
     
     full_context = [top_content] + other_context
     
+    # [수정] 프롬프트 분리 적용
     prompt = PROMPTS["summary_fact_lock"].format(
         query=query, 
         context=json.dumps(full_context, ensure_ascii=False)
@@ -139,6 +146,7 @@ def unified_rerank_and_summary_ai(_ai_model, query, results, intent):
     safe_intent = intent if (intent and isinstance(intent, dict)) else {"target_mfr": "미지정", "target_item": "공통"}
     candidates = [{"id":r['id'],"content":(r.get('content')or r.get('solution'))[:300]} for r in results[:5]]
     
+    # [수정] 프롬프트 분리 적용
     prompt = PROMPTS["unified_rerank"].format(
         query=query, 
         safe_intent=safe_intent, 
@@ -153,7 +161,9 @@ def unified_rerank_and_summary_ai(_ai_model, query, results, intent):
         return sorted(results, key=lambda x: x['rerank_score'], reverse=True), parsed.get('summary', "요약 불가")
     except: return results, "오류 발생"
 
+# [V200 핵심] 팩트 고정(Fact-Lock) 심층 리포트
 def generate_relevant_summary(ai_model, query, data):
+    # [수정] 프롬프트 분리 적용
     prompt = PROMPTS["deep_report"].format(
         query=query, 
         data=data
@@ -162,29 +172,32 @@ def generate_relevant_summary(ai_model, query, data):
     return res.text
 
 # --------------------------------------------------------------------------------
-# [NEW V236] Graph RAG 관계 추출 엔진 (형사 모드 🕵️‍♂️)
+# [NEW V246] Graph RAG 관계 추출 엔진 (제조사 관계 추가)
 # --------------------------------------------------------------------------------
 def extract_triples_from_text(ai_model, text):
     """
     텍스트에서 (주어) -> [관계] -> (목적어) 트리플을 추출합니다.
     """
+    # Graph Extraction 전용 프롬프트 (제조사 관계 추가됨)
     graph_prompt = f"""
     You are an expert Data Engineer specializing in Knowledge Graphs.
     Analyze the provided technical text and extract relationships between entities.
     
-    Target Entities: Device, Part, Symptom, Cause, Solution, Action, Value, Location.
+    Target Entities: Device, Part, Symptom, Cause, Solution, Action, Value, Location, Manufacturer.
     Target Relations: 
     - causes (원인이다)
-    - part_of (의 부품이다)
+    - part_of (의 부품이다: Use for components inside a machine)
     - located_in (에 위치한다)
     - solved_by (로 해결된다)
     - has_status (상태를 가진다)
     - requires (을 필요로 한다)
+    - manufactured_by (이 제조했다: Use when Entity B is the Brand/Maker of Entity A)
 
     IMPORTANT: 
     - Entities MUST be single nouns or short phrases (under 5 words). 
     - Do NOT include full sentences as entities.
     - If a sentence is "Use cable ties for pump replacement", extract: {{"source": "Pump replacement", "relation": "requires", "target": "Cable ties"}}
+    - If "Shimadzu TOC analyzer has an error", extract: {{"source": "TOC analyzer", "relation": "manufactured_by", "target": "Shimadzu"}}
 
     Return ONLY a JSON array of objects. No markdown, no explanations.
     Format: [{{"source": "Entity A", "relation": "relation_type", "target": "Entity B"}}]
