@@ -6,7 +6,7 @@ from logic_ai import *
 from utils_search import perform_unified_search
 
 # =========================================================================
-# [V245] 그래프 관계 매핑 (채팅창에서도 한국어로 직관적 표시)
+# [V247] 그래프 관계 매핑 (채팅창에서도 한국어로 직관적 표시)
 # =========================================================================
 REL_MAP = {
     "causes": "원인이다 (A가 B를 유발)",
@@ -15,7 +15,8 @@ REL_MAP = {
     "requires": "필요로 한다 (A는 B가 필요)",
     "has_status": "상태다 (A는 B라는 증상/상태)",
     "located_in": "위치한다 (A는 B에 있음)",
-    "related_to": "관련되어 있다 (A와 B 연관)"
+    "related_to": "관련되어 있다 (A와 B 연관)",
+    "manufactured_by": "제품이다 (A는 B가 제조함)"
 }
 
 # [Helper] 하이라이팅 함수
@@ -40,7 +41,7 @@ def show_search_ui(ai_model, db):
         .meta-bar { background-color: #004a99 !important; padding: 8px 12px; border-radius: 6px; font-size: 0.85rem; margin-bottom: 8px; color: #ffffff !important; display: flex; gap: 10px; flex-wrap: wrap; }
         .report-box { background-color: #ffffff; border: 1px solid #004a99; padding: 25px; border-radius: 12px; color: #0f172a !important; box-shadow: inset 0 2px 4px 0 rgba(0, 0, 0, 0.05); line-height: 1.8; }
         .doc-feedback-area { background-color: #f1f5f9; padding: 10px; border-radius: 8px; margin-top: 10px; border: 1px solid #e2e8f0; font-size: 0.9rem;}
-        .graph-insight-box { background-color: #fff7ed; border-left: 4px solid #f97316; padding: 15px; border-radius: 4px; margin-bottom: 15px; color: #431407; }
+        .graph-insight-box { background-color: #fff7ed; border-left: 4px solid #f97316; padding: 15px; border-radius: 4px; margin-bottom: 15px; color: #431407; font-size: 0.95rem; }
         .stSelectbox, .stTextInput { margin-bottom: 5px !important; }
     </style>""", unsafe_allow_html=True)
 
@@ -89,7 +90,7 @@ def show_search_ui(ai_model, db):
             return 
 
         # =========================================================
-        # [CASE 2] 일반 기술/생활 정보 검색 (Graph RAG V245)
+        # [CASE 2] 일반 기술/생활 정보 검색 (Graph RAG V247)
         # =========================================================
         with st.spinner("지식을 탐색 중입니다... (Graph + Vector)"):
             try:
@@ -130,22 +131,30 @@ def show_search_ui(ai_model, db):
                     st.write(st.session_state.full_report)
                     st.markdown('</div>', unsafe_allow_html=True)
 
-                # (3) [V245 개선] 참조 데이터 및 연관성 평가 (그래프/원본 분리 표시)
+                # --------------------------------------------------------------------------
+                # (3) [V247 핵심] 참조 데이터 (그래프와 원본 문서를 분리해서 표시)
+                # --------------------------------------------------------------------------
                 st.subheader("📚 참조 근거 자료 (Reference)")
                 search_keywords = user_q.split()
 
-                # -- A. 그래프 지식 (Insights) --
+                # 1. 데이터를 타입별로 분리
                 graph_docs = [d for d in final if d.get('source_table') == 'knowledge_graph']
+                normal_docs = [d for d in final if d.get('source_table') != 'knowledge_graph']
+
+                # 2. [A] 그래프 지식 (Insights) 먼저 표시
                 if graph_docs:
-                    with st.expander("💡 [그래프 분석] AI가 발견한 인과관계", expanded=True):
-                        for gd in graph_docs:
+                    with st.expander("💡 [AI 그래프 분석] 발견된 인과관계 (Knowledge Graph)", expanded=True):
+                        for gd in graph_docs[:5]: # 너무 길어지지 않게 5개 제한
+                            # content에 이미 AI가 요약한 문장(A는 B의 원인이다 등)이 들어있음
                             content = gd.get('content','').replace("\n", "<br>")
                             st.markdown(f'<div class="graph-insight-box">{content}</div>', unsafe_allow_html=True)
 
-                # -- B. 원본 문서 (Original Source) --
-                normal_docs = [d for d in final if d.get('source_table') != 'knowledge_graph']
+                # 3. [B] 원본 문서 (Original Source) 표시 - 그래프가 많아도 밀리지 않도록 별도 출력
                 if normal_docs:
-                    for d in normal_docs[:5]:
+                    st.markdown("---")
+                    st.caption("📄 원본 문서 내용 (Manual & Knowledge Base)")
+                    
+                    for d in normal_docs[:5]: # 최대 5개까지 원본 표시
                         v_mark = ' ✅ 인증' if d.get('is_verified') else ''
                         score = d.get('rerank_score', 0)
                         
@@ -164,7 +173,7 @@ def show_search_ui(ai_model, db):
                                 <span>🏷️ 모델: <b>{d.get("model_name","공통")}</b></span>
                             </div>''', unsafe_allow_html=True)
                             
-                            # 원본 내용 표시
+                            # 원본 내용 표시 (인간 작성 텍스트)
                             raw_content = d.get('content') or d.get('solution') or ""
                             # 이슈 내용이 별도로 있으면 병기 (지식베이스 경우)
                             if d.get('issue'):
@@ -188,9 +197,12 @@ def show_search_ui(ai_model, db):
                                     db.save_relevance_feedback(user_q, d['id'], t_name, 1, q_vec, reason="good")
                                     st.toast("기록됨")
                             st.markdown('</div>', unsafe_allow_html=True)
+                else:
+                    # 원본 문서가 없는 경우
+                    st.info("ℹ️ 매뉴얼 원본 문서를 찾지 못했습니다. (지식 그래프 분석 결과만 표시됩니다)")
 
                 # -------------------------------------------------------------
-                # [V245] 🛠️ 채팅창 내 그래프 즉시 수정 (수정+삭제 기능)
+                # [V247] 🛠️ 채팅창 내 그래프 즉시 수정 (수정+삭제 기능)
                 # -------------------------------------------------------------
                 # 키워드 관련 그래프 지식을 불러와서 바로 수정할 수 있게 함
                 keywords = [k for k in user_q.split() if len(k) >= 2]
