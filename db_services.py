@@ -456,3 +456,27 @@ class DBManager:
         except Exception as e:
             print(f"Graph Delete Error: {e}")
             return False
+
+    # =========================================================
+    # [V242] 🚀 그래프 노드 일괄 변경 (Bulk Rename)
+    # =========================================================
+    def bulk_rename_graph_node(self, old_name, new_name, target_scope="all"):
+        """
+        특정 단어(old_name)를 가진 모든 노드를 새 이름(new_name)으로 한 번에 바꿉니다.
+        """
+        try:
+            count = 0
+            
+            # 1. 출발점(Source) 변경
+            if target_scope in ["source", "all"]:
+                res = self.supabase.table("knowledge_graph").update({"source": self._clean_text(new_name)}).eq("source", old_name).execute()
+                if res.data: count += len(res.data)
+
+            # 2. 도착점(Target) 변경
+            if target_scope in ["target", "all"]:
+                res = self.supabase.table("knowledge_graph").update({"target": self._clean_text(new_name)}).eq("target", old_name).execute()
+                if res.data: count += len(res.data)
+                
+            return True, count
+        except Exception as e:
+            return False, str(e)
