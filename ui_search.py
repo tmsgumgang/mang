@@ -16,7 +16,7 @@ REL_MAP = {
     "has_status": "상태다 (A는 B라는 증상/상태)",
     "located_in": "위치한다 (A는 B에 있음)",
     "related_to": "관련되어 있다 (A와 B 연관)",
-    "manufactured_by": "제품이다 (A는 B가 제조함)"
+    "manufactured_by": "제품이다 (A는 B가 제조함)",
     "is_facility_of": "설비이다 (A는 B의 주요 설비)",
     "is_a": "종류이다 (A는 B의 일종/정의)"           
 }
