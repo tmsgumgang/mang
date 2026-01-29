@@ -162,38 +162,47 @@ def generate_relevant_summary(ai_model, query, data):
     return res.text
 
 # --------------------------------------------------------------------------------
-# [NEW V246] Graph RAG 관계 추출 엔진 (제조사 관계 추가)
+# [NEW V252] Graph RAG 관계 추출 엔진 (소모품/설비/정의 관계 추가)
 # --------------------------------------------------------------------------------
 def extract_triples_from_text(ai_model, text):
     """
     텍스트에서 (주어) -> [관계] -> (목적어) 트리플을 추출합니다.
+    [V252 업데이트] 소모품(consumable), 설비(is_facility_of), 정의(is_a) 등 상세 관계 추가
     """
-    # Graph Extraction 전용 프롬프트 (제조사 관계 추가됨)
     graph_prompt = f"""
-    You are an expert Data Engineer specializing in Knowledge Graphs.
+    You are an expert Data Engineer specializing in Knowledge Graphs for Industrial/Environmental Facilities.
     Analyze the provided technical text and extract relationships between entities.
     
-    Target Entities: Device, Part, Symptom, Cause, Solution, Action, Value, Location, Manufacturer.
+    Target Entities: Device, Part, Symptom, Cause, Solution, Action, Value, Location, Manufacturer, Consumable, Process, Station, Facility.
+    
     Target Relations: 
-    - causes (원인이다)
-    - part_of (의 부품이다: Use for components inside a machine)
-    - located_in (에 위치한다)
-    - solved_by (로 해결된다)
-    - has_status (상태를 가진다)
-    - requires (을 필요로 한다)
-    - manufactured_by (이 제조했다: Use when Entity B is the Brand/Maker of Entity A)
+    - causes (원인이다: A causes B)
+    - part_of (부품이다: A is a mechanical component of Device B)
+    - consumable_of (소모품이다: A is a disposable material for B. e.g., Reagent, Filter, Cable tie)
+    - is_facility_of (설비이다: A is a major facility/equipment installed at Station B. e.g., MCC Panel -> Station)
+    - is_a (종류이다: A is a type/category/instance of B. e.g., Iwon -> Measurement Station)
+    - included_in (일부이다: A is a step, section, or logical part of B. e.g., 'Step 1' is included in 'Calibration Process')
+    - located_in (위치한다: A is physically located in B)
+    - solved_by (해결된다: Symptom A is solved by Action B)
+    - has_status (상태다: Device A has status/symptom B)
+    - requires (필요로 한다: Action A requires Tool/Item B)
+    - manufactured_by (제조사다: Product A is made by Manufacturer B)
 
     IMPORTANT: 
     - Entities MUST be single nouns or short phrases (under 5 words). 
     - Do NOT include full sentences as entities.
-    - If a sentence is "Use cable ties for pump replacement", extract: {{"source": "Pump replacement", "relation": "requires", "target": "Cable ties"}}
-    - If "Shimadzu TOC analyzer has an error", extract: {{"source": "TOC analyzer", "relation": "manufactured_by", "target": "Shimadzu"}}
+    - Example 1: "The MCC Panel is installed at Iwon Station"
+      -> {{"source": "MCC Panel", "relation": "is_facility_of", "target": "Iwon Station"}}
+    - Example 2: "Iwon is a remote measurement station"
+      -> {{"source": "Iwon", "relation": "is_a", "target": "Measurement Station"}}
+    - Example 3: "Use cable ties for pump replacement" 
+      -> {{"source": "Cable ties", "relation": "consumable_of", "target": "Pump replacement"}}
 
     Return ONLY a JSON array of objects. No markdown, no explanations.
     Format: [{{"source": "Entity A", "relation": "relation_type", "target": "Entity B"}}]
 
     Text to Analyze:
-    {text[:2500]}
+    {text[:3500]}
     """
     
     try:
