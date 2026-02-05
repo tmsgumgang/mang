@@ -35,7 +35,7 @@ REL_MAP = {
 def show_admin_ui(ai_model, db):
     st.title("🔧 관리자 및 데이터 엔지니어링")
     
-    # [V253] 탭 구성 업데이트 ("✏️ 지식 수정" 추가됨)
+    # [V254] 탭 구성 업데이트 ("✏️ 지식 수정" 포함 총 8개)
     tabs = st.tabs(["🧹 현황", "📂 매뉴얼 학습", "📝 지식 등록", "✏️ 지식 수정", "🚨 분류실", "🏗️ 재건축", "🏷️ 승인", "🛠️ 그래프 교정"])
     
     # 1. 현황 대시보드
@@ -66,36 +66,45 @@ def show_admin_ui(ai_model, db):
     with tabs[2]:
         show_knowledge_reg_ui(ai_model, db)
 
-    # [NEW] 4. 지식 검색 및 수정 (V253)
+    # [NEW V254] 4. 지식 검색 및 수정 (작성자 검색 지원)
     with tabs[3]: 
         st.subheader("✏️ 등록된 지식 검색 및 수정")
         st.info("💡 사용자가 등록한 지식(Knowledge Base)을 검색하고 내용을 수정합니다.")
         
-        k_keyword = st.text_input("검색어 입력 (증상 또는 해결책 내용)", placeholder="예: 펌프 소음, 값이 튐")
+        # 검색창
+        k_keyword = st.text_input("검색어 입력 (증상, 내용, 또는 등록자 이름)", placeholder="예: 펌프 소음, 홍길동")
         
         if k_keyword:
-            results = db.search_knowledge_for_admin(k_keyword)
+            with st.spinner("데이터 조회 중..."):
+                results = db.search_knowledge_for_admin(k_keyword)
+            
             if results:
                 st.success(f"총 {len(results)}건이 검색되었습니다.")
                 
                 for row in results:
                     # 각 지식마다 펼침 메뉴(Expander) 생성
-                    with st.expander(f"[{row['id']}] {row.get('issue', '제목 없음')[:30]}... ({row.get('manufacturer')})"):
-                        with st.form(key=f"edit_know_{row['id']}"):
+                    # 작성자 정보도 타이틀에 표시하여 식별 용이하게 함
+                    author = row.get('registered_by', '익명')
+                    row_id = row['id']
+                    
+                    with st.expander(f"[{row_id}] {row.get('issue', '제목 없음')[:30]}... (작성자: {author})"):
+                        with st.form(key=f"edit_know_{row_id}"):
                             c1, c2 = st.columns([1, 1])
-                            u_mfr = c1.text_input("제조사", value=row.get('manufacturer', ''), key=f"km_{row['id']}")
-                            u_mod = c2.text_input("모델명", value=row.get('model_name', ''), key=f"ko_{row['id']}")
-                            u_itm = st.text_input("측정항목", value=row.get('measurement_item', ''), key=f"ki_{row['id']}")
+                            u_mfr = c1.text_input("제조사", value=row.get('manufacturer', ''), key=f"km_{row_id}")
+                            u_mod = c2.text_input("모델명", value=row.get('model_name', ''), key=f"ko_{row_id}")
+                            u_itm = st.text_input("측정항목", value=row.get('measurement_item', ''), key=f"ki_{row_id}")
                             
-                            u_iss = st.text_input("증상/이슈 (제목)", value=row.get('issue', ''), key=f"ks_{row['id']}")
-                            u_sol = st.text_area("해결방법 (내용)", value=row.get('solution', ''), height=150, key=f"kc_{row['id']}")
+                            u_iss = st.text_input("증상/이슈 (제목)", value=row.get('issue', ''), key=f"ks_{row_id}")
+                            u_sol = st.text_area("해결방법 (내용)", value=row.get('solution', ''), height=150, key=f"kc_{row_id}")
+                            
+                            st.caption(f"등록일: {row.get('created_at', '-')[:10]} | 등록자: {author}")
                             
                             bc1, bc2 = st.columns([1, 5])
                             save_btn = bc1.form_submit_button("💾 수정 저장")
                             del_btn = bc2.form_submit_button("🗑️ 삭제")
                             
                             if save_btn:
-                                if db.update_knowledge_item(row['id'], u_iss, u_sol, u_mfr, u_mod, u_itm):
+                                if db.update_knowledge_item(row_id, u_iss, u_sol, u_mfr, u_mod, u_itm):
                                     st.success("수정 완료! (임베딩도 갱신됨)")
                                     time.sleep(1)
                                     st.rerun()
@@ -103,7 +112,7 @@ def show_admin_ui(ai_model, db):
                                     st.error("수정 실패")
                                     
                             if del_btn:
-                                success, msg = db.delete_record("knowledge_base", row['id'])
+                                success, msg = db.delete_record("knowledge_base", row_id)
                                 if success:
                                     st.warning("삭제되었습니다.")
                                     time.sleep(1)
