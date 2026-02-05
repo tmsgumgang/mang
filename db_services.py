@@ -497,17 +497,18 @@ class DBManager:
         except: return {}
 
     # =========================================================
-    # [V253] 🛠️ 지식 데이터 수정/관리 기능 (Knowledge Maintenance)
+    # [V254] 🛠️ 지식 데이터 수정/관리 기능 (Knowledge Maintenance)
     # =========================================================
     def search_knowledge_for_admin(self, keyword):
         """
-        관리자용 지식 검색 (지식 베이스 내에서 키워드 검색)
+        관리자용 지식 검색 (지식 베이스 내에서 키워드 또는 등록자 이름 검색)
+        [V254 Update] registered_by 컬럼 검색 추가
         """
         try:
             if not keyword: return []
-            # issue(제목)나 solution(내용)에 키워드가 있는 것 검색
+            # issue(제목) or solution(내용) or registered_by(작성자) 검색
             res = self.supabase.table("knowledge_base").select("*")\
-                .or_(f"issue.ilike.%{keyword}%,solution.ilike.%{keyword}%")\
+                .or_(f"issue.ilike.%{keyword}%,solution.ilike.%{keyword}%,registered_by.ilike.%{keyword}%")\
                 .order("created_at", desc=True)\
                 .limit(20).execute()
             return res.data
