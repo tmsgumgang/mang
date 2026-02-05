@@ -495,3 +495,53 @@ class DBManager:
                 return res.data[0]
             return {}
         except: return {}
+
+    # =========================================================
+    # [V253] 🛠️ 지식 데이터 수정/관리 기능 (Knowledge Maintenance)
+    # =========================================================
+    def search_knowledge_for_admin(self, keyword):
+        """
+        관리자용 지식 검색 (지식 베이스 내에서 키워드 검색)
+        """
+        try:
+            if not keyword: return []
+            # issue(제목)나 solution(내용)에 키워드가 있는 것 검색
+            res = self.supabase.table("knowledge_base").select("*")\
+                .or_(f"issue.ilike.%{keyword}%,solution.ilike.%{keyword}%")\
+                .order("created_at", desc=True)\
+                .limit(20).execute()
+            return res.data
+        except: return []
+
+    def update_knowledge_item(self, doc_id, new_issue, new_sol, mfr, model, item):
+        """
+        지식 내용을 수정하고, 내용이 바뀌었으면 임베딩(Vector)도 재생성합니다.
+        """
+        try:
+            # 1. 임베딩 재생성을 위해 logic_ai 함수 가져오기 (순환 참조 방지)
+            from logic_ai import get_embedding
+            
+            # 2. 업데이트할 데이터 준비
+            payload = {
+                "issue": new_issue,
+                "solution": new_sol,
+                "manufacturer": self._clean_text(mfr),
+                "model_name": self._clean_text(model),
+                "measurement_item": self._normalize_tags(item),
+                "semantic_version": 2 # 버전 업
+            }
+            
+            # 3. 텍스트 내용이 바뀌었으므로 임베딩도 다시 계산해서 넣음
+            # (제목 + 내용을 합쳐서 임베딩)
+            combined_text = f"증상: {new_issue}\n해결: {new_sol}"
+            new_vec = get_embedding(combined_text)
+            if new_vec:
+                payload["embedding"] = new_vec
+            
+            # 4. DB 업데이트
+            res = self.supabase.table("knowledge_base").update(payload).eq("id", doc_id).execute()
+            return True if res.data else False
+            
+        except Exception as e:
+            print(f"Update Error: {e}")
+            return False
