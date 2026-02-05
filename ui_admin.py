@@ -35,8 +35,8 @@ REL_MAP = {
 def show_admin_ui(ai_model, db):
     st.title("🔧 관리자 및 데이터 엔지니어링")
     
-    # [V240] 탭 구성 유지
-    tabs = st.tabs(["🧹 현황", "📂 매뉴얼 학습", "📝 지식 등록", "🚨 분류실", "🏗️ 재건축", "🏷️ 승인", "🛠️ 그래프 교정"])
+    # [V253] 탭 구성 업데이트 ("✏️ 지식 수정" 추가됨)
+    tabs = st.tabs(["🧹 현황", "📂 매뉴얼 학습", "📝 지식 등록", "✏️ 지식 수정", "🚨 분류실", "🏗️ 재건축", "🏷️ 승인", "🛠️ 그래프 교정"])
     
     # 1. 현황 대시보드
     with tabs[0]:
@@ -66,8 +66,53 @@ def show_admin_ui(ai_model, db):
     with tabs[2]:
         show_knowledge_reg_ui(ai_model, db)
 
-    # 4. 수동 분류실
-    with tabs[3]:
+    # [NEW] 4. 지식 검색 및 수정 (V253)
+    with tabs[3]: 
+        st.subheader("✏️ 등록된 지식 검색 및 수정")
+        st.info("💡 사용자가 등록한 지식(Knowledge Base)을 검색하고 내용을 수정합니다.")
+        
+        k_keyword = st.text_input("검색어 입력 (증상 또는 해결책 내용)", placeholder="예: 펌프 소음, 값이 튐")
+        
+        if k_keyword:
+            results = db.search_knowledge_for_admin(k_keyword)
+            if results:
+                st.success(f"총 {len(results)}건이 검색되었습니다.")
+                
+                for row in results:
+                    # 각 지식마다 펼침 메뉴(Expander) 생성
+                    with st.expander(f"[{row['id']}] {row.get('issue', '제목 없음')[:30]}... ({row.get('manufacturer')})"):
+                        with st.form(key=f"edit_know_{row['id']}"):
+                            c1, c2 = st.columns([1, 1])
+                            u_mfr = c1.text_input("제조사", value=row.get('manufacturer', ''), key=f"km_{row['id']}")
+                            u_mod = c2.text_input("모델명", value=row.get('model_name', ''), key=f"ko_{row['id']}")
+                            u_itm = st.text_input("측정항목", value=row.get('measurement_item', ''), key=f"ki_{row['id']}")
+                            
+                            u_iss = st.text_input("증상/이슈 (제목)", value=row.get('issue', ''), key=f"ks_{row['id']}")
+                            u_sol = st.text_area("해결방법 (내용)", value=row.get('solution', ''), height=150, key=f"kc_{row['id']}")
+                            
+                            bc1, bc2 = st.columns([1, 5])
+                            save_btn = bc1.form_submit_button("💾 수정 저장")
+                            del_btn = bc2.form_submit_button("🗑️ 삭제")
+                            
+                            if save_btn:
+                                if db.update_knowledge_item(row['id'], u_iss, u_sol, u_mfr, u_mod, u_itm):
+                                    st.success("수정 완료! (임베딩도 갱신됨)")
+                                    time.sleep(1)
+                                    st.rerun()
+                                else:
+                                    st.error("수정 실패")
+                                    
+                            if del_btn:
+                                success, msg = db.delete_record("knowledge_base", row['id'])
+                                if success:
+                                    st.warning("삭제되었습니다.")
+                                    time.sleep(1)
+                                    st.rerun()
+            else:
+                st.warning("검색 결과가 없습니다.")
+
+    # 5. 수동 분류실
+    with tabs[4]:
         st.subheader("🚨 제조사 미지정 데이터 정제")
         target = st.radio("조회 대상", ["경험", "매뉴얼"], horizontal=True, key="admin_cls_target")
         t_name = "knowledge_base" if target == "경험" else "manual_base"
@@ -97,8 +142,8 @@ def show_admin_ui(ai_model, db):
             else: st.success("✅ 분류가 필요한 데이터가 없습니다.")
         except: st.error("데이터 로드 실패")
 
-    # 5. 지식 재건축 (Graph 일괄 생성 기능 포함)
-    with tabs[4]:
+    # 6. 지식 재건축 (Graph 일괄 생성 기능 포함)
+    with tabs[5]:
         st.subheader("🏗️ 데이터 구조 재설계 및 확장")
         
         c_rb1, c_rb2 = st.columns(2)
@@ -155,8 +200,8 @@ def show_admin_ui(ai_model, db):
                             pb2.progress((i+1)/total)
                         st.success(f"작업 끝! 총 {count}개의 새로운 지식 연결고리가 생성되었습니다.")
 
-    # 6. 라벨 승인
-    with tabs[5]:
+    # 7. 라벨 승인
+    with tabs[6]:
         st.subheader("🏷️ AI 라벨링 승인 대기")
         staging = db.supabase.table("manual_base").select("*").eq("semantic_version", 2).limit(3).execute().data
         if staging:
@@ -171,8 +216,8 @@ def show_admin_ui(ai_model, db):
                         st.rerun()
         else: st.info("승인 대기 중인 데이터가 없습니다.")
 
-    # 7. [V242] 🛠️ 그래프 조회 및 직접 교정 (일괄 변경 기능 탑재)
-    with tabs[6]:
+    # 8. [V242] 🛠️ 그래프 조회 및 직접 교정 (일괄 변경 기능 탑재)
+    with tabs[7]:
         st.subheader("🛠️ 지식 그래프(Graph RAG) 탐색 및 교정")
         st.info("💡 관계식을 자연스러운 문장으로 읽고 수정하거나, 특정 단어를 일괄 변경하세요.")
         
