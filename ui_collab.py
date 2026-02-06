@@ -11,7 +11,7 @@ except ImportError:
     calendar = None
 
 def show_collab_ui(db):
-    # [CSS] V264: 모바일 초적화, 다크모드, 리스트 뷰 당직 숨기기
+    # [CSS] 모바일 초적화, 다크모드, 리스트 뷰 당직 숨기기
     st.markdown("""<style>
         /* 연락처 카드 */
         .contact-card {
@@ -73,7 +73,7 @@ def show_collab_ui(db):
     tab1, tab2 = st.tabs(["📅 일정 & 당직", "📒 업체 연락처"])
 
     # ------------------------------------------------------------------
-    # [Tab 1] 일정 & 당직 (V264 Updated)
+    # [Tab 1] 일정 & 당직 (V265 Updated)
     # ------------------------------------------------------------------
     with tab1:
         if calendar is None: return 
@@ -156,7 +156,8 @@ def show_collab_ui(db):
                 "contentHeight": "auto"
             }
             
-            cal_state = calendar(events=calendar_events, options=calendar_options, key="my_calendar")
+            # [Fix] key 변경으로 DuplicateError 방지
+            cal_state = calendar(events=calendar_events, options=calendar_options, key="my_calendar_v265")
 
             if cal_state.get("eventClick"):
                 st.session_state.selected_event = cal_state["eventClick"]["event"]
@@ -268,6 +269,7 @@ def show_collab_ui(db):
     with tab2:
         st.subheader("📒 업체 연락처")
         
+        # [State] 연락처 수정 모드
         if "edit_contact_id" not in st.session_state:
             st.session_state.edit_contact_id = None
 
@@ -282,7 +284,7 @@ def show_collab_ui(db):
             for c in filtered:
                 c_id = c['id']
                 
-                # --- [A] 일반 보기 ---
+                # --- [A] 일반 보기 모드 ---
                 if st.session_state.edit_contact_id != c_id:
                     rank_html = f"<span class='rank-badge'>{c.get('rank')}</span>" if c.get('rank') else ""
                     phone = c.get('phone', '')
