@@ -548,7 +548,7 @@ class DBManager:
             return False
 
     # =========================================================
-    # [V260] 🤝 협업 기능 (일정 & 연락처 & 당직)
+    # [V262] 🤝 협업 기능 (일정 & 연락처 & 당직) (직급 기능 추가)
     # =========================================================
     
     # --- 📅 일정 (Schedule) ---
@@ -579,7 +579,7 @@ class DBManager:
                 "start_time": start_dt, 
                 "end_time": end_dt,
                 "category": cat, 
-                "description": desc,
+                "description": desc, 
                 "location": location
             }
             res = self.supabase.table("collab_schedules").update(payload).eq("id", sch_id).execute()
@@ -594,7 +594,7 @@ class DBManager:
             return True
         except: return False
 
-    # --- 👮‍♂️ 당직 (Duty Roster) [New] ---
+    # --- 👮‍♂️ 당직 (Duty Roster) ---
     def get_duty_roster(self):
         try:
             return self.supabase.table("duty_roster").select("*").execute().data
@@ -617,25 +617,33 @@ class DBManager:
             return True
         except: return False
 
-    # --- 📒 연락처 (Contacts) ---
+    # --- 📒 연락처 (Contacts) [Updated] ---
     def get_contacts(self):
         try:
             return self.supabase.table("collab_contacts").select("*").order("company_name").execute().data
         except: return []
 
-    def add_contact(self, company, name, phone, email, tags, memo):
+    # [V262] rank(직급) 파라미터 추가
+    def add_contact(self, company, name, phone, email, tags, memo, rank):
         try:
             payload = {
                 "company_name": company, "person_name": name, "phone": phone,
-                "email": email, "tags": tags, "memo": memo
+                "email": email, "tags": tags, "memo": memo,
+                "rank": rank # 직급 추가
             }
             res = self.supabase.table("collab_contacts").insert(payload).execute()
             return True if res.data else False
         except: return False
 
-    def update_contact(self, contact_id, updates):
+    # [V262] 연락처 수정 기능 추가
+    def update_contact(self, contact_id, company, name, phone, email, tags, memo, rank):
         try:
-            res = self.supabase.table("collab_contacts").update(updates).eq("id", contact_id).execute()
+            payload = {
+                "company_name": company, "person_name": name, "phone": phone,
+                "email": email, "tags": tags, "memo": memo,
+                "rank": rank # 직급 포함 수정
+            }
+            res = self.supabase.table("collab_contacts").update(payload).eq("id", contact_id).execute()
             return True if res.data else False
         except: return False
 
