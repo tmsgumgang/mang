@@ -3,28 +3,29 @@ import pandas as pd
 import time
 from datetime import datetime, timedelta, timezone
 
-# 캘린더 라이브러리 임포트 (설치 필요: pip install streamlit-calendar)
+# 캘린더 라이브러리 임포트
 try:
     from streamlit_calendar import calendar
 except ImportError:
-    st.error("⚠️ 'streamlit-calendar' 라이브러리가 필요합니다. 터미널에 'pip install streamlit-calendar'를 입력해주세요.")
+    st.error("⚠️ 'streamlit-calendar' 라이브러리가 필요합니다.")
     calendar = None
 
 def show_collab_ui(db):
     st.markdown("""<style>
         .contact-card { background-color: #f8fafc; border: 1px solid #e2e8f0; padding: 15px; border-radius: 8px; margin-bottom: 10px; }
+        .schedule-row { padding: 10px; border-bottom: 1px solid #eee; }
     </style>""", unsafe_allow_html=True)
 
     # 탭 구성
     tab1, tab2 = st.tabs(["📅 일정 캘린더", "📒 업체 연락처"])
 
     # ------------------------------------------------------------------
-    # [Tab 1] 일정 관리 (캘린더 뷰 적용)
+    # [Tab 1] 일정 관리 (V257 Upgraded)
     # ------------------------------------------------------------------
     with tab1:
-        if calendar is None: return # 라이브러리 없으면 중단
+        if calendar is None: return 
 
-        c1, c2 = st.columns([3, 1]) # 달력 영역을 넓게 (3:1)
+        c1, c2 = st.columns([3, 1]) 
         
         # --- [좌측] 캘린더 시각화 ---
         with c1:
@@ -33,59 +34,70 @@ def show_collab_ui(db):
             
             calendar_events = []
             
-            # 카테고리별 색상 지정
+            # [V257] 카테고리별 색상 업데이트
             color_map = {
-                "정기점검": "#3b82f6", # 파랑
-                "수리/AS": "#ef4444", # 빨강
-                "납품/미팅": "#10b981", # 초록
-                "회식/기타": "#f59e0b"  # 주황
+                "점검": "#3b82f6",  # 파랑
+                "월간": "#8b5cf6",  # 보라
+                "회의": "#10b981",  # 초록
+                "행사": "#f59e0b",  # 주황
+                "기타": "#6b7280"   # 회색
             }
 
             if schedules:
                 for s in schedules:
-                    # DB 시간(UTC) -> ISO 포맷 문자열로 변환 (FullCalendar가 알아서 로컬 시간으로 보여줌)
-                    # 데이터프레임 안 거치고 raw dict 사용
+                    # DB 시간(UTC) -> ISO 포맷
                     start_iso = s['start_time']
                     end_iso = s['end_time']
+                    cat = s.get('category', '기타')
+                    loc = s.get('location', '') # 장소 정보
                     
+                    # 제목에 장소 있으면 표시 (예: [회의] 주간회의 @대회의실)
+                    display_title = f"[{cat}] {s['title']}"
+                    if loc: display_title += f" (@{loc})"
+
                     calendar_events.append({
-                        "title": f"[{s['category']}] {s['title']}",
+                        "title": display_title,
                         "start": start_iso,
                         "end": end_iso,
-                        "backgroundColor": color_map.get(s['category'], "#6b7280"),
-                        "borderColor": color_map.get(s['category'], "#6b7280"),
+                        "backgroundColor": color_map.get(cat, "#6b7280"), # 없으면 회색
+                        "borderColor": color_map.get(cat, "#6b7280"),
                         "extendedProps": {
                             "id": s['id'],
-                            "description": s['description'],
-                            "user": s['created_by'],
-                            "category": s['category']
+                            "description": s.get('description', ''),
+                            "user": s.get('created_by', ''),
+                            "category": cat,
+                            "location": loc
                         }
                     })
 
-            # 캘린더 옵션 설정 (월/주/일 보기, 한글화 등)
+            # 캘린더 옵션
             calendar_options = {
                 "headerToolbar": {
                     "left": "today prev,next",
                     "center": "title",
-                    "right": "dayGridMonth,timeGridWeek,timeGridDay"
+                    "right": "dayGridMonth,timeGridWeek,listMonth"
                 },
                 "initialView": "dayGridMonth",
                 "navLinks": True,
                 "selectable": True,
-                "editable": False, # 드래그 수정은 DB 연동 복잡해서 일단 끔
+                "editable": False,
             }
             
-            # 캘린더 렌더링 & 클릭 이벤트 감지
             cal_state = calendar(events=calendar_events, options=calendar_options, key="my_calendar")
 
-            # [이벤트 클릭 시 상세 정보 표시]
+            # [이벤트 클릭 시 상세 정보]
             if cal_state.get("eventClick"):
                 event_data = cal_state["eventClick"]["event"]
                 props = event_data["extendedProps"]
                 
-                st.info(f"📌 선택된 일정: **{event_data['title']}**")
-                st.write(f"📝 내용: {props['description']}")
-                st.caption(f"등록자: {props['user']}")
+                st.info(f"📌 **{event_data['title']}**")
+                
+                # 상세 내용 표시
+                if props.get('location'):
+                    st.write(f"📍 **장소:** {props['location']}")
+                
+                st.write(f"📝 **내용:** {props['description']}")
+                st.caption(f"등록자: {props['user']} | 분류: {props['category']}")
                 
                 if st.button("🗑️ 이 일정 삭제", key=f"del_cal_evt_{props['id']}"):
                     db.delete_schedule(props['id'])
@@ -93,32 +105,66 @@ def show_collab_ui(db):
                     time.sleep(0.5)
                     st.rerun()
 
-        # --- [우측] 일정 등록 폼 ---
+        # --- [우측] 일정 등록 폼 (V257 수정됨) ---
         with c2:
             st.markdown("### ➕ 일정 등록")
             with st.form("add_schedule_form_cal"):
+                # 1. 제목
                 s_title = st.text_input("일정 제목", placeholder="예: 정기 점검")
-                s_cat = st.selectbox("분류", ["정기점검", "수리/AS", "납품/미팅", "회식/기타"])
                 
-                d1, d2 = st.columns(2)
+                # 2. [V257] 분류 (직접입력 로직 추가)
+                cat_options = ["점검", "월간", "회의", "행사", "기타", "직접입력"]
+                s_cat_select = st.selectbox("분류", cat_options)
+                
+                if s_cat_select == "직접입력":
+                    s_cat = st.text_input("분류 입력", placeholder="예: 긴급")
+                else:
+                    s_cat = s_cat_select
+
+                # 3. [V257] 장소 추가
+                s_loc = st.text_input("장소 (선택)", placeholder="예: 3층 회의실")
+
+                st.markdown("---")
+                # 4. 날짜 및 시간 (시작)
+                d1, t1 = st.columns(2)
                 s_date = d1.date_input("시작 날짜")
-                s_time = d2.time_input("시작 시간")
+                s_time = t1.time_input("시작 시간")
                 
-                # 종료 시간은 옵션 (여기선 간단히 시작시간 + 1시간으로 자동 설정하거나, 입력 받거나)
-                # 복잡도를 줄이기 위해 시작시간만 받아서 저장 (FullCalendar는 end 없으면 1시간으로 간주)
+                # 5. [V257] 종료 시간 (선택)
+                use_end_time = st.checkbox("종료 시간 설정")
+                e_date = s_date # 기본값
+                e_time = s_time # 기본값
+                
+                if use_end_time:
+                    d2, t2 = st.columns(2)
+                    e_date = d2.date_input("종료 날짜", value=s_date)
+                    e_time = t2.time_input("종료 시간", value=(datetime.combine(s_date, s_time) + timedelta(hours=1)).time())
                 
                 s_desc = st.text_area("상세 내용")
                 s_user = st.text_input("등록자", "관리자")
                 
                 if st.form_submit_button("일정 추가"):
-                    # 로컬 시간 -> ISO 포맷
-                    local_dt_start = datetime.combine(s_date, s_time)
-                    local_dt_end = local_dt_start + timedelta(hours=1) # 기본 1시간
-                    
-                    if db.add_schedule(s_title, local_dt_start.isoformat(), local_dt_end.isoformat(), s_cat, s_desc, s_user):
-                        st.success("등록 완료!")
-                        time.sleep(0.5)
-                        st.rerun()
+                    if not s_title:
+                        st.error("제목을 입력해주세요.")
+                    else:
+                        # 시작 시간 (Local)
+                        local_dt_start = datetime.combine(s_date, s_time)
+                        
+                        # 종료 시간 계산
+                        if use_end_time:
+                            local_dt_end = datetime.combine(e_date, e_time)
+                        else:
+                            # 종료 시간 없으면 기본 1시간으로 설정 (달력 가시성 확보)
+                            local_dt_end = local_dt_start + timedelta(hours=1)
+                        
+                        # 분류 값 최종 확인
+                        final_cat = s_cat if s_cat else "기타"
+
+                        # DB 저장 (ISO 포맷)
+                        if db.add_schedule(s_title, local_dt_start.isoformat(), local_dt_end.isoformat(), final_cat, s_desc, s_user, s_loc):
+                            st.success("등록 완료!")
+                            time.sleep(0.5)
+                            st.rerun()
 
     # ------------------------------------------------------------------
     # [Tab 2] 연락처 관리 (기존 유지)
