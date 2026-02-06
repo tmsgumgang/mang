@@ -39,7 +39,7 @@ def show_collab_ui(db):
         }
     </style>""", unsafe_allow_html=True)
 
-    # [CSS 2] 캘린더 내부 주입용 CSS (폰트 확대 & 당직 두께 조절 반영)
+    # [CSS 2] 캘린더 내부 주입용 CSS (텍스트 넘침 방지 & 폰트 최적화)
     calendar_custom_css = """
         /* 헤더 최소화 */
         .fc-header-toolbar {
@@ -50,30 +50,32 @@ def show_collab_ui(db):
         .fc-toolbar-title { font-size: 0.9rem !important; }
         .fc-button { font-size: 0.6rem !important; padding: 1px 5px !important; }
 
-        /* 칸 높이 100px로 강제 확장 */
+        /* 칸 높이 100px 유지 */
         .fc-daygrid-day-frame {
             min-height: 100px !important;
         }
 
-        /* [요청 1] 폰트 확대 (0.4rem -> 0.5rem) */
+        /* 폰트 크기 0.5rem (가독성 유지) */
         .fc-col-header-cell-cushion { font-size: 0.55rem !important; padding: 1px !important; }
         .fc-daygrid-day-number { font-size: 0.55rem !important; padding: 1px !important; }
         
-        .fc-event-title, .fc-event-time { 
-            font-size: 0.5rem !important; /* 폰트 키움 */
+        /* [핵심 Fix 1] 일정명 넘침 방지 (말줄임표 처리) */
+        .fc-event-title {
+            font-size: 0.5rem !important;
             font-weight: normal !important;
-            line-height: 1.1 !important; /* 줄 간격 살짝 여유 */
-            white-space: nowrap !important;
+            line-height: 1.1 !important;
+            white-space: nowrap !important;      /* 줄바꿈 금지 */
+            overflow: hidden !important;         /* 넘치는 텍스트 숨김 */
+            text-overflow: ellipsis !important;  /* 넘치면 ... 표시 */
+            display: block !important;           /* 블록 요소로 처리 */
         }
         
-        /* [요청 2] 당직(duty-event) 두께 다이어트 */
-        /* 당직 이벤트만 콕 집어서 패딩을 0으로 만들고 높이를 줄임 */
+        /* 당직 두께 다이어트 */
         .duty-event .fc-event-main {
             padding: 0px 1px !important; 
             line-height: 1.0 !important;
         }
         
-        /* 이벤트 박스 공통 여백 */
         .fc-event {
             margin-bottom: 1px !important;
             padding: 0px 1px !important;
@@ -174,12 +176,11 @@ def show_collab_ui(db):
                 "contentHeight": "auto"
             }
             
-            # CSS 주입
             cal_state = calendar(
                 events=calendar_events, 
                 options=calendar_options, 
                 custom_css=calendar_custom_css, 
-                key="my_calendar_v278"
+                key="my_calendar_v279"
             )
 
             if cal_state.get("eventClick"):
@@ -237,24 +238,38 @@ def show_collab_ui(db):
                             db.delete_duty_worker(props['id'])
                             st.rerun()
 
-        # === [우측] 관리 패널 (요청 3: 순서 변경) ===
+        # === [우측] 관리 패널 ===
         with c2:
             # 1. 일정 등록 (위로 이동)
             st.markdown("### ➕ 일정 등록")
             cat_select = st.selectbox("분류", ["점검", "월간", "회의", "행사", "기타", "직접입력"], key="n_cat")
             cat_manual = st.text_input("분류명", key="n_man") if cat_select == "직접입력" else ""
             n_title = st.text_input("제목", key="n_tit")
-            n_loc = st.text_input("장소", key="n_loc")
+            n_loc = st.text_input("장소 (측정소명)", key="n_loc")
+            
             nd1, nt1 = st.columns(2)
             n_date = nd1.date_input("날짜", key="n_d")
-            n_time = nt1.time_input("시간", value=datetime.now().time(), key="n_t")
+            
+            # [핵심 Fix 2] 시간 입력을 Selectbox로 변경 (모바일 스크롤 버그 해결)
+            # 00:00 ~ 23:30까지 30분 단위 생성 (필요시 15분 단위로 수정 가능)
+            time_options = [f"{h:02d}:{m:02d}" for h in range(7, 20) for m in (0, 30)] # 07:00 ~ 19:30 위주
+            # 기본값 설정 (현재 시간과 가장 가까운 시간)
+            now = datetime.now()
+            default_time_idx = 6 # 대략 10:00 정도
+            
+            n_time_str = nt1.selectbox("시간", time_options, index=default_time_idx, key="n_t_select")
+            
             n_desc = st.text_area("내용", key="n_dsc")
             n_user = st.text_input("등록자", "관리자", key="n_usr")
             
             if st.button("저장", type="primary", use_container_width=True):
                 if n_title:
                     f_cat = cat_manual if cat_select == "직접입력" else cat_select
-                    start = datetime.combine(n_date, n_time)
+                    # 문자열 시간을 time 객체로 변환
+                    h, m = map(int, n_time_str.split(':'))
+                    selected_time = datetime.now().replace(hour=h, minute=m, second=0).time()
+                    
+                    start = datetime.combine(n_date, selected_time)
                     end = start + timedelta(hours=1)
                     db.add_schedule(n_title, start.isoformat(), end.isoformat(), f_cat, n_desc, n_user, n_loc)
                     st.success("저장됨"); time.sleep(0.5); st.rerun()
@@ -282,7 +297,7 @@ def show_collab_ui(db):
                         st.success("등록됨"); time.sleep(0.5); st.rerun()
 
     # ------------------------------------------------------------------
-    # [Tab 2] 연락처 관리 (V278: 검색 시에만 표시 - 리소스 절약)
+    # [Tab 2] 연락처 관리 (V278 유지: 검색 최적화)
     # ------------------------------------------------------------------
     with tab2:
         st.subheader("📒 업체 연락처")
@@ -292,7 +307,6 @@ def show_collab_ui(db):
 
         search_txt = st.text_input("🔍 검색 (업체, 담당자, 태그...)", placeholder="검색어를 입력하면 리스트가 나타납니다.")
         
-        # [요청 4] 검색어가 있을 때만 DB 조회 및 렌더링
         if not search_txt:
             st.info("👆 검색어를 입력해주세요. (전체 리스트 로딩 방지)")
         else:
@@ -306,11 +320,9 @@ def show_collab_ui(db):
                 for c in filtered:
                     c_id = c['id']
                     
-                    # --- [A] 일반 보기 모드 ---
                     if st.session_state.edit_contact_id != c_id:
                         with st.container(border=True):
                             c_col1, c_col2 = st.columns([5, 1])
-                            
                             with c_col1:
                                 st.markdown(f"**{c.get('company_name')}**")
                                 rank_txt = f"({c.get('rank')})" if c.get('rank') else ""
@@ -319,7 +331,6 @@ def show_collab_ui(db):
                                 phone = c.get('phone', '')
                                 if phone:
                                     clean_phone = re.sub(r'[^0-9]', '', str(phone))
-                                    # [핵심] target="_self" 적용하여 새 창 열림 방지 및 즉시 전화 앱 호출
                                     st.markdown(f'''
                                         <a href="tel:{clean_phone}" target="_self" class="custom-phone-btn">
                                             📞 {phone}
@@ -339,8 +350,6 @@ def show_collab_ui(db):
                                 if st.button("✏️", key=f"btn_edit_{c_id}", help="수정"):
                                     st.session_state.edit_contact_id = c_id
                                     st.rerun()
-
-                    # --- [B] 수정 모드 ---
                     else:
                         with st.container(border=True):
                             st.info("✏️ 연락처 수정")
