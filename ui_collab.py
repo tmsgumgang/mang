@@ -1,5 +1,4 @@
 import streamlit as st
-import streamlit.components.v1 as components
 import pandas as pd
 import time
 import re
@@ -14,14 +13,23 @@ except ImportError:
 
 def show_collab_ui(db):
     # [CSS 1] 메인 화면 스타일 (캘린더 외부)
-    # 연락처 카드는 이제 components.html로 물리므로 여기 CSS는 최소화
+    # 네이티브 컨테이너를 사용하므로 CSS 의존도를 낮춤
     st.markdown("""<style>
         .meta-info {
-            font-size: 0.85rem; color: var(--text-color); opacity: 0.8;
+            font-size: 0.85rem; color: gray; margin-top: 4px;
+        }
+        /* 버튼 스타일 미세 조정 */
+        div[data-testid="stLinkButton"] > a {
+            background-color: #3b82f6;
+            color: white;
+            border: none;
+            font-weight: bold;
+            width: 100%; /* 버튼 꽉 차게 */
+            text-align: center;
         }
     </style>""", unsafe_allow_html=True)
 
-    # [CSS 2] 캘린더 내부 주입용 CSS (폰트 초소형화 & 칸 높이 확장)
+    # [CSS 2] 캘린더 내부 주입용 CSS (요청사항 100% 반영)
     calendar_custom_css = """
         /* 헤더 최소화 */
         .fc-header-toolbar {
@@ -32,12 +40,12 @@ def show_collab_ui(db):
         .fc-toolbar-title { font-size: 0.9rem !important; }
         .fc-button { font-size: 0.6rem !important; padding: 1px 5px !important; }
 
-        /* [핵심] 칸 높이 강제 확장 (일정 많이 보기 위함) */
+        /* [요청 1] 칸 높이 100px로 강제 확장 */
         .fc-daygrid-day-frame {
             min-height: 100px !important;
         }
 
-        /* [핵심] 폰트 크기 0.4rem (약 6px) 수준으로 강제 축소 */
+        /* [요청 2] 폰트 크기 0.4rem (약 6px) - 아주 작게 */
         .fc-col-header-cell-cushion { /* 요일 */
             font-size: 0.5rem !important; 
             padding: 1px !important;
@@ -50,7 +58,7 @@ def show_collab_ui(db):
             font-size: 0.4rem !important; 
             font-weight: normal !important;
             line-height: 1.0 !important;
-            white-space: nowrap !important;
+            white-space: nowrap !important; /* 줄바꿈 방지 */
         }
         
         /* 이벤트 박스 여백 제거 */
@@ -146,9 +154,9 @@ def show_collab_ui(db):
                 "locale": "ko",
                 "navLinks": True, 
                 "selectable": True, 
-                # [요청] 이번 달만 표시 (이전/다음달 흐린 날짜 숨김)
+                # [요청] 이번 달만 표시 (이전/다음달 숨김)
                 "showNonCurrentDates": False, 
-                # [요청] 6주 강제 채우기 끔 -> 해당 월의 주만 표시
+                # [요청] 6주 강제 채우기 끔
                 "fixedWeekCount": False,
                 # [요청] 칸을 늘렸으니 최대 5개까지 표시
                 "dayMaxEvents": 5, 
@@ -156,12 +164,12 @@ def show_collab_ui(db):
                 "contentHeight": "auto"
             }
             
-            # [Core] custom_css 전달 (Iframe 내부 스타일 적용)
+            # CSS 주입
             cal_state = calendar(
                 events=calendar_events, 
                 options=calendar_options, 
                 custom_css=calendar_custom_css, 
-                key="my_calendar_v275"
+                key="my_calendar_v276"
             )
 
             if cal_state.get("eventClick"):
@@ -261,7 +269,7 @@ def show_collab_ui(db):
                     st.success("저장됨"); time.sleep(0.5); st.rerun()
 
     # ------------------------------------------------------------------
-    # [Tab 2] 연락처 관리 (V275: 순수 HTML + target="_top" 해결)
+    # [Tab 2] 연락처 관리 (V276: Streamlit Native Link Button 사용)
     # ------------------------------------------------------------------
     with tab2:
         st.subheader("📒 업체 연락처")
@@ -282,80 +290,41 @@ def show_collab_ui(db):
                 
                 # --- [A] 일반 보기 모드 ---
                 if st.session_state.edit_contact_id != c_id:
-                    rank_html = f"<span class='rank-badge'>{c.get('rank')}</span>" if c.get('rank') else ""
-                    phone = c.get('phone', '')
-                    
-                    # [V275 Fix] HTML 컴포넌트로 순수 HTML 렌더링
-                    # target="_top": Iframe을 탈출하여 브라우저 최상위에서 링크 실행 (앱 실행 트리거)
-                    phone_btn_html = ""
-                    if phone:
-                        clean_phone = re.sub(r'[^0-9]', '', str(phone))
-                        phone_btn_html = f"""
-                        <a href="tel:{clean_phone}" target="_top" style="
-                            display: inline-block;
-                            text-decoration: none;
-                            color: white;
-                            font-weight: bold;
-                            background-color: #3b82f6;
-                            padding: 8px 16px;
-                            border-radius: 20px;
-                            font-size: 0.9rem;
-                            font-family: sans-serif;
-                            border: none;
-                            cursor: pointer;">
-                            📞 {phone}
-                        </a>
-                        """
-                    else:
-                        phone_btn_html = """
-                        <span style="
-                            display: inline-block;
-                            background-color: #cbd5e1; 
-                            color: white; 
-                            padding: 8px 16px; 
-                            border-radius: 20px; 
-                            font-size: 0.9rem; 
-                            font-weight: bold;
-                            font-family: sans-serif;">
-                            번호 없음
-                        </span>
-                        """
+                    # [핵심] HTML 대신 st.container로 카드 UI 구성
+                    # 이렇게 해야 st.link_button(전화걸기)을 안전하게 쓸 수 있습니다.
+                    with st.container(border=True):
+                        # 레이아웃: 정보(왼쪽) + 수정버튼(오른쪽)
+                        c_col1, c_col2 = st.columns([5, 1])
+                        
+                        with c_col1:
+                            # 1. 업체 및 담당자 정보
+                            st.markdown(f"**{c.get('company_name')}**")
+                            rank_txt = f"({c.get('rank')})" if c.get('rank') else ""
+                            st.markdown(f"👤 {c.get('person_name')} {rank_txt}")
+                            
+                            # 2. 전화번호 (Streamlit Link Button 사용 - 100% 작동 보장)
+                            phone = c.get('phone', '')
+                            if phone:
+                                clean_phone = re.sub(r'[^0-9]', '', str(phone))
+                                # 전화 걸기 버튼 (파란색 스타일은 위쪽 CSS로 적용됨)
+                                st.link_button(f"📞 {phone}", f"tel:{clean_phone}", use_container_width=True)
+                            else:
+                                st.caption("번호 없음")
+                                
+                            # 3. 추가 정보
+                            if c.get('email'):
+                                st.markdown(f"<div class='meta-info'>📧 {c.get('email')}</div>", unsafe_allow_html=True)
+                            if c.get('tags'):
+                                st.markdown(f"<div class='meta-info'>🏷️ {c.get('tags')}</div>", unsafe_allow_html=True)
+                            if c.get('memo'):
+                                st.markdown(f"<div class='meta-info'>📝 {c.get('memo')}</div>", unsafe_allow_html=True)
+                        
+                        with c_col2:
+                            if st.button("✏️", key=f"btn_edit_{c_id}", help="수정"):
+                                st.session_state.edit_contact_id = c_id
+                                st.rerun()
 
-                    # HTML 조립
-                    html_content = f"""
-                    <div style="
-                        background-color: #f0f2f6; 
-                        border: 1px solid rgba(128, 128, 128, 0.2); 
-                        border-radius: 12px; 
-                        padding: 16px; 
-                        margin-bottom: 8px; /* 버튼과 간격 */
-                        font-family: sans-serif;">
-                        
-                        <div style="font-size: 1.1rem; font-weight: bold; margin-bottom: 4px; color: #31333F;">
-                            {c.get('company_name')}
-                        </div>
-                        <div style="font-size: 0.95rem; margin-bottom: 8px; color: #31333F;">
-                            👤 {c.get('person_name')} {rank_html}
-                        </div>
-                        
-                        {phone_btn_html}
-                        
-                        <div style="margin-top: 10px; padding-top: 8px; border-top: 1px solid rgba(128, 128, 128, 0.2); font-size: 0.85rem; opacity: 0.8; color: #31333F;">
-                            <div>📧 {c.get('email','-')}</div>
-                            <div style="margin-top:4px;">🏷️ {c.get('tags','')}</div>
-                            <div style="margin-top:4px; color:gray;">{c.get('memo','')}</div>
-                        </div>
-                    </div>
-                    """
-                    
-                    # components.html로 렌더링 (높이 자동조절이 안되므로 넉넉히 잡음)
-                    components.html(html_content, height=190)
-                    
-                    if st.button("✏️ 수정", key=f"btn_edit_{c_id}"):
-                        st.session_state.edit_contact_id = c_id
-                        st.rerun()
-
-                # --- [B] 수정 모드 ---
+                # --- [B] 수정 모드 (기존 유지) ---
                 else:
                     with st.container(border=True):
                         st.info("✏️ 연락처 수정")
