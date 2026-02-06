@@ -5,8 +5,10 @@ import re
 from logic_ai import *
 from utils_search import perform_unified_search
 
-# [V255] 정도검사 UI 모듈 가져오기 (분리됨)
+# [V255] 정도검사 UI 모듈 가져오기
 from ui_qc import show_qc_ui
+# [V256] 협업(일정/연락처) UI 모듈 가져오기
+from ui_collab import show_collab_ui
 
 # =========================================================================
 # [V252] 그래프 관계 매핑 (모든 관계 유형 포함)
@@ -58,11 +60,11 @@ def show_search_ui(ai_model, db):
     # ----------------------------------------------------------------------
     _, main_col, _ = st.columns([1, 2, 1])
     with main_col:
-        # [V255] 정도검사 메뉴 추가
-        s_mode = st.radio("기능 선택", ["업무기술 🛠️", "소모품 재고 📦", "정도검사 ⚖️", "생활정보 🍴"], horizontal=True, label_visibility="collapsed")
+        # [V256] 협업 메뉴 추가
+        s_mode = st.radio("기능 선택", ["업무기술 🛠️", "소모품 재고 📦", "정도검사 ⚖️", "협업 🤝", "생활정보 🍴"], horizontal=True, label_visibility="collapsed")
         
-        # 검색창 표시 조건 (정도검사 모드에서는 검색창 숨김)
-        if s_mode != "정도검사 ⚖️":
+        # 검색창 표시 조건 (정도검사, 협업 모드에서는 검색창 숨김)
+        if s_mode not in ["정도검사 ⚖️", "협업 🤝"]:
             if s_mode == "업무기술 🛠️" or s_mode == "생활정보 🍴":
                 u_threshold = st.slider("정밀도 설정", 0.0, 1.0, 0.6, 0.05)
                 ph_text = "예: 시마즈 TOC 고장 조치"
@@ -73,7 +75,7 @@ def show_search_ui(ai_model, db):
             user_q = st.text_input("질문/검색어 입력", placeholder=ph_text, label_visibility="collapsed")
             search_btn = st.button("🔍 검색", use_container_width=True, type="primary")
         else:
-            # 정도검사 모드일 때는 변수 초기화
+            # 특수 모드일 때는 변수 초기화
             user_q = None
             search_btn = False
 
@@ -81,11 +83,17 @@ def show_search_ui(ai_model, db):
     # [Logic] 모드별 기능 실행
     # ----------------------------------------------------------------------
     
-    # [CASE 3] 정도검사 (V255 New - 모듈 분리)
+    # [CASE 4] 협업 기능 (V256 New)
+    if s_mode == "협업 🤝":
+        st.divider()
+        show_collab_ui(db) # ui_collab.py 호출
+        return
+
+    # [CASE 3] 정도검사 (V255)
     if s_mode == "정도검사 ⚖️":
         st.divider()
-        show_qc_ui() # ui_qc.py에 있는 함수 호출
-        return # 여기서 렌더링 종료
+        show_qc_ui() # ui_qc.py 호출
+        return 
 
     # [CASE 1 & 2] 검색 로직 (기존 유지)
     if user_q and (search_btn or user_q):
@@ -280,5 +288,5 @@ def show_search_ui(ai_model, db):
                                         st.warning("🗑️ 관계 삭제 완료!"); time.sleep(0.5); st.rerun()
                                     else: st.error("삭제 실패")
         else:
-            if s_mode != "정도검사 ⚖️": 
+            if s_mode not in ["정도검사 ⚖️", "협업 🤝"]:
                 st.warning("🔍 검색 결과가 없습니다.")
