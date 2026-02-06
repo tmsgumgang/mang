@@ -11,7 +11,7 @@ except ImportError:
     calendar = None
 
 def show_collab_ui(db):
-    # [CSS] 모바일 초적화, 다크모드, 리스트 뷰 당직 숨기기
+    # [CSS] V264: 모바일 초적화, 다크모드, 리스트 뷰 당직 숨기기
     st.markdown("""<style>
         /* 연락처 카드 */
         .contact-card {
@@ -47,7 +47,10 @@ def show_collab_ui(db):
             font-size: 0.85rem; color: var(--text-color); opacity: 0.8;
         }
 
-        /* [핵심] 캘린더 리스트 뷰에서 당직(duty-event) 숨기기 */
+        /* [핵심] 캘린더 리스트 뷰에서 당직(duty-event) 숨기기 
+           fc-list-event 클래스와 duty-event 클래스가 같이 있는 요소를 숨김
+        */
+        .fc-list-event.duty-event { display: none !important; }
         .fc-list-table .duty-event { display: none !important; }
 
         /* [모바일 캘린더 초적화 - 폰트 및 여백 극소화] */
@@ -73,7 +76,7 @@ def show_collab_ui(db):
     tab1, tab2 = st.tabs(["📅 일정 & 당직", "📒 업체 연락처"])
 
     # ------------------------------------------------------------------
-    # [Tab 1] 일정 & 당직 (V265 Updated)
+    # [Tab 1] 일정 & 당직 (V264 Updated)
     # ------------------------------------------------------------------
     with tab1:
         if calendar is None: return 
@@ -157,7 +160,7 @@ def show_collab_ui(db):
             }
             
             # [Fix] key 변경으로 DuplicateError 방지
-            cal_state = calendar(events=calendar_events, options=calendar_options, key="my_calendar_v265")
+            cal_state = calendar(events=calendar_events, options=calendar_options, key="my_calendar_v264")
 
             if cal_state.get("eventClick"):
                 st.session_state.selected_event = cal_state["eventClick"]["event"]
@@ -289,8 +292,13 @@ def show_collab_ui(db):
                     rank_html = f"<span class='rank-badge'>{c.get('rank')}</span>" if c.get('rank') else ""
                     phone = c.get('phone', '')
                     
-                    # [Fix] 전화 걸기 링크 (unsafe_allow_html 필수)
-                    phone_html = f'<a href="tel:{phone}" class="phone-btn">📞 {phone}</a>' if phone else '<span class="phone-btn" style="background:#cbd5e1;">번호 없음</span>'
+                    # [Fix] 전화 걸기 링크 (숫자만 추출해서 연결)
+                    phone_html = ""
+                    if phone:
+                        clean_phone = str(phone).replace("-", "").replace(" ", "").strip()
+                        phone_html = f'<a href="tel:{clean_phone}" class="phone-btn">📞 {phone}</a>'
+                    else:
+                        phone_html = '<span class="phone-btn" style="background:#cbd5e1;">번호 없음</span>'
 
                     st.markdown(f"""
                     <div class="contact-card">
