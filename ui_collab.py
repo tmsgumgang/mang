@@ -11,90 +11,54 @@ except ImportError:
     calendar = None
 
 def show_collab_ui(db):
-    # [CSS] 모바일 최적화 & 다크모드 대응 디자인 (V263 Updated)
+    # [CSS] V264: 모바일 초적화, 다크모드, 리스트 뷰 당직 숨기기
     st.markdown("""<style>
-        /* [1] 연락처 카드 (다크모드 대응)
-           고정 색상 대신 var(--variable)를 사용하여 테마에 자동 적응하도록 변경
-        */
+        /* 연락처 카드 */
         .contact-card {
-            background-color: var(--secondary-background-color); /* 연한 회색 or 다크모드 배경 */
-            border: 1px solid rgba(128, 128, 128, 0.2); /* 은은한 테두리 */
+            background-color: var(--secondary-background-color);
+            border: 1px solid rgba(128, 128, 128, 0.2);
             border-radius: 12px;
             padding: 16px;
             margin-bottom: 12px;
             box-shadow: 0 2px 4px rgba(0,0,0,0.05);
         }
-        .comp-name { 
-            font-size: 1.1rem; 
-            font-weight: bold; 
-            color: var(--text-color); /* 기본 텍스트 색상 따름 */
-            margin-bottom: 4px;
-        }
-        .person-info {
-            font-size: 0.95rem;
-            color: var(--text-color); /* 기본 텍스트 색상 따름 */
-            margin-bottom: 8px;
-        }
-        .rank-badge { 
-            font-size: 0.75rem; 
-            background: #2563eb; /* 뱃지는 파란색 유지 */
-            color: white; 
-            padding: 2px 6px; 
-            border-radius: 4px; 
-            margin-left: 5px; 
-            font-weight: normal;
-        }
-        .phone-btn {
+        .comp-name { font-size: 1.1rem; font-weight: bold; color: var(--text-color); margin-bottom: 4px; }
+        .person-info { font-size: 0.95rem; color: var(--text-color); margin-bottom: 8px; }
+        .rank-badge { font-size: 0.75rem; background: #2563eb; color: white; padding: 2px 6px; border-radius: 4px; margin-left: 5px; font-weight: normal; }
+        
+        /* 전화 걸기 버튼 스타일 */
+        a.phone-btn {
             display: inline-block;
-            text-decoration: none;
-            color: white !important; /* 버튼 글씨는 항상 흰색 */
+            text-decoration: none !important;
+            color: white !important;
             font-weight: bold;
-            background-color: #3b82f6; /* 쨍한 파란색 */
+            background-color: #3b82f6;
             padding: 6px 14px;
             border-radius: 20px;
             margin-top: 8px;
             font-size: 0.9rem;
             border: none;
+            pointer-events: auto; /* 클릭 가능 강제 */
         }
-        .phone-btn:hover { background-color: #2563eb; }
+        a.phone-btn:hover { background-color: #2563eb; }
         
         .meta-info {
-            margin-top: 10px; 
-            padding-top: 8px; 
-            border-top: 1px solid rgba(128, 128, 128, 0.2);
-            font-size: 0.85rem;
-            color: var(--text-color);
-            opacity: 0.8; /* 약간 흐리게 */
+            margin-top: 10px; padding-top: 8px; border-top: 1px solid rgba(128, 128, 128, 0.2);
+            font-size: 0.85rem; color: var(--text-color); opacity: 0.8;
         }
 
-        /* [2] 캘린더 모바일 최적화 (폰트 다이어트)
-           화면 너비 600px 이하일 때 강제 적용
-        */
+        /* [캘린더 리스트 뷰에서 당직(duty-event) 숨기기 트릭] */
+        .fc-list-table .duty-event { display: none !important; }
+
+        /* [모바일 캘린더 초적화] */
         @media (max-width: 600px) {
-            .fc-toolbar-title { font-size: 1.1rem !important; } /* 년월 제목 크기 */
-            .fc-header-toolbar { 
-                flex-direction: column; 
-                gap: 5px; 
-                margin-bottom: 10px !important;
-            }
-            .fc .fc-button { 
-                font-size: 0.75rem !important; /* 버튼 글씨 작게 */
-                padding: 4px 8px !important; 
-            }
-            .fc-col-header-cell-cushion { 
-                font-size: 0.8rem !important; /* 요일(일,월...) 크기 */
-            } 
-            .fc-daygrid-day-number { 
-                font-size: 0.75rem !important; /* 날짜 숫자 크기 */
-                padding: 2px !important;
-            }
-            .fc-event-title { 
-                font-size: 0.7rem !important; /* 일정 제목 크기 */
-                font-weight: normal !important;
-            }
-            .fc-event { 
-                margin-bottom: 1px !important; 
-            }
+            .fc-toolbar-title { font-size: 1.0rem !important; }
+            .fc-header-toolbar { flex-direction: column; gap: 2px; margin-bottom: 5px !important; }
+            .fc .fc-button { font-size: 0.7rem !important; padding: 3px 6px !important; }
+            .fc-col-header-cell-cushion { font-size: 0.75rem !important; } 
+            .fc-daygrid-day-number { font-size: 0.7rem !important; padding: 1px !important; }
+            .fc-event-title { font-size: 0.65rem !important; font-weight: normal !important; }
+            .fc-event { margin-bottom: 1px !important; }
         }
     </style>""", unsafe_allow_html=True)
 
@@ -102,7 +66,7 @@ def show_collab_ui(db):
     tab1, tab2 = st.tabs(["📅 일정 & 당직", "📒 업체 연락처"])
 
     # ------------------------------------------------------------------
-    # [Tab 1] 일정 & 당직 (모바일 가독성 개선 V263)
+    # [Tab 1] 일정 & 당직 (V264: 당직 리스트 제외 & 순서 변경)
     # ------------------------------------------------------------------
     with tab1:
         if calendar is None: return 
@@ -111,9 +75,7 @@ def show_collab_ui(db):
         
         with c1:
             st.subheader("📆 월간/주간 일정")
-            
-            # [Tip] 모바일 가이드
-            st.caption("💡 모바일에서는 우측 상단 **'주간(Week)'** 버튼을 누르면 보기가 훨씬 편합니다!")
+            st.caption("💡 모바일: 우측 상단 **'주간(Week)'** 버튼 추천 / 리스트에는 일정만 표시됩니다.")
 
             if "selected_event" not in st.session_state:
                 st.session_state.selected_event = None
@@ -123,7 +85,7 @@ def show_collab_ui(db):
             
             calendar_events = []
             
-            # 일정 데이터
+            # 1. 일정 (Schedule)
             color_map = {"점검": "#3b82f6", "월간": "#8b5cf6", "회의": "#10b981", "행사": "#f59e0b", "기타": "#6b7280"}
             if schedules:
                 for s in schedules:
@@ -134,6 +96,7 @@ def show_collab_ui(db):
                         "end": s['end_time'],
                         "backgroundColor": color_map.get(cat, "#6b7280"),
                         "borderColor": color_map.get(cat, "#6b7280"),
+                        "classNames": ["schedule-event"],
                         "extendedProps": {
                             "type": "schedule",
                             "id": str(s['id']),
@@ -145,7 +108,7 @@ def show_collab_ui(db):
                         }
                     })
 
-            # 당직 데이터
+            # 2. 당직 (Duty) - 리스트 뷰에서 숨기기 위해 classNames 추가
             if duties:
                 for d in duties:
                     calendar_events.append({
@@ -155,6 +118,7 @@ def show_collab_ui(db):
                         "backgroundColor": "#16a34a",
                         "borderColor": "#16a34a",
                         "display": "block",
+                        "classNames": ["duty-event"], # CSS로 제어할 클래스명
                         "extendedProps": {
                             "type": "duty",
                             "id": str(d['id']),
@@ -174,7 +138,7 @@ def show_collab_ui(db):
                     "today": "오늘",
                     "dayGridMonth": "월간",
                     "dayGridWeek": "주간",
-                    "listMonth": "리스트"
+                    "listMonth": "리스트(일정만)"
                 },
                 "initialView": "dayGridMonth",
                 "locale": "ko",
@@ -182,7 +146,7 @@ def show_collab_ui(db):
                 "selectable": True, 
                 "dayMaxEvents": 3,
                 "height": "auto",
-                "contentHeight": "auto" # 모바일 높이 자동 조절
+                "contentHeight": "auto"
             }
             
             cal_state = calendar(events=calendar_events, options=calendar_options, key="my_calendar")
@@ -243,8 +207,9 @@ def show_collab_ui(db):
                             db.delete_duty_worker(props['id'])
                             st.rerun()
 
-        # === [우측] 관리 패널 ===
+        # === [우측] 관리 패널 (순서 변경: 당직 관리 -> 일정 등록) ===
         with c2:
+            # 1. 당직 관리 (먼저 표시)
             st.markdown("### 👮‍♂️ 당직 관리")
             d_tab1, d_tab2 = st.tabs(["📥 엑셀", "✍️ 수동"])
             
@@ -267,6 +232,8 @@ def show_collab_ui(db):
                         st.success("등록됨"); time.sleep(0.5); st.rerun()
 
             st.divider()
+
+            # 2. 일정 등록 (나중에 표시)
             st.markdown("### ➕ 일정 등록")
             cat_select = st.selectbox("분류", ["점검", "월간", "회의", "행사", "기타", "직접입력"], key="n_cat")
             cat_manual = st.text_input("분류명", key="n_man") if cat_select == "직접입력" else ""
@@ -289,7 +256,7 @@ def show_collab_ui(db):
                     st.success("저장됨"); time.sleep(0.5); st.rerun()
 
     # ------------------------------------------------------------------
-    # [Tab 2] 연락처 관리 (V263: 다크모드 대응 & 수정 기능)
+    # [Tab 2] 연락처 관리 (V264: 전화 걸기 버그 수정)
     # ------------------------------------------------------------------
     with tab2:
         st.subheader("📒 업체 연락처")
@@ -309,16 +276,19 @@ def show_collab_ui(db):
             for c in filtered:
                 c_id = c['id']
                 
-                # --- [A] 일반 보기 모드 (다크모드 대응 CSS 적용됨) ---
+                # --- [A] 일반 보기 모드 ---
                 if st.session_state.edit_contact_id != c_id:
                     rank_html = f"<span class='rank-badge'>{c.get('rank')}</span>" if c.get('rank') else ""
                     phone = c.get('phone', '')
                     
+                    # 전화 걸기 링크 (HTML a 태그 명시적 사용)
+                    phone_html = f'<a href="tel:{phone}" class="phone-btn">📞 {phone}</a>' if phone else '<span class="phone-btn" style="background:#cbd5e1;">번호 없음</span>'
+
                     st.markdown(f"""
                     <div class="contact-card">
                         <div class="comp-name">{c.get('company_name')}</div>
                         <div class="person-info">👤 {c.get('person_name')} {rank_html}</div>
-                        <a href="tel:{phone}" class="phone-btn">📞 {phone if phone else '번호 없음'}</a>
+                        {phone_html}
                         <div class="meta-info">
                             <div>📧 {c.get('email','-')}</div>
                             <div style="margin-top:4px;">🏷️ {c.get('tags','')}</div>
@@ -327,7 +297,6 @@ def show_collab_ui(db):
                     </div>
                     """, unsafe_allow_html=True)
                     
-                    # 수정 버튼
                     if st.button("✏️ 수정", key=f"btn_edit_{c_id}"):
                         st.session_state.edit_contact_id = c_id
                         st.rerun()
