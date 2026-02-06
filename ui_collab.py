@@ -13,13 +13,14 @@ except ImportError:
 def show_collab_ui(db):
     st.markdown("""<style>
         .contact-card { background-color: #f8fafc; border: 1px solid #e2e8f0; padding: 15px; border-radius: 8px; margin-bottom: 10px; }
+        .schedule-row { padding: 10px; border-bottom: 1px solid #eee; }
     </style>""", unsafe_allow_html=True)
 
     # 탭 구성
     tab1, tab2 = st.tabs(["📅 일정 캘린더", "📒 업체 연락처"])
 
     # ------------------------------------------------------------------
-    # [Tab 1] 일정 관리 (V258 Upgraded)
+    # [Tab 1] 일정 관리 (V259 Upgraded - Fix disappearing logic)
     # ------------------------------------------------------------------
     with tab1:
         if calendar is None: return 
@@ -29,15 +30,15 @@ def show_collab_ui(db):
         # === [좌측] 캘린더 시각화 & 수정 ===
         with c1:
             st.subheader("📆 월간 일정표")
-            schedules = db.get_schedules()
             
+            # [State] 선택된 일정 ID 기억하기 (화면 리셋 방지)
+            if "selected_sch_id" not in st.session_state:
+                st.session_state.selected_sch_id = None
+
+            schedules = db.get_schedules()
             calendar_events = []
             
-            # 카테고리 색상
-            color_map = {
-                "점검": "#3b82f6", "월간": "#8b5cf6", "회의": "#10b981", 
-                "행사": "#f59e0b", "기타": "#6b7280"
-            }
+            color_map = {"점검": "#3b82f6", "월간": "#8b5cf6", "회의": "#10b981", "행사": "#f59e0b", "기타": "#6b7280"}
 
             if schedules:
                 for s in schedules:
@@ -45,10 +46,7 @@ def show_collab_ui(db):
                     end_iso = s['end_time']
                     cat = s.get('category', '기타')
                     loc = s.get('location', '')
-                    
                     display_title = f"[{cat}] {s['title']}"
-                    
-                    # 카테고리가 지정된 것 외에는 회색 처리
                     bg_color = color_map.get(cat, "#6b7280")
 
                     calendar_events.append({
@@ -57,116 +55,113 @@ def show_collab_ui(db):
                         "end": end_iso,
                         "backgroundColor": bg_color,
                         "borderColor": bg_color,
-                        # 클릭 시 수정 폼에 채워넣을 원본 데이터
-                        "extendedProps": {
-                            "id": s['id'],
-                            "real_title": s['title'], # 태그 뗀 진짜 제목
-                            "description": s.get('description', ''),
-                            "user": s.get('created_by', ''),
-                            "category": cat,
-                            "location": loc
-                        }
+                        "extendedProps": {"id": str(s['id'])} # [Fix] ID를 문자열로 통일
                     })
 
-            # 캘린더 옵션
             calendar_options = {
                 "headerToolbar": {"left": "today prev,next", "center": "title", "right": "dayGridMonth,timeGridWeek,listMonth"},
                 "initialView": "dayGridMonth",
                 "navLinks": True, "selectable": True, "editable": False,
             }
             
-            # 캘린더 그리기
             cal_state = calendar(events=calendar_events, options=calendar_options, key="my_calendar")
 
-            # --- [이벤트 클릭 시: 수정 모드 진입] ---
+            # [로직] 캘린더 클릭 시 -> 세션 스테이트에 ID 저장
             if cal_state.get("eventClick"):
-                event_data = cal_state["eventClick"]["event"]
-                props = event_data["extendedProps"]
-                
-                st.divider()
-                st.info(f"✏️ **일정 상세 및 수정: {props['real_title']}**")
-                
-                # 수정 폼
-                with st.form(key=f"edit_schedule_form_{props['id']}"):
-                    ec1, ec2 = st.columns(2)
-                    
-                    # 기존 데이터 불러오기 (날짜 파싱)
-                    try:
-                        # ISO 포맷 문자열을 datetime 객체로 변환 (UTC -> KST 변환 고려하지 않고 단순히 파싱해서 수정)
-                        # 여기서는 단순화를 위해 문자열 앞 19자리(YYYY-MM-DDTHH:MM:SS)만 잘라서 파싱
-                        # (실제 서비스에선 timezone 처리를 더 엄밀히 해야 함)
-                        orig_start = datetime.fromisoformat(event_data['start'].replace('Z', '+00:00'))
-                        orig_end = datetime.fromisoformat(event_data['end'].replace('Z', '+00:00')) if event_data.get('end') else orig_start + timedelta(hours=1)
-                    except:
-                        orig_start = datetime.now()
-                        orig_end = datetime.now() + timedelta(hours=1)
+                clicked_id = str(cal_state["eventClick"]["event"]["extendedProps"]["id"])
+                st.session_state.selected_sch_id = clicked_id
 
-                    e_title = ec1.text_input("제목", value=props['real_title'])
+            # [UI] 저장된 ID가 있으면 -> 수정 폼 렌더링
+            if st.session_state.selected_sch_id is not None:
+                # DB 데이터에서 해당 ID 찾기 (문자열 비교)
+                target_sch = next((item for item in schedules if str(item["id"]) == st.session_state.selected_sch_id), None)
+                
+                if target_sch:
+                    st.divider()
+                    c_edit_head, c_close = st.columns([8, 1])
+                    c_edit_head.info(f"✏️ **일정 수정: {target_sch['title']}**")
                     
-                    # 분류 수정
-                    cat_opts = ["점검", "월간", "회의", "행사", "기타", "직접입력"]
-                    curr_cat = props['category'] if props['category'] in cat_opts else "직접입력"
-                    e_cat_select = ec2.selectbox("분류", cat_opts, index=cat_opts.index(curr_cat) if curr_cat in cat_opts else 4)
-                    
-                    e_cat_manual = ""
-                    if e_cat_select == "직접입력":
-                        e_cat_manual = st.text_input("분류 직접 입력", value=props['category'] if curr_cat == "직접입력" else "")
-                    
-                    e_loc = st.text_input("장소", value=props.get('location', ''))
-                    
-                    ed1, et1, ed2, et2 = st.columns(4)
-                    e_s_date = ed1.date_input("시작 날짜", value=orig_start.date())
-                    e_s_time = et1.time_input("시작 시간", value=orig_start.time())
-                    e_e_date = ed2.date_input("종료 날짜", value=orig_end.date())
-                    e_e_time = et2.time_input("종료 시간", value=orig_end.time())
-                    
-                    e_desc = st.text_area("상세 내용", value=props['description'])
-                    
-                    col_btn1, col_btn2 = st.columns([1, 5])
-                    btn_update = col_btn1.form_submit_button("💾 수정 저장")
-                    btn_del = col_btn2.form_submit_button("🗑️ 삭제")
-                    
-                    if btn_update:
-                        final_cat = e_cat_manual if e_cat_select == "직접입력" else e_cat_select
-                        new_start = datetime.combine(e_s_date, e_s_time).isoformat()
-                        new_end = datetime.combine(e_e_date, e_e_time).isoformat()
+                    # 닫기 버튼
+                    if c_close.button("❌", key="close_edit"):
+                        st.session_state.selected_sch_id = None
+                        st.rerun()
+
+                    with st.form(key=f"edit_schedule_form_{target_sch['id']}"):
+                        ec1, ec2 = st.columns(2)
                         
-                        if db.update_schedule(props['id'], e_title, new_start, new_end, final_cat, e_desc, e_loc):
-                            st.success("수정되었습니다.")
-                            time.sleep(0.5)
-                            st.rerun()
-                        else:
-                            st.error("수정 실패")
-                            
-                    if btn_del:
-                        if db.delete_schedule(props['id']):
-                            st.success("삭제되었습니다.")
-                            time.sleep(0.5)
-                            st.rerun()
+                        try:
+                            # 시간 파싱
+                            orig_start = datetime.fromisoformat(target_sch['start_time'].replace('Z', '+00:00'))
+                            orig_end = datetime.fromisoformat(target_sch['end_time'].replace('Z', '+00:00')) if target_sch.get('end_time') else orig_start + timedelta(hours=1)
+                        except:
+                            orig_start = datetime.now()
+                            orig_end = datetime.now() + timedelta(hours=1)
 
-        # === [우측] 일정 신규 등록 (간소화) ===
+                        e_title = ec1.text_input("제목", value=target_sch['title'])
+                        
+                        # 분류
+                        cat_opts = ["점검", "월간", "회의", "행사", "기타", "직접입력"]
+                        curr_cat = target_sch['category']
+                        idx = cat_opts.index(curr_cat) if curr_cat in cat_opts else 5 # 없으면 '직접입력'
+                        e_cat_select = ec2.selectbox("분류", cat_opts, index=idx)
+                        
+                        e_cat_manual = ""
+                        if e_cat_select == "직접입력":
+                            e_cat_manual = st.text_input("분류 직접 입력", value=curr_cat if curr_cat not in cat_opts[:-1] else "")
+                        
+                        e_loc = st.text_input("장소", value=target_sch.get('location', ''))
+                        
+                        ed1, et1, ed2, et2 = st.columns(4)
+                        e_s_date = ed1.date_input("시작 날짜", value=orig_start.date())
+                        e_s_time = et1.time_input("시작 시간", value=orig_start.time())
+                        e_e_date = ed2.date_input("종료 날짜", value=orig_end.date())
+                        e_e_time = et2.time_input("종료 시간", value=orig_end.time())
+                        
+                        e_desc = st.text_area("상세 내용", value=target_sch.get('description', ''))
+                        
+                        col_btn1, col_btn2 = st.columns([1, 5])
+                        btn_update = col_btn1.form_submit_button("💾 수정 저장")
+                        btn_del = col_btn2.form_submit_button("🗑️ 삭제")
+                        
+                        if btn_update:
+                            final_cat = e_cat_manual if e_cat_select == "직접입력" else e_cat_select
+                            if not final_cat: final_cat = "기타"
+                            
+                            new_start = datetime.combine(e_s_date, e_s_time).isoformat()
+                            new_end = datetime.combine(e_e_date, e_e_time).isoformat()
+                            
+                            if db.update_schedule(target_sch['id'], e_title, new_start, new_end, final_cat, e_desc, e_loc):
+                                st.success("수정되었습니다.")
+                                st.session_state.selected_sch_id = None 
+                                time.sleep(0.5)
+                                st.rerun()
+                            else:
+                                st.error("수정 실패")
+                                
+                        if btn_del:
+                            if db.delete_schedule(target_sch['id']):
+                                st.success("삭제되었습니다.")
+                                st.session_state.selected_sch_id = None
+                                time.sleep(0.5)
+                                st.rerun()
+
+        # === [우측] 일정 신규 등록 ===
         with c2:
             st.markdown("### ➕ 신규 등록")
             with st.form("add_schedule_form_cal"):
-                # 1. 제목
                 s_title = st.text_input("일정 제목 (필수)")
-                
-                # 2. 분류 (직관성 개선: 선택하면 바로 아래 입력창 활성화됨)
                 s_cat_select = st.selectbox("분류", ["점검", "월간", "회의", "행사", "기타", "직접입력"])
                 s_cat_manual = ""
                 if s_cat_select == "직접입력":
                     s_cat_manual = st.text_input("└ 분류명 입력", placeholder="예: 긴급")
 
-                # 3. 장소
                 s_loc = st.text_input("장소 (선택)")
 
                 st.markdown("---")
-                # 4. 시간 설정 (체크박스 제거, 기본값 자동 세팅)
-                # 기본: 시작시간(현재), 종료시간(1시간 뒤)
                 now = datetime.now()
                 next_hour = now + timedelta(hours=1)
                 
-                st.caption("시간 설정 (종료 시간 미입력 시 시작 시간과 동일하게 저장)")
+                st.caption("시간 설정")
                 d1, t1 = st.columns(2)
                 s_date = d1.date_input("시작 날짜", value=now.date())
                 s_time = t1.time_input("시작 시간", value=now.time())
@@ -182,19 +177,15 @@ def show_collab_ui(db):
                     if not s_title:
                         st.error("제목은 필수입니다.")
                     else:
-                        # 분류 결정
                         final_cat = s_cat_manual if s_cat_select == "직접입력" else s_cat_select
                         if not final_cat: final_cat = "기타"
 
-                        # 시간 합치기
                         dt_start = datetime.combine(s_date, s_time)
                         dt_end = datetime.combine(e_date, e_time)
                         
-                        # 종료시간이 시작시간보다 빠르면 자동 보정 (선택사항)
                         if dt_end < dt_start:
                             dt_end = dt_start + timedelta(hours=1)
 
-                        # DB 저장
                         if db.add_schedule(s_title, dt_start.isoformat(), dt_end.isoformat(), final_cat, s_desc, s_user, s_loc):
                             st.success("등록 완료!")
                             time.sleep(0.5)
