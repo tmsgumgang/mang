@@ -13,56 +13,54 @@ except ImportError:
 def show_collab_ui(db):
     st.markdown("""<style>
         .contact-card { background-color: #f8fafc; border: 1px solid #e2e8f0; padding: 15px; border-radius: 8px; margin-bottom: 10px; }
-        .schedule-row { padding: 10px; border-bottom: 1px solid #eee; }
     </style>""", unsafe_allow_html=True)
 
     # 탭 구성
     tab1, tab2 = st.tabs(["📅 일정 캘린더", "📒 업체 연락처"])
 
     # ------------------------------------------------------------------
-    # [Tab 1] 일정 관리 (V257 Upgraded)
+    # [Tab 1] 일정 관리 (V258 Upgraded)
     # ------------------------------------------------------------------
     with tab1:
         if calendar is None: return 
 
-        c1, c2 = st.columns([3, 1]) 
+        c1, c2 = st.columns([2.5, 1]) 
         
-        # --- [좌측] 캘린더 시각화 ---
+        # === [좌측] 캘린더 시각화 & 수정 ===
         with c1:
             st.subheader("📆 월간 일정표")
             schedules = db.get_schedules()
             
             calendar_events = []
             
-            # [V257] 카테고리별 색상 업데이트
+            # 카테고리 색상
             color_map = {
-                "점검": "#3b82f6",  # 파랑
-                "월간": "#8b5cf6",  # 보라
-                "회의": "#10b981",  # 초록
-                "행사": "#f59e0b",  # 주황
-                "기타": "#6b7280"   # 회색
+                "점검": "#3b82f6", "월간": "#8b5cf6", "회의": "#10b981", 
+                "행사": "#f59e0b", "기타": "#6b7280"
             }
 
             if schedules:
                 for s in schedules:
-                    # DB 시간(UTC) -> ISO 포맷
                     start_iso = s['start_time']
                     end_iso = s['end_time']
                     cat = s.get('category', '기타')
-                    loc = s.get('location', '') # 장소 정보
+                    loc = s.get('location', '')
                     
-                    # 제목에 장소 있으면 표시 (예: [회의] 주간회의 @대회의실)
                     display_title = f"[{cat}] {s['title']}"
-                    if loc: display_title += f" (@{loc})"
+                    
+                    # 카테고리가 지정된 것 외에는 회색 처리
+                    bg_color = color_map.get(cat, "#6b7280")
 
                     calendar_events.append({
                         "title": display_title,
                         "start": start_iso,
                         "end": end_iso,
-                        "backgroundColor": color_map.get(cat, "#6b7280"), # 없으면 회색
-                        "borderColor": color_map.get(cat, "#6b7280"),
+                        "backgroundColor": bg_color,
+                        "borderColor": bg_color,
+                        # 클릭 시 수정 폼에 채워넣을 원본 데이터
                         "extendedProps": {
                             "id": s['id'],
+                            "real_title": s['title'], # 태그 뗀 진짜 제목
                             "description": s.get('description', ''),
                             "user": s.get('created_by', ''),
                             "category": cat,
@@ -72,96 +70,132 @@ def show_collab_ui(db):
 
             # 캘린더 옵션
             calendar_options = {
-                "headerToolbar": {
-                    "left": "today prev,next",
-                    "center": "title",
-                    "right": "dayGridMonth,timeGridWeek,listMonth"
-                },
+                "headerToolbar": {"left": "today prev,next", "center": "title", "right": "dayGridMonth,timeGridWeek,listMonth"},
                 "initialView": "dayGridMonth",
-                "navLinks": True,
-                "selectable": True,
-                "editable": False,
+                "navLinks": True, "selectable": True, "editable": False,
             }
             
+            # 캘린더 그리기
             cal_state = calendar(events=calendar_events, options=calendar_options, key="my_calendar")
 
-            # [이벤트 클릭 시 상세 정보]
+            # --- [이벤트 클릭 시: 수정 모드 진입] ---
             if cal_state.get("eventClick"):
                 event_data = cal_state["eventClick"]["event"]
                 props = event_data["extendedProps"]
                 
-                st.info(f"📌 **{event_data['title']}**")
+                st.divider()
+                st.info(f"✏️ **일정 상세 및 수정: {props['real_title']}**")
                 
-                # 상세 내용 표시
-                if props.get('location'):
-                    st.write(f"📍 **장소:** {props['location']}")
-                
-                st.write(f"📝 **내용:** {props['description']}")
-                st.caption(f"등록자: {props['user']} | 분류: {props['category']}")
-                
-                if st.button("🗑️ 이 일정 삭제", key=f"del_cal_evt_{props['id']}"):
-                    db.delete_schedule(props['id'])
-                    st.success("삭제되었습니다.")
-                    time.sleep(0.5)
-                    st.rerun()
+                # 수정 폼
+                with st.form(key=f"edit_schedule_form_{props['id']}"):
+                    ec1, ec2 = st.columns(2)
+                    
+                    # 기존 데이터 불러오기 (날짜 파싱)
+                    try:
+                        # ISO 포맷 문자열을 datetime 객체로 변환 (UTC -> KST 변환 고려하지 않고 단순히 파싱해서 수정)
+                        # 여기서는 단순화를 위해 문자열 앞 19자리(YYYY-MM-DDTHH:MM:SS)만 잘라서 파싱
+                        # (실제 서비스에선 timezone 처리를 더 엄밀히 해야 함)
+                        orig_start = datetime.fromisoformat(event_data['start'].replace('Z', '+00:00'))
+                        orig_end = datetime.fromisoformat(event_data['end'].replace('Z', '+00:00')) if event_data.get('end') else orig_start + timedelta(hours=1)
+                    except:
+                        orig_start = datetime.now()
+                        orig_end = datetime.now() + timedelta(hours=1)
 
-        # --- [우측] 일정 등록 폼 (V257 수정됨) ---
+                    e_title = ec1.text_input("제목", value=props['real_title'])
+                    
+                    # 분류 수정
+                    cat_opts = ["점검", "월간", "회의", "행사", "기타", "직접입력"]
+                    curr_cat = props['category'] if props['category'] in cat_opts else "직접입력"
+                    e_cat_select = ec2.selectbox("분류", cat_opts, index=cat_opts.index(curr_cat) if curr_cat in cat_opts else 4)
+                    
+                    e_cat_manual = ""
+                    if e_cat_select == "직접입력":
+                        e_cat_manual = st.text_input("분류 직접 입력", value=props['category'] if curr_cat == "직접입력" else "")
+                    
+                    e_loc = st.text_input("장소", value=props.get('location', ''))
+                    
+                    ed1, et1, ed2, et2 = st.columns(4)
+                    e_s_date = ed1.date_input("시작 날짜", value=orig_start.date())
+                    e_s_time = et1.time_input("시작 시간", value=orig_start.time())
+                    e_e_date = ed2.date_input("종료 날짜", value=orig_end.date())
+                    e_e_time = et2.time_input("종료 시간", value=orig_end.time())
+                    
+                    e_desc = st.text_area("상세 내용", value=props['description'])
+                    
+                    col_btn1, col_btn2 = st.columns([1, 5])
+                    btn_update = col_btn1.form_submit_button("💾 수정 저장")
+                    btn_del = col_btn2.form_submit_button("🗑️ 삭제")
+                    
+                    if btn_update:
+                        final_cat = e_cat_manual if e_cat_select == "직접입력" else e_cat_select
+                        new_start = datetime.combine(e_s_date, e_s_time).isoformat()
+                        new_end = datetime.combine(e_e_date, e_e_time).isoformat()
+                        
+                        if db.update_schedule(props['id'], e_title, new_start, new_end, final_cat, e_desc, e_loc):
+                            st.success("수정되었습니다.")
+                            time.sleep(0.5)
+                            st.rerun()
+                        else:
+                            st.error("수정 실패")
+                            
+                    if btn_del:
+                        if db.delete_schedule(props['id']):
+                            st.success("삭제되었습니다.")
+                            time.sleep(0.5)
+                            st.rerun()
+
+        # === [우측] 일정 신규 등록 (간소화) ===
         with c2:
-            st.markdown("### ➕ 일정 등록")
+            st.markdown("### ➕ 신규 등록")
             with st.form("add_schedule_form_cal"):
                 # 1. 제목
-                s_title = st.text_input("일정 제목", placeholder="예: 정기 점검")
+                s_title = st.text_input("일정 제목 (필수)")
                 
-                # 2. [V257] 분류 (직접입력 로직 추가)
-                cat_options = ["점검", "월간", "회의", "행사", "기타", "직접입력"]
-                s_cat_select = st.selectbox("분류", cat_options)
-                
+                # 2. 분류 (직관성 개선: 선택하면 바로 아래 입력창 활성화됨)
+                s_cat_select = st.selectbox("분류", ["점검", "월간", "회의", "행사", "기타", "직접입력"])
+                s_cat_manual = ""
                 if s_cat_select == "직접입력":
-                    s_cat = st.text_input("분류 입력", placeholder="예: 긴급")
-                else:
-                    s_cat = s_cat_select
+                    s_cat_manual = st.text_input("└ 분류명 입력", placeholder="예: 긴급")
 
-                # 3. [V257] 장소 추가
-                s_loc = st.text_input("장소 (선택)", placeholder="예: 3층 회의실")
+                # 3. 장소
+                s_loc = st.text_input("장소 (선택)")
 
                 st.markdown("---")
-                # 4. 날짜 및 시간 (시작)
+                # 4. 시간 설정 (체크박스 제거, 기본값 자동 세팅)
+                # 기본: 시작시간(현재), 종료시간(1시간 뒤)
+                now = datetime.now()
+                next_hour = now + timedelta(hours=1)
+                
+                st.caption("시간 설정 (종료 시간 미입력 시 시작 시간과 동일하게 저장)")
                 d1, t1 = st.columns(2)
-                s_date = d1.date_input("시작 날짜")
-                s_time = t1.time_input("시작 시간")
+                s_date = d1.date_input("시작 날짜", value=now.date())
+                s_time = t1.time_input("시작 시간", value=now.time())
                 
-                # 5. [V257] 종료 시간 (선택)
-                use_end_time = st.checkbox("종료 시간 설정")
-                e_date = s_date # 기본값
-                e_time = s_time # 기본값
-                
-                if use_end_time:
-                    d2, t2 = st.columns(2)
-                    e_date = d2.date_input("종료 날짜", value=s_date)
-                    e_time = t2.time_input("종료 시간", value=(datetime.combine(s_date, s_time) + timedelta(hours=1)).time())
+                d2, t2 = st.columns(2)
+                e_date = d2.date_input("종료 날짜", value=now.date())
+                e_time = t2.time_input("종료 시간", value=next_hour.time())
                 
                 s_desc = st.text_area("상세 내용")
                 s_user = st.text_input("등록자", "관리자")
                 
                 if st.form_submit_button("일정 추가"):
                     if not s_title:
-                        st.error("제목을 입력해주세요.")
+                        st.error("제목은 필수입니다.")
                     else:
-                        # 시작 시간 (Local)
-                        local_dt_start = datetime.combine(s_date, s_time)
-                        
-                        # 종료 시간 계산
-                        if use_end_time:
-                            local_dt_end = datetime.combine(e_date, e_time)
-                        else:
-                            # 종료 시간 없으면 기본 1시간으로 설정 (달력 가시성 확보)
-                            local_dt_end = local_dt_start + timedelta(hours=1)
-                        
-                        # 분류 값 최종 확인
-                        final_cat = s_cat if s_cat else "기타"
+                        # 분류 결정
+                        final_cat = s_cat_manual if s_cat_select == "직접입력" else s_cat_select
+                        if not final_cat: final_cat = "기타"
 
-                        # DB 저장 (ISO 포맷)
-                        if db.add_schedule(s_title, local_dt_start.isoformat(), local_dt_end.isoformat(), final_cat, s_desc, s_user, s_loc):
+                        # 시간 합치기
+                        dt_start = datetime.combine(s_date, s_time)
+                        dt_end = datetime.combine(e_date, e_time)
+                        
+                        # 종료시간이 시작시간보다 빠르면 자동 보정 (선택사항)
+                        if dt_end < dt_start:
+                            dt_end = dt_start + timedelta(hours=1)
+
+                        # DB 저장
+                        if db.add_schedule(s_title, dt_start.isoformat(), dt_end.isoformat(), final_cat, s_desc, s_user, s_loc):
                             st.success("등록 완료!")
                             time.sleep(0.5)
                             st.rerun()
@@ -171,18 +205,14 @@ def show_collab_ui(db):
     # ------------------------------------------------------------------
     with tab2:
         st.subheader("📒 주요 업체 및 담당자 연락처")
-        
-        search_txt = st.text_input("🔍 연락처 검색 (업체명, 담당자, 태그)", placeholder="예: 시마즈, 펌프")
+        search_txt = st.text_input("🔍 연락처 검색", placeholder="업체명, 담당자, 태그 등")
         
         all_contacts = db.get_contacts()
         filtered = []
         if search_txt:
             search_txt = search_txt.lower()
             for c in all_contacts:
-                c_name = c.get('company_name') or ""
-                p_name = c.get('person_name') or ""
-                tags = c.get('tags') or ""
-                raw = f"{c_name} {p_name} {tags}".lower()
+                raw = f"{c.get('company_name','')} {c.get('person_name','')} {c.get('tags','')}".lower()
                 if search_txt in raw:
                     filtered.append(c)
         else:
@@ -190,38 +220,28 @@ def show_collab_ui(db):
 
         if filtered:
             df_con = pd.DataFrame(filtered)
-            target_cols = ['id', 'company_name', 'person_name', 'phone', 'email', 'tags', 'memo']
-            valid_cols = [col for col in target_cols if col in df_con.columns]
+            cols = ['id', 'company_name', 'person_name', 'phone', 'email', 'tags', 'memo']
+            valid_cols = [c for c in cols if c in df_con.columns]
             display_df = df_con[valid_cols].copy()
-            col_map = {'id': 'ID', 'company_name': '업체명', 'person_name': '담당자', 'phone': '전화번호', 'email': '이메일', 'tags': '태그', 'memo': '메모'}
-            display_df.rename(columns=col_map, inplace=True)
+            display_df.rename(columns={'id':'ID', 'company_name':'업체명', 'person_name':'담당자', 'phone':'전화번호', 'email':'이메일', 'tags':'태그', 'memo':'메모'}, inplace=True)
             
-            edited_df = st.data_editor(display_df, key="contact_editor", num_rows="dynamic", use_container_width=True, hide_index=True, disabled=["ID"])
-            
-            if st.button("💾 변경사항 저장 (새로고침)"):
-                st.toast("데이터가 갱신되었습니다.")
-                st.rerun()
+            st.data_editor(display_df, key="con_edit", use_container_width=True, hide_index=True, disabled=["ID"])
+            if st.button("💾 새로고침"): st.rerun()
         else:
-            st.info("연락처 데이터가 없습니다.")
+            st.info("데이터 없음")
 
-        st.divider()
-        
-        with st.expander("➕ 새 연락처 등록하기", expanded=False):
-            with st.form("add_contact_form"):
-                cc1, cc2 = st.columns(2)
-                n_comp = cc1.text_input("업체명 (필수)")
-                n_name = cc2.text_input("담당자")
-                cc3, cc4 = st.columns(2)
-                n_phone = cc3.text_input("전화번호")
-                n_email = cc4.text_input("이메일")
-                n_tags = st.text_input("태그 (쉼표 구분)", placeholder="예: 시약, 수리, 펌프")
-                n_memo = st.text_area("메모")
-                
+        with st.expander("➕ 연락처 추가"):
+            with st.form("add_con"):
+                c1, c2 = st.columns(2)
+                nc = c1.text_input("업체명")
+                nn = c2.text_input("담당자")
+                np = c1.text_input("전화번호")
+                ne = c2.text_input("이메일")
+                nt = st.text_input("태그")
+                nm = st.text_area("메모")
                 if st.form_submit_button("저장"):
-                    if n_comp:
-                        if db.add_contact(n_comp, n_name, n_phone, n_email, n_tags, n_memo):
-                            st.success("저장되었습니다.")
-                            time.sleep(0.5)
-                            st.rerun()
-                    else:
-                        st.error("업체명은 필수입니다.")
+                    if nc:
+                        db.add_contact(nc, nn, np, ne, nt, nm)
+                        st.success("저장됨")
+                        time.sleep(0.5)
+                        st.rerun()
