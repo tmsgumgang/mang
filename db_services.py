@@ -559,7 +559,7 @@ class DBManager:
 
     def add_schedule(self, title, start_dt, end_dt, cat, desc, user, location):
         """
-        [V257 Update] location (장소) 매개변수 추가
+        [V257 Update] location (장소) 매개변수 추가 (이게 빠져서 TypeError 남!)
         """
         try:
             payload = {
@@ -575,7 +575,7 @@ class DBManager:
             return True if res.data else False
         except: return False
 
-    # [V258 New] 일정 수정 함수 (이것이 없어서 에러가 났었습니다!)
+    # [V258 New] 일정 수정 함수
     def update_schedule(self, sch_id, title, start_dt, end_dt, cat, desc, location):
         try:
             payload = {
