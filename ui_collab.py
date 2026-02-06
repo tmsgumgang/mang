@@ -1,5 +1,5 @@
 import streamlit as st
-import streamlit.components.v1 as components # [New] JS 실행을 위해 추가
+import streamlit.components.v1 as components
 import pandas as pd
 import time
 import re
@@ -13,50 +13,52 @@ except ImportError:
     calendar = None
 
 def show_collab_ui(db):
-    # [CSS] 메인 화면 스타일 (캘린더 외부)
+    # [CSS 1] 메인 화면 스타일 (캘린더 외부)
+    # 연락처 카드는 이제 components.html로 물리므로 여기 CSS는 최소화
     st.markdown("""<style>
-        /* 연락처 카드 컨테이너 */
-        .contact-card-container {
-            background-color: var(--secondary-background-color);
-            border: 1px solid rgba(128, 128, 128, 0.2);
-            border-radius: 12px;
-            padding: 16px;
-            margin-bottom: 12px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-        }
-        .comp-name { font-size: 1.1rem; font-weight: bold; color: var(--text-color); margin-bottom: 4px; }
-        .person-info { font-size: 0.95rem; color: var(--text-color); margin-bottom: 8px; }
-        .rank-badge { font-size: 0.75rem; background: #2563eb; color: white; padding: 2px 6px; border-radius: 4px; margin-left: 5px; font-weight: normal; }
-        
         .meta-info {
-            margin-top: 10px; padding-top: 8px; border-top: 1px solid rgba(128, 128, 128, 0.2);
             font-size: 0.85rem; color: var(--text-color); opacity: 0.8;
         }
     </style>""", unsafe_allow_html=True)
 
-    # [CSS 2] 캘린더 내부 주입용 CSS
+    # [CSS 2] 캘린더 내부 주입용 CSS (폰트 초소형화 & 칸 높이 확장)
     calendar_custom_css = """
+        /* 헤더 최소화 */
         .fc-header-toolbar {
             flex-direction: column !important;
             gap: 2px !important;
-            margin-bottom: 5px !important;
+            margin-bottom: 2px !important;
         }
-        .fc-toolbar-title { font-size: 1.0rem !important; }
-        .fc-button { font-size: 0.6rem !important; padding: 2px 6px !important; }
-        
-        /* 칸 높이 확보 */
-        .fc-daygrid-day-frame { min-height: 85px !important; }
-        
-        /* 폰트 30% 이상 축소 */
-        .fc-col-header-cell-cushion { font-size: 0.5rem !important; padding: 1px !important; }
-        .fc-daygrid-day-number { font-size: 0.5rem !important; padding: 1px !important; }
-        .fc-event-title, .fc-event-time { 
-            font-size: 0.45rem !important; 
+        .fc-toolbar-title { font-size: 0.9rem !important; }
+        .fc-button { font-size: 0.6rem !important; padding: 1px 5px !important; }
+
+        /* [핵심] 칸 높이 강제 확장 (일정 많이 보기 위함) */
+        .fc-daygrid-day-frame {
+            min-height: 100px !important;
+        }
+
+        /* [핵심] 폰트 크기 0.4rem (약 6px) 수준으로 강제 축소 */
+        .fc-col-header-cell-cushion { /* 요일 */
+            font-size: 0.5rem !important; 
+            padding: 1px !important;
+        }
+        .fc-daygrid-day-number { /* 날짜 숫자 */
+            font-size: 0.5rem !important; 
+            padding: 1px !important;
+        }
+        .fc-event-title, .fc-event-time { /* 일정 내용 */
+            font-size: 0.4rem !important; 
             font-weight: normal !important;
             line-height: 1.0 !important;
+            white-space: nowrap !important;
         }
-        .fc-event { margin-bottom: 1px !important; padding: 0px 1px !important; }
         
+        /* 이벤트 박스 여백 제거 */
+        .fc-event {
+            margin-bottom: 1px !important;
+            padding: 0px 1px !important;
+        }
+
         /* 리스트 뷰에서 당직 숨김 */
         .fc-list-table .duty-event { display: none !important; }
         .fc-list-event.duty-event { display: none !important; }
@@ -144,18 +146,22 @@ def show_collab_ui(db):
                 "locale": "ko",
                 "navLinks": True, 
                 "selectable": True, 
+                # [요청] 이번 달만 표시 (이전/다음달 흐린 날짜 숨김)
                 "showNonCurrentDates": False, 
+                # [요청] 6주 강제 채우기 끔 -> 해당 월의 주만 표시
                 "fixedWeekCount": False,
-                "dayMaxEvents": 4, 
+                # [요청] 칸을 늘렸으니 최대 5개까지 표시
+                "dayMaxEvents": 5, 
                 "height": "auto",
                 "contentHeight": "auto"
             }
             
+            # [Core] custom_css 전달 (Iframe 내부 스타일 적용)
             cal_state = calendar(
                 events=calendar_events, 
                 options=calendar_options, 
                 custom_css=calendar_custom_css, 
-                key="my_calendar_v274"
+                key="my_calendar_v275"
             )
 
             if cal_state.get("eventClick"):
@@ -255,7 +261,7 @@ def show_collab_ui(db):
                     st.success("저장됨"); time.sleep(0.5); st.rerun()
 
     # ------------------------------------------------------------------
-    # [Tab 2] 연락처 관리 (V274: Javascript로 전화 걸기)
+    # [Tab 2] 연락처 관리 (V275: 순수 HTML + target="_top" 해결)
     # ------------------------------------------------------------------
     with tab2:
         st.subheader("📒 업체 연락처")
@@ -279,57 +285,62 @@ def show_collab_ui(db):
                     rank_html = f"<span class='rank-badge'>{c.get('rank')}</span>" if c.get('rank') else ""
                     phone = c.get('phone', '')
                     
-                    # [V274 Fix] HTML 컴포넌트를 사용하여 JS로 전화 걸기 구현
-                    # st.markdown 대신 HTML 코드를 직접 생성하여 렌더링
-                    html_content = f"""
-                    <div class="contact-card-container" style="
-                        background-color: #f0f2f6; 
-                        border: 1px solid rgba(128, 128, 128, 0.2); 
-                        border-radius: 12px; 
-                        padding: 16px; 
-                        margin-bottom: 12px;
-                        font-family: sans-serif;">
-                        
-                        <div style="font-size: 1.1rem; font-weight: bold; margin-bottom: 4px;">
-                            {c.get('company_name')}
-                        </div>
-                        <div style="font-size: 0.95rem; margin-bottom: 8px;">
-                            👤 {c.get('person_name')} {rank_html}
-                        </div>
-                    """
-                    
+                    # [V275 Fix] HTML 컴포넌트로 순수 HTML 렌더링
+                    # target="_top": Iframe을 탈출하여 브라우저 최상위에서 링크 실행 (앱 실행 트리거)
+                    phone_btn_html = ""
                     if phone:
                         clean_phone = re.sub(r'[^0-9]', '', str(phone))
-                        # JS: window.parent.location.href 사용 (Iframe 탈출)
-                        html_content += f"""
-                        <button onclick="window.parent.location.href='tel:{clean_phone}'" 
-                            style="
-                            background-color: #3b82f6; 
-                            color: white; 
-                            border: none; 
-                            padding: 8px 16px; 
-                            border-radius: 20px; 
-                            font-size: 0.9rem; 
-                            font-weight: bold; 
+                        phone_btn_html = f"""
+                        <a href="tel:{clean_phone}" target="_top" style="
+                            display: inline-block;
+                            text-decoration: none;
+                            color: white;
+                            font-weight: bold;
+                            background-color: #3b82f6;
+                            padding: 8px 16px;
+                            border-radius: 20px;
+                            font-size: 0.9rem;
+                            font-family: sans-serif;
+                            border: none;
                             cursor: pointer;">
                             📞 {phone}
-                        </button>
+                        </a>
                         """
                     else:
-                        html_content += """
+                        phone_btn_html = """
                         <span style="
+                            display: inline-block;
                             background-color: #cbd5e1; 
                             color: white; 
                             padding: 8px 16px; 
                             border-radius: 20px; 
                             font-size: 0.9rem; 
-                            font-weight: bold;">
+                            font-weight: bold;
+                            font-family: sans-serif;">
                             번호 없음
                         </span>
                         """
+
+                    # HTML 조립
+                    html_content = f"""
+                    <div style="
+                        background-color: #f0f2f6; 
+                        border: 1px solid rgba(128, 128, 128, 0.2); 
+                        border-radius: 12px; 
+                        padding: 16px; 
+                        margin-bottom: 8px; /* 버튼과 간격 */
+                        font-family: sans-serif;">
                         
-                    html_content += f"""
-                        <div style="margin-top: 10px; padding-top: 8px; border-top: 1px solid rgba(128, 128, 128, 0.2); font-size: 0.85rem; opacity: 0.8;">
+                        <div style="font-size: 1.1rem; font-weight: bold; margin-bottom: 4px; color: #31333F;">
+                            {c.get('company_name')}
+                        </div>
+                        <div style="font-size: 0.95rem; margin-bottom: 8px; color: #31333F;">
+                            👤 {c.get('person_name')} {rank_html}
+                        </div>
+                        
+                        {phone_btn_html}
+                        
+                        <div style="margin-top: 10px; padding-top: 8px; border-top: 1px solid rgba(128, 128, 128, 0.2); font-size: 0.85rem; opacity: 0.8; color: #31333F;">
                             <div>📧 {c.get('email','-')}</div>
                             <div style="margin-top:4px;">🏷️ {c.get('tags','')}</div>
                             <div style="margin-top:4px; color:gray;">{c.get('memo','')}</div>
@@ -337,10 +348,9 @@ def show_collab_ui(db):
                     </div>
                     """
                     
-                    # HTML 렌더링 (height는 내용에 맞게 적절히 조절)
-                    components.html(html_content, height=180)
+                    # components.html로 렌더링 (높이 자동조절이 안되므로 넉넉히 잡음)
+                    components.html(html_content, height=190)
                     
-                    # 수정 버튼은 Streamlit 네이티브 버튼 유지
                     if st.button("✏️ 수정", key=f"btn_edit_{c_id}"):
                         st.session_state.edit_contact_id = c_id
                         st.rerun()
