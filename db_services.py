@@ -548,7 +548,7 @@ class DBManager:
             return False
 
     # =========================================================
-    # [V257] 🤝 협업 기능 (일정 & 연락처) (Location 추가됨)
+    # [V258] 🤝 협업 기능 (일정 수정 포함)
     # =========================================================
     
     # --- 📅 일정 (Schedule) ---
@@ -574,6 +574,23 @@ class DBManager:
             res = self.supabase.table("collab_schedules").insert(payload).execute()
             return True if res.data else False
         except: return False
+
+    # [V258 New] 일정 수정 함수
+    def update_schedule(self, sch_id, title, start_dt, end_dt, cat, desc, location):
+        try:
+            payload = {
+                "title": title, 
+                "start_time": start_dt, 
+                "end_time": end_dt,
+                "category": cat, 
+                "description": desc,
+                "location": location
+            }
+            res = self.supabase.table("collab_schedules").update(payload).eq("id", sch_id).execute()
+            return True if res.data else False
+        except Exception as e:
+            print(f"Update Error: {e}")
+            return False
 
     def delete_schedule(self, sch_id):
         try:
