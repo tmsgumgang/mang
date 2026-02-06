@@ -497,7 +497,7 @@ class DBManager:
         except: return {}
 
     # =========================================================
-    # [V253] 🛠️ 지식 데이터 수정/관리 기능 (Knowledge Maintenance)
+    # [V254] 🛠️ 지식 데이터 수정/관리 기능 (Knowledge Maintenance)
     # =========================================================
     def search_knowledge_for_admin(self, keyword):
         """
@@ -548,7 +548,7 @@ class DBManager:
             return False
 
     # =========================================================
-    # [V256] 🤝 협업 기능 (일정 & 연락처)
+    # [V257] 🤝 협업 기능 (일정 & 연락처) (Location 추가됨)
     # =========================================================
     
     # --- 📅 일정 (Schedule) ---
@@ -557,11 +557,19 @@ class DBManager:
             return self.supabase.table("collab_schedules").select("*").order("start_time", desc=False).execute().data
         except: return []
 
-    def add_schedule(self, title, start_dt, end_dt, cat, desc, user):
+    def add_schedule(self, title, start_dt, end_dt, cat, desc, user, location):
+        """
+        [V257 Update] location (장소) 매개변수 추가
+        """
         try:
             payload = {
-                "title": title, "start_time": start_dt, "end_time": end_dt,
-                "category": cat, "description": desc, "created_by": user
+                "title": title, 
+                "start_time": start_dt, 
+                "end_time": end_dt,
+                "category": cat, 
+                "description": desc, 
+                "created_by": user,
+                "location": location # [New] 장소 추가
             }
             res = self.supabase.table("collab_schedules").insert(payload).execute()
             return True if res.data else False
