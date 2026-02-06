@@ -497,7 +497,7 @@ class DBManager:
         except: return {}
 
     # =========================================================
-    # [V254] 🛠️ 지식 데이터 수정/관리 기능 (Knowledge Maintenance)
+    # [V253] 🛠️ 지식 데이터 수정/관리 기능 (Knowledge Maintenance)
     # =========================================================
     def search_knowledge_for_admin(self, keyword):
         """
@@ -546,3 +546,57 @@ class DBManager:
         except Exception as e:
             print(f"Update Error: {e}")
             return False
+
+    # =========================================================
+    # [V256] 🤝 협업 기능 (일정 & 연락처)
+    # =========================================================
+    
+    # --- 📅 일정 (Schedule) ---
+    def get_schedules(self):
+        try:
+            return self.supabase.table("collab_schedules").select("*").order("start_time", desc=False).execute().data
+        except: return []
+
+    def add_schedule(self, title, start_dt, end_dt, cat, desc, user):
+        try:
+            payload = {
+                "title": title, "start_time": start_dt, "end_time": end_dt,
+                "category": cat, "description": desc, "created_by": user
+            }
+            res = self.supabase.table("collab_schedules").insert(payload).execute()
+            return True if res.data else False
+        except: return False
+
+    def delete_schedule(self, sch_id):
+        try:
+            self.supabase.table("collab_schedules").delete().eq("id", sch_id).execute()
+            return True
+        except: return False
+
+    # --- 📒 연락처 (Contacts) ---
+    def get_contacts(self):
+        try:
+            return self.supabase.table("collab_contacts").select("*").order("company_name").execute().data
+        except: return []
+
+    def add_contact(self, company, name, phone, email, tags, memo):
+        try:
+            payload = {
+                "company_name": company, "person_name": name, "phone": phone,
+                "email": email, "tags": tags, "memo": memo
+            }
+            res = self.supabase.table("collab_contacts").insert(payload).execute()
+            return True if res.data else False
+        except: return False
+
+    def update_contact(self, contact_id, updates):
+        try:
+            res = self.supabase.table("collab_contacts").update(updates).eq("id", contact_id).execute()
+            return True if res.data else False
+        except: return False
+
+    def delete_contact(self, contact_id):
+        try:
+            self.supabase.table("collab_contacts").delete().eq("id", contact_id).execute()
+            return True
+        except: return False
