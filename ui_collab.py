@@ -12,7 +12,7 @@ except ImportError:
     calendar = None
 
 def show_collab_ui(db):
-    # [CSS 1] 메인 화면용 스타일 (연락처 카드 등)
+    # [CSS 1] 메인 화면용 스타일 & 캘린더 커스텀
     st.markdown("""<style>
         /* 연락처 카드 */
         .contact-card {
@@ -27,7 +27,7 @@ def show_collab_ui(db):
         .person-info { font-size: 0.95rem; color: var(--text-color); margin-bottom: 8px; }
         .rank-badge { font-size: 0.75rem; background: #2563eb; color: white; padding: 2px 6px; border-radius: 4px; margin-left: 5px; font-weight: normal; }
         
-        /* 전화 걸기 버튼 스타일 */
+        /* 전화 걸기 버튼 스타일 (단순화) */
         a.phone-btn {
             display: inline-block;
             text-decoration: none !important;
@@ -49,36 +49,49 @@ def show_collab_ui(db):
         }
     </style>""", unsafe_allow_html=True)
 
-    # [CSS 2] 캘린더 내부 주입용 CSS (모바일 폰트 강제 축소)
-    # 이 CSS는 calendar 함수에 직접 전달되어 아이프레임 내부를 수정합니다.
+    # [CSS 2] 캘린더 내부 주입용 CSS (모바일 폰트 극소화 & 칸 높이 확장)
+    # 이 CSS는 calendar 함수에 직접 전달되어 아이프레임 내부를 강력하게 제어합니다.
     calendar_custom_css = """
+        /* 헤더(년/월, 버튼) 여백 최소화 */
         .fc-header-toolbar {
             flex-direction: column !important;
-            gap: 5px !important;
-            margin-bottom: 10px !important;
+            gap: 2px !important;
+            margin-bottom: 5px !important;
         }
         .fc-toolbar-title {
-            font-size: 1.2rem !important; /* 제목 크기 */
+            font-size: 1.0rem !important;
         }
         .fc-button {
-            font-size: 0.7rem !important; /* 버튼 폰트 */
-            padding: 4px 8px !important;
+            font-size: 0.65rem !important; 
+            padding: 2px 6px !important;
         }
-        /* 요일 헤더 (일, 월...) */
-        .fc-col-header-cell-cushion {
-            font-size: 0.7rem !important; 
-            padding: 2px !important;
+
+        /* [요청] 칸 높이 늘리기 (일정 더 많이 보기 위해) */
+        .fc-daygrid-day-frame {
+            min-height: 80px !important; /* 칸 높이 강제 확장 */
         }
-        /* 날짜 숫자 (1, 2, 3...) */
-        .fc-daygrid-day-number {
-            font-size: 0.7rem !important; 
-            padding: 2px !important;
-        }
-        /* 이벤트 텍스트 (일정 내용) - 모바일에서 가장 중요 */
-        .fc-event-title, .fc-event-time {
+
+        /* [요청] 폰트 10% 더 축소 (0.6rem -> 0.5rem) */
+        .fc-col-header-cell-cushion { /* 요일 */
             font-size: 0.6rem !important; 
-            font-weight: normal !important;
+            padding: 1px !important;
         }
+        .fc-daygrid-day-number { /* 날짜 */
+            font-size: 0.6rem !important; 
+            padding: 1px !important;
+        }
+        .fc-event-title, .fc-event-time { /* 일정 텍스트 */
+            font-size: 0.5rem !important; /* 아주 작게 */
+            font-weight: normal !important;
+            line-height: 1.1 !important;
+        }
+        
+        /* 이벤트 박스 여백 최소화 */
+        .fc-event {
+            margin-bottom: 1px !important;
+            padding: 0px 1px !important;
+        }
+
         /* 리스트 뷰에서 당직 숨기기 */
         .fc-list-table .duty-event { display: none !important; }
         .fc-list-event.duty-event { display: none !important; }
@@ -166,17 +179,22 @@ def show_collab_ui(db):
                 "locale": "ko",
                 "navLinks": True, 
                 "selectable": True, 
-                "dayMaxEvents": 2, 
+                # [요청] 이번 달 것만 표시 (다음 달 흐린 날짜 숨김)
+                "showNonCurrentDates": False, 
+                # [요청] 빈 줄(6주차) 강제 표시 끄기 -> 있는 주만 표시
+                "fixedWeekCount": False,
+                # [요청] 더 많이 보기 (칸이 늘어났으므로 4개까지)
+                "dayMaxEvents": 4, 
                 "height": "auto",
                 "contentHeight": "auto"
             }
             
-            # [Fix 1] custom_css 파라미터를 통해 캘린더 내부 스타일 직접 주입!
+            # [Core Fix] custom_css 적용 (Iframe 내부 스타일링)
             cal_state = calendar(
                 events=calendar_events, 
                 options=calendar_options, 
-                custom_css=calendar_custom_css, # <--- 여기가 핵심입니다.
-                key="my_calendar_v269"
+                custom_css=calendar_custom_css, 
+                key="my_calendar_v270"
             )
 
             if cal_state.get("eventClick"):
@@ -282,7 +300,7 @@ def show_collab_ui(db):
                     st.success("저장됨"); time.sleep(0.5); st.rerun()
 
     # ------------------------------------------------------------------
-    # [Tab 2] 연락처 관리 (V268: 전화 걸기 target="_blank" 적용)
+    # [Tab 2] 연락처 관리 (V270: 전화 걸기 target 제거)
     # ------------------------------------------------------------------
     with tab2:
         st.subheader("📒 업체 연락처")
@@ -306,12 +324,13 @@ def show_collab_ui(db):
                     rank_html = f"<span class='rank-badge'>{c.get('rank')}</span>" if c.get('rank') else ""
                     phone = c.get('phone', '')
                     
-                    # [Fix 2] 전화 걸기: target="_blank" 추가 (안드로이드/모바일 강제 이탈 처리)
+                    # [V270 Fix] 전화 걸기: target 속성 완전 제거 (브라우저 기본 동작 유도)
+                    # 많은 모바일 브라우저에서 target="_blank"는 tel: 스킴과 충돌하여 "웹페이지 없음" 오류 유발
                     phone_html = ""
                     if phone:
                         clean_phone = re.sub(r'[^0-9]', '', str(phone))
-                        # target="_blank"가 핵심! 전화 앱 인텐트를 띄우기 위함
-                        phone_html = f'<a href="tel:{clean_phone}" target="_blank" rel="noopener noreferrer" class="phone-btn">📞 {phone}</a>'
+                        # target 속성 없음 -> 현재 창에서 처리(앱 실행)
+                        phone_html = f'<a href="tel:{clean_phone}" class="phone-btn">📞 {phone}</a>'
                     else:
                         phone_html = '<span class="phone-btn" style="background:#cbd5e1; cursor:default;">번호 없음</span>'
 
