@@ -548,7 +548,7 @@ class DBManager:
             return False
 
     # =========================================================
-    # [V258] 🤝 협업 기능 (일정 & 연락처)
+    # [V260] 🤝 협업 기능 (일정 & 연락처 & 당직)
     # =========================================================
     
     # --- 📅 일정 (Schedule) ---
@@ -558,9 +558,6 @@ class DBManager:
         except: return []
 
     def add_schedule(self, title, start_dt, end_dt, cat, desc, user, location):
-        """
-        [V257 Update] location (장소) 매개변수 추가 (이게 빠져서 TypeError 남!)
-        """
         try:
             payload = {
                 "title": title, 
@@ -569,13 +566,12 @@ class DBManager:
                 "category": cat, 
                 "description": desc, 
                 "created_by": user,
-                "location": location # [New] 장소 추가
+                "location": location
             }
             res = self.supabase.table("collab_schedules").insert(payload).execute()
             return True if res.data else False
         except: return False
 
-    # [V258 New] 일정 수정 함수
     def update_schedule(self, sch_id, title, start_dt, end_dt, cat, desc, location):
         try:
             payload = {
@@ -595,6 +591,29 @@ class DBManager:
     def delete_schedule(self, sch_id):
         try:
             self.supabase.table("collab_schedules").delete().eq("id", sch_id).execute()
+            return True
+        except: return False
+
+    # --- 👮‍♂️ 당직 (Duty Roster) [New] ---
+    def get_duty_roster(self):
+        try:
+            return self.supabase.table("duty_roster").select("*").execute().data
+        except: return []
+
+    def set_duty_worker(self, date_str, name):
+        """ 날짜별 당직자 등록/수정 (Upsert) """
+        try:
+            # 날짜 중복 시 업데이트 (upsert)
+            payload = {"date": date_str, "worker_name": name}
+            self.supabase.table("duty_roster").upsert(payload, on_conflict="date").execute()
+            return True
+        except Exception as e:
+            print(f"Duty Error: {e}")
+            return False
+
+    def delete_duty_worker(self, duty_id):
+        try:
+            self.supabase.table("duty_roster").delete().eq("id", duty_id).execute()
             return True
         except: return False
 
