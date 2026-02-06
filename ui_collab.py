@@ -39,7 +39,7 @@ def show_collab_ui(db):
         }
     </style>""", unsafe_allow_html=True)
 
-    # [CSS 2] 캘린더 내부 주입용 CSS (요청사항 반영)
+    # [CSS 2] 캘린더 내부 주입용 CSS (폰트 확대 & 당직 두께 조절 반영)
     calendar_custom_css = """
         /* 헤더 최소화 */
         .fc-header-toolbar {
@@ -50,31 +50,34 @@ def show_collab_ui(db):
         .fc-toolbar-title { font-size: 0.9rem !important; }
         .fc-button { font-size: 0.6rem !important; padding: 1px 5px !important; }
 
-        /* [요청 1] 칸 높이 100px로 강제 확장 */
+        /* 칸 높이 100px로 강제 확장 */
         .fc-daygrid-day-frame {
             min-height: 100px !important;
         }
 
-        /* [요청 2] 폰트 크기 0.4rem (약 6px) - 아주 작게 */
-        .fc-col-header-cell-cushion { /* 요일 */
-            font-size: 0.5rem !important; 
-            padding: 1px !important;
-        }
-        .fc-daygrid-day-number { /* 날짜 숫자 */
-            font-size: 0.5rem !important; 
-            padding: 1px !important;
-        }
-        .fc-event-title, .fc-event-time { /* 일정 내용 */
-            font-size: 0.4rem !important; 
+        /* [요청 1] 폰트 확대 (0.4rem -> 0.5rem) */
+        .fc-col-header-cell-cushion { font-size: 0.55rem !important; padding: 1px !important; }
+        .fc-daygrid-day-number { font-size: 0.55rem !important; padding: 1px !important; }
+        
+        .fc-event-title, .fc-event-time { 
+            font-size: 0.5rem !important; /* 폰트 키움 */
             font-weight: normal !important;
-            line-height: 1.0 !important;
-            white-space: nowrap !important; /* 줄바꿈 방지 */
+            line-height: 1.1 !important; /* 줄 간격 살짝 여유 */
+            white-space: nowrap !important;
         }
         
-        /* 이벤트 박스 여백 제거 */
+        /* [요청 2] 당직(duty-event) 두께 다이어트 */
+        /* 당직 이벤트만 콕 집어서 패딩을 0으로 만들고 높이를 줄임 */
+        .duty-event .fc-event-main {
+            padding: 0px 1px !important; 
+            line-height: 1.0 !important;
+        }
+        
+        /* 이벤트 박스 공통 여백 */
         .fc-event {
             margin-bottom: 1px !important;
             padding: 0px 1px !important;
+            border-radius: 2px !important;
         }
 
         /* 리스트 뷰에서 당직 숨김 */
@@ -164,11 +167,8 @@ def show_collab_ui(db):
                 "locale": "ko",
                 "navLinks": True, 
                 "selectable": True, 
-                # [요청] 이번 달만 표시 (이전/다음달 숨김)
                 "showNonCurrentDates": False, 
-                # [요청] 6주 강제 채우기 끔
                 "fixedWeekCount": False,
-                # [요청] 칸을 늘렸으니 최대 5개까지 표시
                 "dayMaxEvents": 5, 
                 "height": "auto",
                 "contentHeight": "auto"
@@ -179,7 +179,7 @@ def show_collab_ui(db):
                 events=calendar_events, 
                 options=calendar_options, 
                 custom_css=calendar_custom_css, 
-                key="my_calendar_v277"
+                key="my_calendar_v278"
             )
 
             if cal_state.get("eventClick"):
@@ -237,28 +237,9 @@ def show_collab_ui(db):
                             db.delete_duty_worker(props['id'])
                             st.rerun()
 
-        # === [우측] 관리 패널 ===
+        # === [우측] 관리 패널 (요청 3: 순서 변경) ===
         with c2:
-            st.markdown("### 👮‍♂️ 당직 관리")
-            d_tab1, d_tab2 = st.tabs(["📥 엑셀", "✍️ 수동"])
-            with d_tab1:
-                uploaded_file = st.file_uploader("당직표(A:날짜, B:이름)", type=['xlsx'])
-                if uploaded_file and st.button("업로드"):
-                    try:
-                        df = pd.read_excel(uploaded_file)
-                        for _, row in df.iterrows():
-                            db.set_duty_worker(pd.to_datetime(row.iloc[0]).strftime("%Y-%m-%d"), str(row.iloc[1]))
-                        st.success("완료!"); time.sleep(1); st.rerun()
-                    except: st.error("오류 발생")
-            with d_tab2:
-                m_date = st.date_input("날짜", value=datetime.now().date())
-                m_name = st.text_input("이름")
-                if st.button("등록"):
-                    if m_name:
-                        db.set_duty_worker(str(m_date), m_name)
-                        st.success("등록됨"); time.sleep(0.5); st.rerun()
-
-            st.divider()
+            # 1. 일정 등록 (위로 이동)
             st.markdown("### ➕ 일정 등록")
             cat_select = st.selectbox("분류", ["점검", "월간", "회의", "행사", "기타", "직접입력"], key="n_cat")
             cat_manual = st.text_input("분류명", key="n_man") if cat_select == "직접입력" else ""
@@ -278,8 +259,30 @@ def show_collab_ui(db):
                     db.add_schedule(n_title, start.isoformat(), end.isoformat(), f_cat, n_desc, n_user, n_loc)
                     st.success("저장됨"); time.sleep(0.5); st.rerun()
 
+            st.divider()
+
+            # 2. 당직 관리 (아래로 이동)
+            st.markdown("### 👮‍♂️ 당직 관리")
+            d_tab1, d_tab2 = st.tabs(["📥 엑셀", "✍️ 수동"])
+            with d_tab1:
+                uploaded_file = st.file_uploader("당직표(A:날짜, B:이름)", type=['xlsx'])
+                if uploaded_file and st.button("업로드"):
+                    try:
+                        df = pd.read_excel(uploaded_file)
+                        for _, row in df.iterrows():
+                            db.set_duty_worker(pd.to_datetime(row.iloc[0]).strftime("%Y-%m-%d"), str(row.iloc[1]))
+                        st.success("완료!"); time.sleep(1); st.rerun()
+                    except: st.error("오류 발생")
+            with d_tab2:
+                m_date = st.date_input("날짜", value=datetime.now().date())
+                m_name = st.text_input("이름")
+                if st.button("등록"):
+                    if m_name:
+                        db.set_duty_worker(str(m_date), m_name)
+                        st.success("등록됨"); time.sleep(0.5); st.rerun()
+
     # ------------------------------------------------------------------
-    # [Tab 2] 연락처 관리 (V277: target="_self" 적용)
+    # [Tab 2] 연락처 관리 (V278: 검색 시에만 표시 - 리소스 절약)
     # ------------------------------------------------------------------
     with tab2:
         st.subheader("📒 업체 연락처")
@@ -287,82 +290,83 @@ def show_collab_ui(db):
         if "edit_contact_id" not in st.session_state:
             st.session_state.edit_contact_id = None
 
-        search_txt = st.text_input("🔍 검색", placeholder="업체, 담당자, 태그...")
-        all_contacts = db.get_contacts()
+        search_txt = st.text_input("🔍 검색 (업체, 담당자, 태그...)", placeholder="검색어를 입력하면 리스트가 나타납니다.")
         
-        filtered = [c for c in all_contacts if search_txt.lower() in f"{c.get('company_name')} {c.get('person_name')} {c.get('tags')}".lower()] if search_txt else all_contacts
-
-        if not filtered:
-            st.info("데이터가 없습니다.")
+        # [요청 4] 검색어가 있을 때만 DB 조회 및 렌더링
+        if not search_txt:
+            st.info("👆 검색어를 입력해주세요. (전체 리스트 로딩 방지)")
         else:
-            for c in filtered:
-                c_id = c['id']
-                
-                # --- [A] 일반 보기 모드 ---
-                if st.session_state.edit_contact_id != c_id:
-                    with st.container(border=True):
-                        # 레이아웃: 정보(왼쪽) + 수정버튼(오른쪽)
-                        c_col1, c_col2 = st.columns([5, 1])
-                        
-                        with c_col1:
-                            # 1. 업체 및 담당자 정보
-                            st.markdown(f"**{c.get('company_name')}**")
-                            rank_txt = f"({c.get('rank')})" if c.get('rank') else ""
-                            st.markdown(f"👤 {c.get('person_name')} {rank_txt}")
-                            
-                            # 2. 전화번호 (st.markdown + HTML 버튼)
-                            # [핵심 Fix] target="_self"를 사용하여 새 창 열림을 방지하고 즉시 전화 앱 호출
-                            phone = c.get('phone', '')
-                            if phone:
-                                clean_phone = re.sub(r'[^0-9]', '', str(phone))
-                                st.markdown(f'''
-                                    <a href="tel:{clean_phone}" target="_self" class="custom-phone-btn">
-                                        📞 {phone}
-                                    </a>
-                                ''', unsafe_allow_html=True)
-                            else:
-                                st.caption("번호 없음")
-                                
-                            # 3. 추가 정보
-                            if c.get('email'):
-                                st.markdown(f"<div class='meta-info'>📧 {c.get('email')}</div>", unsafe_allow_html=True)
-                            if c.get('tags'):
-                                st.markdown(f"<div class='meta-info'>🏷️ {c.get('tags')}</div>", unsafe_allow_html=True)
-                            if c.get('memo'):
-                                st.markdown(f"<div class='meta-info'>📝 {c.get('memo')}</div>", unsafe_allow_html=True)
-                        
-                        with c_col2:
-                            if st.button("✏️", key=f"btn_edit_{c_id}", help="수정"):
-                                st.session_state.edit_contact_id = c_id
-                                st.rerun()
+            all_contacts = db.get_contacts()
+            filtered = [c for c in all_contacts if search_txt.lower() in f"{c.get('company_name')} {c.get('person_name')} {c.get('tags')}".lower()]
 
-                # --- [B] 수정 모드 (기존 유지) ---
-                else:
-                    with st.container(border=True):
-                        st.info("✏️ 연락처 수정")
-                        with st.form(key=f"edit_con_form_{c_id}"):
-                            ec1, ec2 = st.columns(2)
-                            e_comp = ec1.text_input("업체명", value=c['company_name'])
-                            e_name = ec2.text_input("담당자", value=c.get('person_name',''))
-                            ec3, ec4 = st.columns(2)
-                            e_rank = ec3.text_input("직급", value=c.get('rank',''))
-                            e_phone = ec4.text_input("전화번호", value=c.get('phone',''))
-                            e_email = st.text_input("이메일", value=c.get('email',''))
-                            e_tags = st.text_input("태그", value=c.get('tags',''))
-                            e_memo = st.text_area("메모", value=c.get('memo',''))
+            if not filtered:
+                st.warning("검색 결과가 없습니다.")
+            else:
+                st.success(f"{len(filtered)}건 검색됨")
+                for c in filtered:
+                    c_id = c['id']
+                    
+                    # --- [A] 일반 보기 모드 ---
+                    if st.session_state.edit_contact_id != c_id:
+                        with st.container(border=True):
+                            c_col1, c_col2 = st.columns([5, 1])
                             
-                            eb1, eb2, eb3 = st.columns([2, 2, 5])
-                            if eb1.form_submit_button("💾 저장"):
-                                db.update_contact(c_id, e_comp, e_name, e_phone, e_email, e_tags, e_memo, e_rank)
-                                st.session_state.edit_contact_id = None
-                                st.success("수정됨"); time.sleep(0.5); st.rerun()
-                            if eb2.form_submit_button("취소"):
-                                st.session_state.edit_contact_id = None
-                                st.rerun()
-                            if eb3.form_submit_button("🗑️ 삭제"):
-                                db.delete_contact(c_id)
-                                st.session_state.edit_contact_id = None
-                                st.rerun()
+                            with c_col1:
+                                st.markdown(f"**{c.get('company_name')}**")
+                                rank_txt = f"({c.get('rank')})" if c.get('rank') else ""
+                                st.markdown(f"👤 {c.get('person_name')} {rank_txt}")
+                                
+                                phone = c.get('phone', '')
+                                if phone:
+                                    clean_phone = re.sub(r'[^0-9]', '', str(phone))
+                                    # [핵심] target="_self" 적용하여 새 창 열림 방지 및 즉시 전화 앱 호출
+                                    st.markdown(f'''
+                                        <a href="tel:{clean_phone}" target="_self" class="custom-phone-btn">
+                                            📞 {phone}
+                                        </a>
+                                    ''', unsafe_allow_html=True)
+                                else:
+                                    st.caption("번호 없음")
+                                    
+                                if c.get('email'):
+                                    st.markdown(f"<div class='meta-info'>📧 {c.get('email')}</div>", unsafe_allow_html=True)
+                                if c.get('tags'):
+                                    st.markdown(f"<div class='meta-info'>🏷️ {c.get('tags')}</div>", unsafe_allow_html=True)
+                                if c.get('memo'):
+                                    st.markdown(f"<div class='meta-info'>📝 {c.get('memo')}</div>", unsafe_allow_html=True)
+                            
+                            with c_col2:
+                                if st.button("✏️", key=f"btn_edit_{c_id}", help="수정"):
+                                    st.session_state.edit_contact_id = c_id
+                                    st.rerun()
+
+                    # --- [B] 수정 모드 ---
+                    else:
+                        with st.container(border=True):
+                            st.info("✏️ 연락처 수정")
+                            with st.form(key=f"edit_con_form_{c_id}"):
+                                ec1, ec2 = st.columns(2)
+                                e_comp = ec1.text_input("업체명", value=c['company_name'])
+                                e_name = ec2.text_input("담당자", value=c.get('person_name',''))
+                                ec3, ec4 = st.columns(2)
+                                e_rank = ec3.text_input("직급", value=c.get('rank',''))
+                                e_phone = ec4.text_input("전화번호", value=c.get('phone',''))
+                                e_email = st.text_input("이메일", value=c.get('email',''))
+                                e_tags = st.text_input("태그", value=c.get('tags',''))
+                                e_memo = st.text_area("메모", value=c.get('memo',''))
+                                
+                                eb1, eb2, eb3 = st.columns([2, 2, 5])
+                                if eb1.form_submit_button("💾 저장"):
+                                    db.update_contact(c_id, e_comp, e_name, e_phone, e_email, e_tags, e_memo, e_rank)
+                                    st.session_state.edit_contact_id = None
+                                    st.success("수정됨"); time.sleep(0.5); st.rerun()
+                                if eb2.form_submit_button("취소"):
+                                    st.session_state.edit_contact_id = None
+                                    st.rerun()
+                                if eb3.form_submit_button("🗑️ 삭제"):
+                                    db.delete_contact(c_id)
+                                    st.session_state.edit_contact_id = None
+                                    st.rerun()
 
         st.divider()
         with st.expander("➕ 새 연락처 등록하기"):
