@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import time
-import re # [New] 정규식 사용
+import re
 from datetime import datetime, timedelta, timezone
 
 # 캘린더 라이브러리 임포트
@@ -12,7 +12,7 @@ except ImportError:
     calendar = None
 
 def show_collab_ui(db):
-    # [CSS] V267: 모바일 폰트 초소형화 (0.6rem -> 0.55rem) & 전화 버튼 스타일
+    # [CSS 1] 메인 화면용 스타일 (연락처 카드 등)
     st.markdown("""<style>
         /* 연락처 카드 */
         .contact-card {
@@ -27,7 +27,7 @@ def show_collab_ui(db):
         .person-info { font-size: 0.95rem; color: var(--text-color); margin-bottom: 8px; }
         .rank-badge { font-size: 0.75rem; background: #2563eb; color: white; padding: 2px 6px; border-radius: 4px; margin-left: 5px; font-weight: normal; }
         
-        /* 전화 걸기 버튼 (가독성 & 클릭 영역 확보) */
+        /* 전화 걸기 버튼 스타일 */
         a.phone-btn {
             display: inline-block;
             text-decoration: none !important;
@@ -47,48 +47,42 @@ def show_collab_ui(db):
             margin-top: 10px; padding-top: 8px; border-top: 1px solid rgba(128, 128, 128, 0.2);
             font-size: 0.85rem; color: var(--text-color); opacity: 0.8;
         }
-
-        /* 캘린더 리스트 뷰에서 당직 숨기기 */
-        .fc-list-table .duty-event { display: none !important; }
-
-        /* [핵심] 모바일 캘린더 초소형화 (폰트 30% 이상 축소) */
-        @media (max-width: 600px) {
-            /* 상단 툴바 */
-            .fc-toolbar-title { font-size: 0.9rem !important; }
-            .fc-header-toolbar { flex-direction: column; gap: 2px; margin-bottom: 2px !important; }
-            .fc .fc-button { font-size: 0.6rem !important; padding: 1px 5px !important; }
-            
-            /* 요일 헤더 (일, 월...) */
-            .fc-col-header-cell-cushion { 
-                font-size: 0.6rem !important; 
-                padding: 1px !important; 
-            } 
-            
-            /* 날짜 숫자 */
-            .fc-daygrid-day-number { 
-                font-size: 0.55rem !important; /* 폰트 30% 축소 적용 */
-                padding: 1px !important;
-            }
-            
-            /* 이벤트 텍스트 (일정 제목) */
-            .fc-event-title { 
-                font-size: 0.5rem !important; /* 아주 작게 */
-                font-weight: normal !important;
-                white-space: nowrap !important;
-                overflow: hidden !important;
-                text-overflow: ellipsis !important;
-            }
-            
-            /* 이벤트 박스 */
-            .fc-event { 
-                margin-bottom: 0px !important; 
-                padding: 0px 1px !important;
-                line-height: 1.1 !important; 
-            }
-            
-            .fc-view-harness { height: auto !important; }
-        }
     </style>""", unsafe_allow_html=True)
+
+    # [CSS 2] 캘린더 내부 주입용 CSS (모바일 폰트 강제 축소)
+    # 이 CSS는 calendar 함수에 직접 전달되어 아이프레임 내부를 수정합니다.
+    calendar_custom_css = """
+        .fc-header-toolbar {
+            flex-direction: column !important;
+            gap: 5px !important;
+            margin-bottom: 10px !important;
+        }
+        .fc-toolbar-title {
+            font-size: 1.2rem !important; /* 제목 크기 */
+        }
+        .fc-button {
+            font-size: 0.7rem !important; /* 버튼 폰트 */
+            padding: 4px 8px !important;
+        }
+        /* 요일 헤더 (일, 월...) */
+        .fc-col-header-cell-cushion {
+            font-size: 0.7rem !important; 
+            padding: 2px !important;
+        }
+        /* 날짜 숫자 (1, 2, 3...) */
+        .fc-daygrid-day-number {
+            font-size: 0.7rem !important; 
+            padding: 2px !important;
+        }
+        /* 이벤트 텍스트 (일정 내용) - 모바일에서 가장 중요 */
+        .fc-event-title, .fc-event-time {
+            font-size: 0.6rem !important; 
+            font-weight: normal !important;
+        }
+        /* 리스트 뷰에서 당직 숨기기 */
+        .fc-list-table .duty-event { display: none !important; }
+        .fc-list-event.duty-event { display: none !important; }
+    """
 
     # 탭 구성
     tab1, tab2 = st.tabs(["📅 일정 & 당직", "📒 업체 연락처"])
@@ -177,7 +171,13 @@ def show_collab_ui(db):
                 "contentHeight": "auto"
             }
             
-            cal_state = calendar(events=calendar_events, options=calendar_options, key="my_calendar_v267")
+            # [Fix 1] custom_css 파라미터를 통해 캘린더 내부 스타일 직접 주입!
+            cal_state = calendar(
+                events=calendar_events, 
+                options=calendar_options, 
+                custom_css=calendar_custom_css, # <--- 여기가 핵심입니다.
+                key="my_calendar_v269"
+            )
 
             if cal_state.get("eventClick"):
                 st.session_state.selected_event = cal_state["eventClick"]["event"]
@@ -282,7 +282,7 @@ def show_collab_ui(db):
                     st.success("저장됨"); time.sleep(0.5); st.rerun()
 
     # ------------------------------------------------------------------
-    # [Tab 2] 연락처 관리 (V267: 전화 걸기 기능 완벽 Fix)
+    # [Tab 2] 연락처 관리 (V268: 전화 걸기 target="_blank" 적용)
     # ------------------------------------------------------------------
     with tab2:
         st.subheader("📒 업체 연락처")
@@ -306,14 +306,12 @@ def show_collab_ui(db):
                     rank_html = f"<span class='rank-badge'>{c.get('rank')}</span>" if c.get('rank') else ""
                     phone = c.get('phone', '')
                     
-                    # [V267 Fix] 전화 걸기 링크: 하이픈/공백 제거하여 tel: 스키마에 숫자로만 전달
+                    # [Fix 2] 전화 걸기: target="_blank" 추가 (안드로이드/모바일 강제 이탈 처리)
                     phone_html = ""
                     if phone:
-                        # 숫자만 추출 (010-1234-5678 -> 01012345678)
                         clean_phone = re.sub(r'[^0-9]', '', str(phone))
-                        # 모바일 브라우저 호환성을 위해 target 생략하거나 _self 사용 권장 안함 (기본 동작 유도)
-                        # 일부 브라우저에서 target="_blank"가 아니면 막히는 경우가 있어 _blank 시도 (앱 실행 유도)
-                        phone_html = f'<a href="tel:{clean_phone}" class="phone-btn">📞 {phone}</a>'
+                        # target="_blank"가 핵심! 전화 앱 인텐트를 띄우기 위함
+                        phone_html = f'<a href="tel:{clean_phone}" target="_blank" rel="noopener noreferrer" class="phone-btn">📞 {phone}</a>'
                     else:
                         phone_html = '<span class="phone-btn" style="background:#cbd5e1; cursor:default;">번호 없음</span>'
 
