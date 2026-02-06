@@ -12,30 +12,40 @@ except ImportError:
     calendar = None
 
 def show_collab_ui(db):
-    # [CSS 1] 메인 화면 스타일 (캘린더 외부)
-    # 네이티브 컨테이너를 사용하므로 CSS 의존도를 낮춤
+    # [CSS 1] 메인 화면 스타일 (캘린더 외부 & 버튼 스타일)
     st.markdown("""<style>
         .meta-info {
             font-size: 0.85rem; color: gray; margin-top: 4px;
         }
-        /* 버튼 스타일 미세 조정 */
-        div[data-testid="stLinkButton"] > a {
+        /* 전화 걸기 버튼 스타일 (st.markdown용) */
+        a.custom-phone-btn {
+            display: block;
+            width: 100%;
             background-color: #3b82f6;
-            color: white;
-            border: none;
-            font-weight: bold;
-            width: 100%; /* 버튼 꽉 차게 */
+            color: white !important;
+            text-decoration: none !important;
             text-align: center;
+            padding: 8px 0;
+            border-radius: 8px;
+            font-weight: bold;
+            margin-top: 5px;
+            transition: background 0.3s;
+        }
+        a.custom-phone-btn:hover {
+            background-color: #2563eb;
+        }
+        a.custom-phone-btn:active {
+            background-color: #1d4ed8;
         }
     </style>""", unsafe_allow_html=True)
 
-    # [CSS 2] 캘린더 내부 주입용 CSS (요청사항 100% 반영)
+    # [CSS 2] 캘린더 내부 주입용 CSS (요청사항 반영)
     calendar_custom_css = """
         /* 헤더 최소화 */
         .fc-header-toolbar {
             flex-direction: column !important;
             gap: 2px !important;
-            margin-bottom: 2px !important;
+            margin-bottom: 5px !important;
         }
         .fc-toolbar-title { font-size: 0.9rem !important; }
         .fc-button { font-size: 0.6rem !important; padding: 1px 5px !important; }
@@ -169,7 +179,7 @@ def show_collab_ui(db):
                 events=calendar_events, 
                 options=calendar_options, 
                 custom_css=calendar_custom_css, 
-                key="my_calendar_v276"
+                key="my_calendar_v277"
             )
 
             if cal_state.get("eventClick"):
@@ -269,7 +279,7 @@ def show_collab_ui(db):
                     st.success("저장됨"); time.sleep(0.5); st.rerun()
 
     # ------------------------------------------------------------------
-    # [Tab 2] 연락처 관리 (V276: Streamlit Native Link Button 사용)
+    # [Tab 2] 연락처 관리 (V277: target="_self" 적용)
     # ------------------------------------------------------------------
     with tab2:
         st.subheader("📒 업체 연락처")
@@ -290,8 +300,6 @@ def show_collab_ui(db):
                 
                 # --- [A] 일반 보기 모드 ---
                 if st.session_state.edit_contact_id != c_id:
-                    # [핵심] HTML 대신 st.container로 카드 UI 구성
-                    # 이렇게 해야 st.link_button(전화걸기)을 안전하게 쓸 수 있습니다.
                     with st.container(border=True):
                         # 레이아웃: 정보(왼쪽) + 수정버튼(오른쪽)
                         c_col1, c_col2 = st.columns([5, 1])
@@ -302,12 +310,16 @@ def show_collab_ui(db):
                             rank_txt = f"({c.get('rank')})" if c.get('rank') else ""
                             st.markdown(f"👤 {c.get('person_name')} {rank_txt}")
                             
-                            # 2. 전화번호 (Streamlit Link Button 사용 - 100% 작동 보장)
+                            # 2. 전화번호 (st.markdown + HTML 버튼)
+                            # [핵심 Fix] target="_self"를 사용하여 새 창 열림을 방지하고 즉시 전화 앱 호출
                             phone = c.get('phone', '')
                             if phone:
                                 clean_phone = re.sub(r'[^0-9]', '', str(phone))
-                                # 전화 걸기 버튼 (파란색 스타일은 위쪽 CSS로 적용됨)
-                                st.link_button(f"📞 {phone}", f"tel:{clean_phone}", use_container_width=True)
+                                st.markdown(f'''
+                                    <a href="tel:{clean_phone}" target="_self" class="custom-phone-btn">
+                                        📞 {phone}
+                                    </a>
+                                ''', unsafe_allow_html=True)
                             else:
                                 st.caption("번호 없음")
                                 
