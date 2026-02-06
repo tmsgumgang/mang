@@ -548,7 +548,7 @@ class DBManager:
             return False
 
     # =========================================================
-    # [V258] 🤝 협업 기능 (일정 수정 포함)
+    # [V258] 🤝 협업 기능 (일정 & 연락처)
     # =========================================================
     
     # --- 📅 일정 (Schedule) ---
@@ -575,7 +575,7 @@ class DBManager:
             return True if res.data else False
         except: return False
 
-    # [V258 New] 일정 수정 함수
+    # [V258 New] 일정 수정 함수 (이것이 없어서 에러가 났었습니다!)
     def update_schedule(self, sch_id, title, start_dt, end_dt, cat, desc, location):
         try:
             payload = {
