@@ -551,13 +551,15 @@ class DBManager:
     # [V262] 🤝 협업 기능 (일정 & 연락처 & 당직) (직급 기능 추가)
     # =========================================================
     
-    # --- 📅 일정 (Schedule) ---
+    # --- 📅 일정 (Schedule) [Updated V280] ---
     def get_schedules(self):
         try:
+            # status, assignee 컬럼이 추가되었으므로 * 로 가져오면 자동으로 포함됨
             return self.supabase.table("collab_schedules").select("*").order("start_time", desc=False).execute().data
         except: return []
 
-    def add_schedule(self, title, start_dt, end_dt, cat, desc, user, location):
+    # [V280 Update] assignee(담당자) 추가
+    def add_schedule(self, title, start_dt, end_dt, cat, desc, user, location, assignee=None):
         try:
             payload = {
                 "title": title, 
@@ -566,13 +568,16 @@ class DBManager:
                 "category": cat, 
                 "description": desc, 
                 "created_by": user,
-                "location": location
+                "location": location,
+                "assignee": assignee, # 담당자 할당
+                "status": "진행중"    # 기본 상태
             }
             res = self.supabase.table("collab_schedules").insert(payload).execute()
             return True if res.data else False
         except: return False
 
-    def update_schedule(self, sch_id, title, start_dt, end_dt, cat, desc, location):
+    # [V280 Update] status(상태), assignee(담당자) 수정 기능 추가
+    def update_schedule(self, sch_id, title, start_dt, end_dt, cat, desc, location, status, assignee):
         try:
             payload = {
                 "title": title, 
@@ -580,7 +585,9 @@ class DBManager:
                 "end_time": end_dt,
                 "category": cat, 
                 "description": desc, 
-                "location": location
+                "location": location,
+                "status": status,       # 진행중/완료 상태 변경
+                "assignee": assignee    # 담당자 변경
             }
             res = self.supabase.table("collab_schedules").update(payload).eq("id", sch_id).execute()
             return True if res.data else False
