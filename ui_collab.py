@@ -49,13 +49,14 @@ def show_collab_ui(db):
         }
     </style>""", unsafe_allow_html=True)
 
-    # [CSS 2] 캘린더 내부 주입용 CSS (폰트 0.45rem 적용)
-    # 이 CSS는 calendar 함수에 직접 전달되어 Iframe 내부 스타일을 변경합니다.
+    # [CSS 2] 캘린더 내부 주입용 CSS (폰트 강제 축소 & 칸 높이 조절)
+    # 이 변수는 아래 calendar() 함수의 custom_css 인자로 전달됩니다.
     calendar_custom_css = """
+        /* 헤더(년/월, 버튼) 여백 최소화 */
         .fc-header-toolbar {
             flex-direction: column !important;
             gap: 2px !important;
-            margin-bottom: 2px !important;
+            margin-bottom: 5px !important;
         }
         .fc-toolbar-title {
             font-size: 1.0rem !important;
@@ -64,29 +65,34 @@ def show_collab_ui(db):
             font-size: 0.6rem !important; 
             padding: 2px 6px !important;
         }
-        /* 칸 높이 확보 */
+
+        /* [요청] 칸 높이 늘리기 (일정 더 많이 보기 위해) */
         .fc-daygrid-day-frame {
-            min-height: 80px !important; 
+            min-height: 85px !important; /* 칸 높이 확보 */
         }
-        /* [폰트 초소형화] */
+
+        /* [요청] 폰트 30% 이상 축소 (0.5rem 적용) */
         .fc-col-header-cell-cushion { /* 요일 */
-            font-size: 0.5rem !important; 
+            font-size: 0.55rem !important; 
             padding: 1px !important;
         }
-        .fc-daygrid-day-number { /* 날짜 숫자 */
-            font-size: 0.5rem !important; 
+        .fc-daygrid-day-number { /* 날짜 */
+            font-size: 0.55rem !important; 
             padding: 1px !important;
         }
-        .fc-event-title, .fc-event-time { /* 일정 글씨 */
-            font-size: 0.45rem !important; 
+        .fc-event-title, .fc-event-time { /* 일정 텍스트 */
+            font-size: 0.5rem !important; /* 아주 작게 */
             font-weight: normal !important;
-            line-height: 1.0 !important;
+            line-height: 1.1 !important;
         }
+        
+        /* 이벤트 박스 여백 최소화 */
         .fc-event {
             margin-bottom: 1px !important;
             padding: 0px 1px !important;
         }
-        /* 리스트 뷰에서 당직 숨김 */
+
+        /* 리스트 뷰에서 당직 숨기기 */
         .fc-list-table .duty-event { display: none !important; }
         .fc-list-event.duty-event { display: none !important; }
     """
@@ -173,19 +179,22 @@ def show_collab_ui(db):
                 "locale": "ko",
                 "navLinks": True, 
                 "selectable": True, 
-                "showNonCurrentDates": False,  # 이번 달만 표시
-                "fixedWeekCount": False,       # 6주 강제 채우기 끔
-                "dayMaxEvents": 4,             # 칸이 늘어났으니 4개까지 표시
+                # [요청] 이번 달 것만 표시 (흐린 날짜 숨김)
+                "showNonCurrentDates": False, 
+                # [요청] 빈 줄(6주차) 강제 표시 끄기
+                "fixedWeekCount": False,
+                # [요청] 더 많이 보기
+                "dayMaxEvents": 4, 
                 "height": "auto",
                 "contentHeight": "auto"
             }
             
-            # [Fix 1] custom_css 적용 (Iframe 내부 스타일링)
+            # [Fix 1] custom_css 파라미터 사용 -> Iframe 내부 스타일 적용
             cal_state = calendar(
                 events=calendar_events, 
                 options=calendar_options, 
-                custom_css=calendar_custom_css, 
-                key="my_calendar_v271"
+                custom_css=calendar_custom_css, # <--- 여기가 핵심입니다.
+                key="my_calendar_v272"
             )
 
             if cal_state.get("eventClick"):
@@ -291,7 +300,7 @@ def show_collab_ui(db):
                     st.success("저장됨"); time.sleep(0.5); st.rerun()
 
     # ------------------------------------------------------------------
-    # [Tab 2] 연락처 관리 (V271: target="_top" 적용 - 전화 걸기 완벽 해결)
+    # [Tab 2] 연락처 관리 (V272: target="_blank" 적용)
     # ------------------------------------------------------------------
     with tab2:
         st.subheader("📒 업체 연락처")
@@ -315,12 +324,13 @@ def show_collab_ui(db):
                     rank_html = f"<span class='rank-badge'>{c.get('rank')}</span>" if c.get('rank') else ""
                     phone = c.get('phone', '')
                     
-                    # [Fix 2] 전화 걸기: target="_top" 적용
-                    # 이게 있으면 Iframe을 탈출하여 브라우저 최상단에서 링크를 엽니다 -> 전화 앱 연결됨
+                    # [Fix 2] 전화 걸기: target="_blank" (새 창) 적용
+                    # _top이 막힌 환경에서는 _blank가 가장 확실한 대안입니다.
                     phone_html = ""
                     if phone:
                         clean_phone = re.sub(r'[^0-9]', '', str(phone))
-                        phone_html = f'<a href="tel:{clean_phone}" target="_top" class="phone-btn">📞 {phone}</a>'
+                        # 숫자로만 된 링크 + target="_blank"
+                        phone_html = f'<a href="tel:{clean_phone}" target="_blank" class="phone-btn">📞 {phone}</a>'
                     else:
                         phone_html = '<span class="phone-btn" style="background:#cbd5e1; cursor:default;">번호 없음</span>'
 
