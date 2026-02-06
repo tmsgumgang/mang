@@ -11,35 +11,90 @@ except ImportError:
     calendar = None
 
 def show_collab_ui(db):
-    # [CSS] 모바일 최적화 & 디자인 정의
+    # [CSS] 모바일 최적화 & 다크모드 대응 디자인 (V263 Updated)
     st.markdown("""<style>
-        /* 연락처 카드 (PC/모바일 반응형) */
+        /* [1] 연락처 카드 (다크모드 대응)
+           고정 색상 대신 var(--variable)를 사용하여 테마에 자동 적응하도록 변경
+        */
         .contact-card {
-            background-color: white;
-            border: 1px solid #e2e8f0;
+            background-color: var(--secondary-background-color); /* 연한 회색 or 다크모드 배경 */
+            border: 1px solid rgba(128, 128, 128, 0.2); /* 은은한 테두리 */
             border-radius: 12px;
             padding: 16px;
             margin-bottom: 12px;
             box-shadow: 0 2px 4px rgba(0,0,0,0.05);
         }
-        .comp-name { font-size: 1.1rem; font-weight: bold; color: #1e293b; }
-        .rank-badge { font-size: 0.8rem; background: #e0f2fe; color: #0284c7; padding: 2px 6px; border-radius: 4px; margin-left: 5px; }
+        .comp-name { 
+            font-size: 1.1rem; 
+            font-weight: bold; 
+            color: var(--text-color); /* 기본 텍스트 색상 따름 */
+            margin-bottom: 4px;
+        }
+        .person-info {
+            font-size: 0.95rem;
+            color: var(--text-color); /* 기본 텍스트 색상 따름 */
+            margin-bottom: 8px;
+        }
+        .rank-badge { 
+            font-size: 0.75rem; 
+            background: #2563eb; /* 뱃지는 파란색 유지 */
+            color: white; 
+            padding: 2px 6px; 
+            border-radius: 4px; 
+            margin-left: 5px; 
+            font-weight: normal;
+        }
         .phone-btn {
             display: inline-block;
             text-decoration: none;
-            color: #2563eb;
+            color: white !important; /* 버튼 글씨는 항상 흰색 */
             font-weight: bold;
-            background: #eff6ff;
-            padding: 6px 12px;
+            background-color: #3b82f6; /* 쨍한 파란색 */
+            padding: 6px 14px;
             border-radius: 20px;
             margin-top: 8px;
+            font-size: 0.9rem;
+            border: none;
         }
+        .phone-btn:hover { background-color: #2563eb; }
         
-        /* 캘린더 모바일 최적화 CSS */
+        .meta-info {
+            margin-top: 10px; 
+            padding-top: 8px; 
+            border-top: 1px solid rgba(128, 128, 128, 0.2);
+            font-size: 0.85rem;
+            color: var(--text-color);
+            opacity: 0.8; /* 약간 흐리게 */
+        }
+
+        /* [2] 캘린더 모바일 최적화 (폰트 다이어트)
+           화면 너비 600px 이하일 때 강제 적용
+        */
         @media (max-width: 600px) {
-            .fc-toolbar-title { font-size: 1.0rem !important; }
-            .fc-header-toolbar { flex-direction: column; gap: 5px; }
-            .fc-event { font-size: 0.75rem !important; } /* 글자 크기 축소 */
+            .fc-toolbar-title { font-size: 1.1rem !important; } /* 년월 제목 크기 */
+            .fc-header-toolbar { 
+                flex-direction: column; 
+                gap: 5px; 
+                margin-bottom: 10px !important;
+            }
+            .fc .fc-button { 
+                font-size: 0.75rem !important; /* 버튼 글씨 작게 */
+                padding: 4px 8px !important; 
+            }
+            .fc-col-header-cell-cushion { 
+                font-size: 0.8rem !important; /* 요일(일,월...) 크기 */
+            } 
+            .fc-daygrid-day-number { 
+                font-size: 0.75rem !important; /* 날짜 숫자 크기 */
+                padding: 2px !important;
+            }
+            .fc-event-title { 
+                font-size: 0.7rem !important; /* 일정 제목 크기 */
+                font-weight: normal !important;
+            }
+            .fc-event { 
+                margin-bottom: 1px !important; 
+            }
         }
     </style>""", unsafe_allow_html=True)
 
@@ -47,7 +102,7 @@ def show_collab_ui(db):
     tab1, tab2 = st.tabs(["📅 일정 & 당직", "📒 업체 연락처"])
 
     # ------------------------------------------------------------------
-    # [Tab 1] 일정 & 당직 (모바일 가독성 개선)
+    # [Tab 1] 일정 & 당직 (모바일 가독성 개선 V263)
     # ------------------------------------------------------------------
     with tab1:
         if calendar is None: return 
@@ -108,25 +163,26 @@ def show_collab_ui(db):
                         }
                     })
 
-            # [V262] 캘린더 옵션: 'dayGridWeek' (주간) 뷰 추가 -> 모바일 구세주!
+            # 캘린더 옵션
             calendar_options = {
                 "headerToolbar": {
                     "left": "prev,next today",
                     "center": "title",
-                    "right": "dayGridMonth,dayGridWeek,listMonth" # 주간 뷰 추가
+                    "right": "dayGridMonth,dayGridWeek,listMonth"
                 },
                 "buttonText": {
                     "today": "오늘",
                     "dayGridMonth": "월간",
-                    "dayGridWeek": "주간(추천)", # 모바일 추천
+                    "dayGridWeek": "주간",
                     "listMonth": "리스트"
                 },
                 "initialView": "dayGridMonth",
                 "locale": "ko",
                 "navLinks": True, 
                 "selectable": True, 
-                "dayMaxEvents": 3, # 3개 넘어가면 +more 처리 (깔끔하게)
-                "height": "auto"
+                "dayMaxEvents": 3,
+                "height": "auto",
+                "contentHeight": "auto" # 모바일 높이 자동 조절
             }
             
             cal_state = calendar(events=calendar_events, options=calendar_options, key="my_calendar")
@@ -134,7 +190,7 @@ def show_collab_ui(db):
             if cal_state.get("eventClick"):
                 st.session_state.selected_event = cal_state["eventClick"]["event"]
 
-            # --- 수정 폼 (기존 유지) ---
+            # --- 수정 폼 ---
             if st.session_state.selected_event:
                 evt = st.session_state.selected_event
                 props = evt["extendedProps"]
@@ -233,7 +289,7 @@ def show_collab_ui(db):
                     st.success("저장됨"); time.sleep(0.5); st.rerun()
 
     # ------------------------------------------------------------------
-    # [Tab 2] 연락처 관리 (V262: 수정 기능 & 직급 & 전화연결)
+    # [Tab 2] 연락처 관리 (V263: 다크모드 대응 & 수정 기능)
     # ------------------------------------------------------------------
     with tab2:
         st.subheader("📒 업체 연락처")
@@ -253,20 +309,21 @@ def show_collab_ui(db):
             for c in filtered:
                 c_id = c['id']
                 
-                # --- [A] 일반 보기 모드 ---
+                # --- [A] 일반 보기 모드 (다크모드 대응 CSS 적용됨) ---
                 if st.session_state.edit_contact_id != c_id:
-                    # HTML 카드 렌더링
                     rank_html = f"<span class='rank-badge'>{c.get('rank')}</span>" if c.get('rank') else ""
                     phone = c.get('phone', '')
                     
                     st.markdown(f"""
                     <div class="contact-card">
                         <div class="comp-name">{c.get('company_name')}</div>
-                        <div>👤 {c.get('person_name')} {rank_html}</div>
+                        <div class="person-info">👤 {c.get('person_name')} {rank_html}</div>
                         <a href="tel:{phone}" class="phone-btn">📞 {phone if phone else '번호 없음'}</a>
-                        <div style="margin-top:8px; color:#64748b; font-size:0.9rem;">📧 {c.get('email','-')}</div>
-                        <div style="font-size:0.85rem; color:#94a3b8;">🏷️ {c.get('tags','')}</div>
-                        <div style="margin-top:5px; padding-top:5px; border-top:1px solid #f1f5f9; color:#475569;">{c.get('memo','')}</div>
+                        <div class="meta-info">
+                            <div>📧 {c.get('email','-')}</div>
+                            <div style="margin-top:4px;">🏷️ {c.get('tags','')}</div>
+                            <div style="margin-top:4px; color:gray;">{c.get('memo','')}</div>
+                        </div>
                     </div>
                     """, unsafe_allow_html=True)
                     
@@ -275,10 +332,10 @@ def show_collab_ui(db):
                         st.session_state.edit_contact_id = c_id
                         st.rerun()
 
-                # --- [B] 수정 모드 (같은 위치에 폼이 열림) ---
+                # --- [B] 수정 모드 ---
                 else:
                     with st.container(border=True):
-                        st.info("✏️ 연락처 수정 중...")
+                        st.info("✏️ 연락처 수정")
                         with st.form(key=f"edit_con_form_{c_id}"):
                             ec1, ec2 = st.columns(2)
                             e_comp = ec1.text_input("업체명", value=c['company_name'])
@@ -314,7 +371,7 @@ def show_collab_ui(db):
                 nc = c1.text_input("업체명 (필수)")
                 nn = c2.text_input("담당자")
                 c3, c4 = st.columns(2)
-                nr = c3.text_input("직급") # 직급 추가
+                nr = c3.text_input("직급")
                 np = c4.text_input("전화번호")
                 ne = st.text_input("이메일")
                 nt = st.text_input("태그")
@@ -322,7 +379,6 @@ def show_collab_ui(db):
                 
                 if st.form_submit_button("저장하기", type="primary"):
                     if nc:
-                        # V262 db_services의 add_contact는 rank 인자를 받음
                         if db.add_contact(nc, nn, np, ne, nt, nm, nr):
                             st.success("저장되었습니다.")
                             time.sleep(0.5); st.rerun()
