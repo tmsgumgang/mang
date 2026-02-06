@@ -39,7 +39,7 @@ def show_collab_ui(db):
         }
     </style>""", unsafe_allow_html=True)
 
-    # [CSS 2] 캘린더 내부 주입용 CSS (텍스트 넘침 방지 & 폰트 최적화)
+    # [CSS 2] 캘린더 내부 주입용 CSS (폰트 강제 축소 & 칸 높이 & 말줄임표)
     calendar_custom_css = """
         /* 헤더 최소화 */
         .fc-header-toolbar {
@@ -55,19 +55,27 @@ def show_collab_ui(db):
             min-height: 100px !important;
         }
 
-        /* 폰트 크기 0.5rem (가독성 유지) */
+        /* [Fix 1] 시간/제목 폰트 통합 축소 (0.5rem) */
         .fc-col-header-cell-cushion { font-size: 0.55rem !important; padding: 1px !important; }
         .fc-daygrid-day-number { font-size: 0.55rem !important; padding: 1px !important; }
         
-        /* [핵심 Fix 1] 일정명 넘침 방지 (말줄임표 처리) */
+        /* 시간(숫자) 부분 강제 축소 */
+        .fc-event-time {
+            font-size: 0.5rem !important;
+            font-weight: normal !important;
+            line-height: 1.0 !important;
+            margin-right: 2px !important;
+        }
+        
+        /* 제목 부분: 말줄임표(...) 처리로 넘침 방지 */
         .fc-event-title {
             font-size: 0.5rem !important;
             font-weight: normal !important;
             line-height: 1.1 !important;
-            white-space: nowrap !important;      /* 줄바꿈 금지 */
-            overflow: hidden !important;         /* 넘치는 텍스트 숨김 */
-            text-overflow: ellipsis !important;  /* 넘치면 ... 표시 */
-            display: block !important;           /* 블록 요소로 처리 */
+            white-space: nowrap !important;      
+            overflow: hidden !important;         
+            text-overflow: ellipsis !important;  
+            display: block !important;
         }
         
         /* 당직 두께 다이어트 */
@@ -105,22 +113,43 @@ def show_collab_ui(db):
             if "selected_event" not in st.session_state:
                 st.session_state.selected_event = None
 
+            # DB에서 일정 가져올 때 status, assignee 정보도 포함됨 (V280 db_services 덕분)
             schedules = db.get_schedules()
             duties = db.get_duty_roster()
             
             calendar_events = []
             
-            # 1. 일정
+            # 1. 일정 (Schedule)
             color_map = {"점검": "#3b82f6", "월간": "#8b5cf6", "회의": "#10b981", "행사": "#f59e0b", "기타": "#6b7280"}
+            
             if schedules:
                 for s in schedules:
                     cat = s.get('category', '기타')
+                    status = s.get('status', '진행중')
+                    assignee = s.get('assignee', '')
+                    
+                    # [V281] 완료된 일정은 회색 처리
+                    bg_color = color_map.get(cat, "#6b7280")
+                    border_color = bg_color
+                    title_prefix = ""
+                    
+                    if status == '완료':
+                        bg_color = "#9ca3af" # 회색 (Gray 400)
+                        border_color = "#9ca3af"
+                        title_prefix = "✅ "
+                    
+                    # [V281] 담당자 이름 표시
+                    assignee_str = f"[{assignee}] " if assignee else ""
+                    
+                    # 제목 조합: [담당자] 제목 (완료 시 체크)
+                    display_title = f"{title_prefix}{assignee_str}{s['title']}"
+
                     calendar_events.append({
-                        "title": f"[{cat}] {s['title']}",
+                        "title": display_title,
                         "start": s['start_time'],
                         "end": s['end_time'],
-                        "backgroundColor": color_map.get(cat, "#6b7280"),
-                        "borderColor": color_map.get(cat, "#6b7280"),
+                        "backgroundColor": bg_color,
+                        "borderColor": border_color,
                         "classNames": ["schedule-event"],
                         "extendedProps": {
                             "type": "schedule",
@@ -129,11 +158,13 @@ def show_collab_ui(db):
                             "description": s.get('description', ''),
                             "user": s.get('created_by', ''),
                             "category": cat,
-                            "location": s.get('location', '')
+                            "location": s.get('location', ''),
+                            "status": status,       # 상태 전달
+                            "assignee": assignee    # 담당자 전달
                         }
                     })
 
-            # 2. 당직
+            # 2. 당직 (Duty)
             if duties:
                 for d in duties:
                     calendar_events.append({
@@ -180,7 +211,7 @@ def show_collab_ui(db):
                 events=calendar_events, 
                 options=calendar_options, 
                 custom_css=calendar_custom_css, 
-                key="my_calendar_v279"
+                key="my_calendar_v281"
             )
 
             if cal_state.get("eventClick"):
@@ -194,30 +225,52 @@ def show_collab_ui(db):
 
                 st.divider()
                 if e_type == "schedule":
+                    # 헤더 (제목 + 닫기 버튼)
                     c_head, c_close = st.columns([9, 1])
-                    c_head.info(f"✏️ **일정 수정**")
+                    c_head.info(f"✏️ **일정 수정 / 진행 관리**")
                     if c_close.button("❌", key="close_sch"):
                         st.session_state.selected_event = None
                         st.rerun()
 
                     with st.form(key=f"edit_sch_{props['id']}"):
                         e_title = st.text_input("제목", value=props['real_title'])
+                        
+                        c_cat, c_stat = st.columns(2)
+                        
+                        # 분류 선택
                         cat_opts = ["점검", "월간", "회의", "행사", "기타", "직접입력"]
                         curr_cat = props['category']
                         idx = cat_opts.index(curr_cat) if curr_cat in cat_opts else 5
-                        e_cat_select = st.selectbox("분류", cat_opts, index=idx)
+                        e_cat_select = c_cat.selectbox("분류", cat_opts, index=idx)
+                        
+                        # [V281] 상태 선택 (진행도 관리)
+                        stat_opts = ["진행중", "완료"]
+                        curr_stat = props.get('status', '진행중')
+                        stat_idx = stat_opts.index(curr_stat) if curr_stat in stat_opts else 0
+                        e_status = c_stat.selectbox("진행 상태", stat_opts, index=stat_idx)
+
                         e_cat_manual = ""
                         if e_cat_select == "직접입력":
-                            e_cat_manual = st.text_input("직접 입력", value=curr_cat if curr_cat not in cat_opts[:-1] else "")
+                            e_cat_manual = st.text_input("직접 입력 (분류)", value=curr_cat if curr_cat not in cat_opts[:-1] else "")
                         
-                        e_loc = st.text_input("장소", value=props.get('location', ''))
+                        # [V281] 담당자 & 장소
+                        c_loc, c_usr = st.columns(2)
+                        e_loc = c_loc.text_input("장소", value=props.get('location', ''))
+                        e_assignee = c_usr.text_input("담당자", value=props.get('assignee', '')) # 담당자 수정 가능
+                        
                         e_desc = st.text_area("내용", value=props['description'])
                         
                         c_b1, c_b2 = st.columns(2)
                         if c_b1.form_submit_button("수정 저장"):
                             final_cat = e_cat_manual if e_cat_select == "직접입력" else e_cat_select
-                            if db.update_schedule(props['id'], e_title, evt['start'], evt.get('end'), final_cat, e_desc, e_loc):
+                            
+                            # [V281] update_schedule 함수에 status, assignee 전달
+                            if db.update_schedule(
+                                props['id'], e_title, evt['start'], evt.get('end'), 
+                                final_cat, e_desc, e_loc, e_status, e_assignee
+                            ):
                                 st.success("수정됨"); st.session_state.selected_event=None; time.sleep(0.5); st.rerun()
+                                
                         if c_b2.form_submit_button("삭제"):
                             db.delete_schedule(props['id'])
                             st.success("삭제됨"); st.session_state.selected_event=None; time.sleep(0.5); st.rerun()
@@ -244,19 +297,20 @@ def show_collab_ui(db):
             st.markdown("### ➕ 일정 등록")
             cat_select = st.selectbox("분류", ["점검", "월간", "회의", "행사", "기타", "직접입력"], key="n_cat")
             cat_manual = st.text_input("분류명", key="n_man") if cat_select == "직접입력" else ""
+            
             n_title = st.text_input("제목", key="n_tit")
-            n_loc = st.text_input("장소 (측정소명)", key="n_loc")
+            
+            # [V281] 장소 & 담당자 입력칸 추가
+            r1, r2 = st.columns(2)
+            n_loc = r1.text_input("장소", key="n_loc")
+            n_assignee = r2.text_input("담당자", key="n_assignee") # 담당자 지정
             
             nd1, nt1 = st.columns(2)
             n_date = nd1.date_input("날짜", key="n_d")
             
-            # [핵심 Fix 2] 시간 입력을 Selectbox로 변경 (모바일 스크롤 버그 해결)
-            # 00:00 ~ 23:30까지 30분 단위 생성 (필요시 15분 단위로 수정 가능)
-            time_options = [f"{h:02d}:{m:02d}" for h in range(7, 20) for m in (0, 30)] # 07:00 ~ 19:30 위주
-            # 기본값 설정 (현재 시간과 가장 가까운 시간)
-            now = datetime.now()
-            default_time_idx = 6 # 대략 10:00 정도
-            
+            # [V281] 모바일 스크롤 버그 방지 (Selectbox 사용)
+            time_options = [f"{h:02d}:{m:02d}" for h in range(7, 20) for m in (0, 30)] 
+            default_time_idx = 6 
             n_time_str = nt1.selectbox("시간", time_options, index=default_time_idx, key="n_t_select")
             
             n_desc = st.text_area("내용", key="n_dsc")
@@ -265,18 +319,19 @@ def show_collab_ui(db):
             if st.button("저장", type="primary", use_container_width=True):
                 if n_title:
                     f_cat = cat_manual if cat_select == "직접입력" else cat_select
-                    # 문자열 시간을 time 객체로 변환
                     h, m = map(int, n_time_str.split(':'))
                     selected_time = datetime.now().replace(hour=h, minute=m, second=0).time()
                     
                     start = datetime.combine(n_date, selected_time)
                     end = start + timedelta(hours=1)
-                    db.add_schedule(n_title, start.isoformat(), end.isoformat(), f_cat, n_desc, n_user, n_loc)
+                    
+                    # [V281] add_schedule에 assignee 전달
+                    db.add_schedule(n_title, start.isoformat(), end.isoformat(), f_cat, n_desc, n_user, n_loc, n_assignee)
                     st.success("저장됨"); time.sleep(0.5); st.rerun()
 
             st.divider()
 
-            # 2. 당직 관리 (아래로 이동)
+            # 2. 당직 관리
             st.markdown("### 👮‍♂️ 당직 관리")
             d_tab1, d_tab2 = st.tabs(["📥 엑셀", "✍️ 수동"])
             with d_tab1:
@@ -297,7 +352,7 @@ def show_collab_ui(db):
                         st.success("등록됨"); time.sleep(0.5); st.rerun()
 
     # ------------------------------------------------------------------
-    # [Tab 2] 연락처 관리 (V278 유지: 검색 최적화)
+    # [Tab 2] 연락처 관리 (검색 최적화 유지)
     # ------------------------------------------------------------------
     with tab2:
         st.subheader("📒 업체 연락처")
@@ -308,7 +363,7 @@ def show_collab_ui(db):
         search_txt = st.text_input("🔍 검색 (업체, 담당자, 태그...)", placeholder="검색어를 입력하면 리스트가 나타납니다.")
         
         if not search_txt:
-            st.info("👆 검색어를 입력해주세요. (전체 리스트 로딩 방지)")
+            st.info("👆 검색어를 입력해주세요.")
         else:
             all_contacts = db.get_contacts()
             filtered = [c for c in all_contacts if search_txt.lower() in f"{c.get('company_name')} {c.get('person_name')} {c.get('tags')}".lower()]
