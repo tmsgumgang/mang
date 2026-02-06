@@ -5,20 +5,25 @@ import re
 from logic_ai import *
 from utils_search import perform_unified_search
 
+# [V255] 정도검사 UI 모듈 가져오기 (분리됨)
+from ui_qc import show_qc_ui
+
 # =========================================================================
-# [V247] 그래프 관계 매핑 (채팅창에서도 한국어로 직관적 표시)
+# [V252] 그래프 관계 매핑 (모든 관계 유형 포함)
 # =========================================================================
 REL_MAP = {
     "causes": "원인이다 (A가 B를 유발)",
-    "part_of": "부품이다 (A는 B의 일부)",
+    "part_of": "부품이다 (A는 B의 기계적 부품)",
+    "consumable_of": "소모품이다 (A는 B의 소모자재)",
+    "is_facility_of": "설비이다 (A는 B의 주요 설비)",
+    "is_a": "종류이다 (A는 B의 일종/정의)",
+    "included_in": "일부이다 (A는 B의 구성요소/과정)",
     "solved_by": "해결된다 (A는 B로 해결)",
     "requires": "필요로 한다 (A는 B가 필요)",
     "has_status": "상태다 (A는 B라는 증상/상태)",
     "located_in": "위치한다 (A는 B에 있음)",
     "related_to": "관련되어 있다 (A와 B 연관)",
-    "manufactured_by": "제품이다 (A는 B가 제조함)",
-    "is_facility_of": "설비이다 (A는 B의 주요 설비)",
-    "is_a": "종류이다 (A는 B의 일종/정의)"           
+    "manufactured_by": "제품이다 (A는 B가 제조함)"
 }
 
 # [Helper] 하이라이팅 함수
@@ -49,36 +54,47 @@ def show_search_ui(ai_model, db):
     </style>""", unsafe_allow_html=True)
 
     # ----------------------------------------------------------------------
-    # [Input] 검색 입력창
+    # [Input] 검색 입력창 & 모드 선택
     # ----------------------------------------------------------------------
     _, main_col, _ = st.columns([1, 2, 1])
     with main_col:
-        s_mode = st.radio("검색 모드", ["업무기술 🛠️", "소모품 재고 📦", "생활정보 🍴"], horizontal=True, label_visibility="collapsed")
+        # [V255] 정도검사 메뉴 추가
+        s_mode = st.radio("기능 선택", ["업무기술 🛠️", "소모품 재고 📦", "정도검사 ⚖️", "생활정보 🍴"], horizontal=True, label_visibility="collapsed")
         
-        if s_mode != "소모품 재고 📦":
-            u_threshold = st.slider("정밀도 설정", 0.0, 1.0, 0.6, 0.05)
+        # 검색창 표시 조건 (정도검사 모드에서는 검색창 숨김)
+        if s_mode != "정도검사 ⚖️":
+            if s_mode == "업무기술 🛠️" or s_mode == "생활정보 🍴":
+                u_threshold = st.slider("정밀도 설정", 0.0, 1.0, 0.6, 0.05)
+                ph_text = "예: 시마즈 TOC 고장 조치"
+            else: # 소모품 재고
+                u_threshold = 0.0
+                ph_text = "예: 배양액, 3way valve (단어만 입력)"
+            
+            user_q = st.text_input("질문/검색어 입력", placeholder=ph_text, label_visibility="collapsed")
+            search_btn = st.button("🔍 검색", use_container_width=True, type="primary")
         else:
-            u_threshold = 0.0 
-            
-        ph_text = "예: 시마즈 TOC 고장 조치"
-        if s_mode == "소모품 재고 📦":
-            ph_text = "예: 배양액, 3way valve (단어만 입력해도 됩니다)"
-            
-        user_q = st.text_input("질문 입력", placeholder=ph_text, label_visibility="collapsed")
-        search_btn = st.button("🔍 검색", use_container_width=True, type="primary")
+            # 정도검사 모드일 때는 변수 초기화
+            user_q = None
+            search_btn = False
 
     # ----------------------------------------------------------------------
-    # [Logic] 검색 실행 및 결과 출력
+    # [Logic] 모드별 기능 실행
     # ----------------------------------------------------------------------
+    
+    # [CASE 3] 정도검사 (V255 New - 모듈 분리)
+    if s_mode == "정도검사 ⚖️":
+        st.divider()
+        show_qc_ui() # ui_qc.py에 있는 함수 호출
+        return # 여기서 렌더링 종료
+
+    # [CASE 1 & 2] 검색 로직 (기존 유지)
     if user_q and (search_btn or user_q):
         if "last_query" not in st.session_state or st.session_state.last_query != user_q:
             st.session_state.last_query = user_q
             if "full_report" in st.session_state: del st.session_state.full_report
             if "streamed_summary" in st.session_state: del st.session_state.streamed_summary
 
-        # =========================================================
-        # [CASE 1] 소모품 재고 검색 모드
-        # =========================================================
+        # === 소모품 재고 검색 ===
         if s_mode == "소모품 재고 📦":
             with st.spinner("📦 창고 데이터를 조회하고 있습니다..."):
                 inv_result = db.search_inventory_for_chat(user_q)
@@ -92,9 +108,7 @@ def show_search_ui(ai_model, db):
                     st.warning("🔍 검색 결과가 없습니다.")
             return 
 
-        # =========================================================
-        # [CASE 2] 일반 기술/생활 정보 검색 (Graph RAG V247)
-        # =========================================================
+        # === 일반 기술/생활 정보 검색 (Graph RAG V247) ===
         with st.spinner("지식을 탐색 중입니다... (Graph + Vector)"):
             try:
                 final, intent, q_vec = perform_unified_search(ai_model, db, user_q, u_threshold)
@@ -215,7 +229,6 @@ def show_search_ui(ai_model, db):
                             doc_id = rel.get('doc_id')
                             source_type = rel.get('source_type', 'manual')
                             
-                            # [V250] 부모 문서 메타데이터 가져오기
                             meta = {}
                             if doc_id:
                                 meta = db.get_doc_metadata_by_id(doc_id, source_type)
@@ -249,10 +262,7 @@ def show_search_ui(ai_model, db):
                                 delete = bc2.form_submit_button("🗑️")
 
                                 if save:
-                                    # 1. 그래프 관계 업데이트
                                     graph_updated = db.update_graph_triple(rid, e_src, e_rel, e_tgt)
-                                    
-                                    # 2. 문서 라벨 업데이트
                                     doc_updated = False
                                     if doc_id:
                                         t_name = "knowledge_base" if source_type == "knowledge" else "manual_base"
@@ -270,4 +280,5 @@ def show_search_ui(ai_model, db):
                                         st.warning("🗑️ 관계 삭제 완료!"); time.sleep(0.5); st.rerun()
                                     else: st.error("삭제 실패")
         else:
-            st.warning("🔍 검색 결과가 없습니다.")
+            if s_mode != "정도검사 ⚖️": 
+                st.warning("🔍 검색 결과가 없습니다.")
