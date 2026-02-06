@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import time
+import re # [New] 정규식 사용
 from datetime import datetime, timedelta, timezone
 
 # 캘린더 라이브러리 임포트
@@ -11,7 +12,7 @@ except ImportError:
     calendar = None
 
 def show_collab_ui(db):
-    # [CSS] V264: 모바일 초적화, 다크모드, 리스트 뷰 당직 숨기기
+    # [CSS] V267: 모바일 폰트 초소형화 (0.6rem -> 0.55rem) & 전화 버튼 스타일
     st.markdown("""<style>
         /* 연락처 카드 */
         .contact-card {
@@ -26,19 +27,19 @@ def show_collab_ui(db):
         .person-info { font-size: 0.95rem; color: var(--text-color); margin-bottom: 8px; }
         .rank-badge { font-size: 0.75rem; background: #2563eb; color: white; padding: 2px 6px; border-radius: 4px; margin-left: 5px; font-weight: normal; }
         
-        /* 전화 걸기 버튼 스타일 */
+        /* 전화 걸기 버튼 (가독성 & 클릭 영역 확보) */
         a.phone-btn {
             display: inline-block;
             text-decoration: none !important;
             color: white !important;
             font-weight: bold;
             background-color: #3b82f6;
-            padding: 6px 14px;
+            padding: 8px 16px;
             border-radius: 20px;
             margin-top: 8px;
-            font-size: 0.9rem;
+            font-size: 0.95rem;
             border: none;
-            pointer-events: auto; /* 클릭 가능 강제 */
+            cursor: pointer;
         }
         a.phone-btn:hover { background-color: #2563eb; }
         
@@ -47,27 +48,44 @@ def show_collab_ui(db):
             font-size: 0.85rem; color: var(--text-color); opacity: 0.8;
         }
 
-        /* [핵심] 캘린더 리스트 뷰에서 당직(duty-event) 숨기기 
-           fc-list-event 클래스와 duty-event 클래스가 같이 있는 요소를 숨김
-        */
-        .fc-list-event.duty-event { display: none !important; }
+        /* 캘린더 리스트 뷰에서 당직 숨기기 */
         .fc-list-table .duty-event { display: none !important; }
 
-        /* [모바일 캘린더 초적화 - 폰트 및 여백 극소화] */
+        /* [핵심] 모바일 캘린더 초소형화 (폰트 30% 이상 축소) */
         @media (max-width: 600px) {
-            .fc-toolbar-title { font-size: 1.0rem !important; }
-            .fc-header-toolbar { flex-direction: column; gap: 2px; margin-bottom: 5px !important; }
-            .fc .fc-button { font-size: 0.7rem !important; padding: 2px 6px !important; }
+            /* 상단 툴바 */
+            .fc-toolbar-title { font-size: 0.9rem !important; }
+            .fc-header-toolbar { flex-direction: column; gap: 2px; margin-bottom: 2px !important; }
+            .fc .fc-button { font-size: 0.6rem !important; padding: 1px 5px !important; }
             
-            /* 날짜/요일 크기 축소 */
-            .fc-col-header-cell-cushion { font-size: 0.7rem !important; padding: 2px !important; } 
-            .fc-daygrid-day-number { font-size: 0.65rem !important; padding: 1px !important; }
+            /* 요일 헤더 (일, 월...) */
+            .fc-col-header-cell-cushion { 
+                font-size: 0.6rem !important; 
+                padding: 1px !important; 
+            } 
             
-            /* 이벤트 폰트 축소 */
-            .fc-event-title { font-size: 0.6rem !important; font-weight: normal !important; }
-            .fc-event { margin-bottom: 1px !important; padding: 0px !important; }
+            /* 날짜 숫자 */
+            .fc-daygrid-day-number { 
+                font-size: 0.55rem !important; /* 폰트 30% 축소 적용 */
+                padding: 1px !important;
+            }
             
-            /* 캘린더 전체 높이 조절 */
+            /* 이벤트 텍스트 (일정 제목) */
+            .fc-event-title { 
+                font-size: 0.5rem !important; /* 아주 작게 */
+                font-weight: normal !important;
+                white-space: nowrap !important;
+                overflow: hidden !important;
+                text-overflow: ellipsis !important;
+            }
+            
+            /* 이벤트 박스 */
+            .fc-event { 
+                margin-bottom: 0px !important; 
+                padding: 0px 1px !important;
+                line-height: 1.1 !important; 
+            }
+            
             .fc-view-harness { height: auto !important; }
         }
     </style>""", unsafe_allow_html=True)
@@ -76,7 +94,7 @@ def show_collab_ui(db):
     tab1, tab2 = st.tabs(["📅 일정 & 당직", "📒 업체 연락처"])
 
     # ------------------------------------------------------------------
-    # [Tab 1] 일정 & 당직 (V264 Updated)
+    # [Tab 1] 일정 & 당직
     # ------------------------------------------------------------------
     with tab1:
         if calendar is None: return 
@@ -118,7 +136,7 @@ def show_collab_ui(db):
                         }
                     })
 
-            # 2. 당직 (Duty) - classNames: ["duty-event"] 추가 (CSS로 숨김 처리용)
+            # 2. 당직 (Duty)
             if duties:
                 for d in duties:
                     calendar_events.append({
@@ -128,7 +146,7 @@ def show_collab_ui(db):
                         "backgroundColor": "#16a34a",
                         "borderColor": "#16a34a",
                         "display": "block",
-                        "classNames": ["duty-event"], # [Key] 이 클래스가 있으면 리스트에서 숨김
+                        "classNames": ["duty-event"], 
                         "extendedProps": {
                             "type": "duty",
                             "id": str(d['id']),
@@ -154,13 +172,12 @@ def show_collab_ui(db):
                 "locale": "ko",
                 "navLinks": True, 
                 "selectable": True, 
-                "dayMaxEvents": 2, # 모바일 공간 절약 위해 2개로 제한
+                "dayMaxEvents": 2, 
                 "height": "auto",
                 "contentHeight": "auto"
             }
             
-            # [Fix] key 변경으로 DuplicateError 방지
-            cal_state = calendar(events=calendar_events, options=calendar_options, key="my_calendar_v264")
+            cal_state = calendar(events=calendar_events, options=calendar_options, key="my_calendar_v267")
 
             if cal_state.get("eventClick"):
                 st.session_state.selected_event = cal_state["eventClick"]["event"]
@@ -218,9 +235,8 @@ def show_collab_ui(db):
                             db.delete_duty_worker(props['id'])
                             st.rerun()
 
-        # === [우측] 관리 패널 (순서 변경 적용: 당직 -> 일정) ===
+        # === [우측] 관리 패널 ===
         with c2:
-            # 1. 당직 관리 (위로 이동)
             st.markdown("### 👮‍♂️ 당직 관리")
             d_tab1, d_tab2 = st.tabs(["📥 엑셀", "✍️ 수동"])
             
@@ -244,7 +260,6 @@ def show_collab_ui(db):
 
             st.divider()
 
-            # 2. 일정 등록 (아래로 이동)
             st.markdown("### ➕ 일정 등록")
             cat_select = st.selectbox("분류", ["점검", "월간", "회의", "행사", "기타", "직접입력"], key="n_cat")
             cat_manual = st.text_input("분류명", key="n_man") if cat_select == "직접입력" else ""
@@ -267,12 +282,11 @@ def show_collab_ui(db):
                     st.success("저장됨"); time.sleep(0.5); st.rerun()
 
     # ------------------------------------------------------------------
-    # [Tab 2] 연락처 관리 (V264: 전화 걸기 기능 Fix)
+    # [Tab 2] 연락처 관리 (V267: 전화 걸기 기능 완벽 Fix)
     # ------------------------------------------------------------------
     with tab2:
         st.subheader("📒 업체 연락처")
         
-        # [State] 연락처 수정 모드
         if "edit_contact_id" not in st.session_state:
             st.session_state.edit_contact_id = None
 
@@ -292,13 +306,16 @@ def show_collab_ui(db):
                     rank_html = f"<span class='rank-badge'>{c.get('rank')}</span>" if c.get('rank') else ""
                     phone = c.get('phone', '')
                     
-                    # [Fix] 전화 걸기 링크 (숫자만 추출해서 연결)
+                    # [V267 Fix] 전화 걸기 링크: 하이픈/공백 제거하여 tel: 스키마에 숫자로만 전달
                     phone_html = ""
                     if phone:
-                        clean_phone = str(phone).replace("-", "").replace(" ", "").strip()
+                        # 숫자만 추출 (010-1234-5678 -> 01012345678)
+                        clean_phone = re.sub(r'[^0-9]', '', str(phone))
+                        # 모바일 브라우저 호환성을 위해 target 생략하거나 _self 사용 권장 안함 (기본 동작 유도)
+                        # 일부 브라우저에서 target="_blank"가 아니면 막히는 경우가 있어 _blank 시도 (앱 실행 유도)
                         phone_html = f'<a href="tel:{clean_phone}" class="phone-btn">📞 {phone}</a>'
                     else:
-                        phone_html = '<span class="phone-btn" style="background:#cbd5e1;">번호 없음</span>'
+                        phone_html = '<span class="phone-btn" style="background:#cbd5e1; cursor:default;">번호 없음</span>'
 
                     st.markdown(f"""
                     <div class="contact-card">
