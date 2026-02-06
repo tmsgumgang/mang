@@ -47,18 +47,25 @@ def show_collab_ui(db):
             font-size: 0.85rem; color: var(--text-color); opacity: 0.8;
         }
 
-        /* [캘린더 리스트 뷰에서 당직(duty-event) 숨기기 트릭] */
+        /* [핵심] 캘린더 리스트 뷰에서 당직(duty-event) 숨기기 */
         .fc-list-table .duty-event { display: none !important; }
 
-        /* [모바일 캘린더 초적화] */
+        /* [모바일 캘린더 초적화 - 폰트 및 여백 극소화] */
         @media (max-width: 600px) {
             .fc-toolbar-title { font-size: 1.0rem !important; }
             .fc-header-toolbar { flex-direction: column; gap: 2px; margin-bottom: 5px !important; }
-            .fc .fc-button { font-size: 0.7rem !important; padding: 3px 6px !important; }
-            .fc-col-header-cell-cushion { font-size: 0.75rem !important; } 
-            .fc-daygrid-day-number { font-size: 0.7rem !important; padding: 1px !important; }
-            .fc-event-title { font-size: 0.65rem !important; font-weight: normal !important; }
-            .fc-event { margin-bottom: 1px !important; }
+            .fc .fc-button { font-size: 0.7rem !important; padding: 2px 6px !important; }
+            
+            /* 날짜/요일 크기 축소 */
+            .fc-col-header-cell-cushion { font-size: 0.7rem !important; padding: 2px !important; } 
+            .fc-daygrid-day-number { font-size: 0.65rem !important; padding: 1px !important; }
+            
+            /* 이벤트 폰트 축소 */
+            .fc-event-title { font-size: 0.6rem !important; font-weight: normal !important; }
+            .fc-event { margin-bottom: 1px !important; padding: 0px !important; }
+            
+            /* 캘린더 전체 높이 조절 */
+            .fc-view-harness { height: auto !important; }
         }
     </style>""", unsafe_allow_html=True)
 
@@ -66,7 +73,7 @@ def show_collab_ui(db):
     tab1, tab2 = st.tabs(["📅 일정 & 당직", "📒 업체 연락처"])
 
     # ------------------------------------------------------------------
-    # [Tab 1] 일정 & 당직 (V264: 당직 리스트 제외 & 순서 변경)
+    # [Tab 1] 일정 & 당직 (V264 Updated)
     # ------------------------------------------------------------------
     with tab1:
         if calendar is None: return 
@@ -108,7 +115,7 @@ def show_collab_ui(db):
                         }
                     })
 
-            # 2. 당직 (Duty) - 리스트 뷰에서 숨기기 위해 classNames 추가
+            # 2. 당직 (Duty) - classNames: ["duty-event"] 추가 (CSS로 숨김 처리용)
             if duties:
                 for d in duties:
                     calendar_events.append({
@@ -118,7 +125,7 @@ def show_collab_ui(db):
                         "backgroundColor": "#16a34a",
                         "borderColor": "#16a34a",
                         "display": "block",
-                        "classNames": ["duty-event"], # CSS로 제어할 클래스명
+                        "classNames": ["duty-event"], # [Key] 이 클래스가 있으면 리스트에서 숨김
                         "extendedProps": {
                             "type": "duty",
                             "id": str(d['id']),
@@ -138,13 +145,13 @@ def show_collab_ui(db):
                     "today": "오늘",
                     "dayGridMonth": "월간",
                     "dayGridWeek": "주간",
-                    "listMonth": "리스트(일정만)"
+                    "listMonth": "리스트(일정)"
                 },
                 "initialView": "dayGridMonth",
                 "locale": "ko",
                 "navLinks": True, 
                 "selectable": True, 
-                "dayMaxEvents": 3,
+                "dayMaxEvents": 2, # 모바일 공간 절약 위해 2개로 제한
                 "height": "auto",
                 "contentHeight": "auto"
             }
@@ -207,9 +214,9 @@ def show_collab_ui(db):
                             db.delete_duty_worker(props['id'])
                             st.rerun()
 
-        # === [우측] 관리 패널 (순서 변경: 당직 관리 -> 일정 등록) ===
+        # === [우측] 관리 패널 (순서 변경 적용: 당직 -> 일정) ===
         with c2:
-            # 1. 당직 관리 (먼저 표시)
+            # 1. 당직 관리 (위로 이동)
             st.markdown("### 👮‍♂️ 당직 관리")
             d_tab1, d_tab2 = st.tabs(["📥 엑셀", "✍️ 수동"])
             
@@ -233,7 +240,7 @@ def show_collab_ui(db):
 
             st.divider()
 
-            # 2. 일정 등록 (나중에 표시)
+            # 2. 일정 등록 (아래로 이동)
             st.markdown("### ➕ 일정 등록")
             cat_select = st.selectbox("분류", ["점검", "월간", "회의", "행사", "기타", "직접입력"], key="n_cat")
             cat_manual = st.text_input("분류명", key="n_man") if cat_select == "직접입력" else ""
@@ -256,12 +263,11 @@ def show_collab_ui(db):
                     st.success("저장됨"); time.sleep(0.5); st.rerun()
 
     # ------------------------------------------------------------------
-    # [Tab 2] 연락처 관리 (V264: 전화 걸기 버그 수정)
+    # [Tab 2] 연락처 관리 (V264: 전화 걸기 기능 Fix)
     # ------------------------------------------------------------------
     with tab2:
         st.subheader("📒 업체 연락처")
         
-        # [State] 연락처 수정 모드
         if "edit_contact_id" not in st.session_state:
             st.session_state.edit_contact_id = None
 
@@ -276,12 +282,12 @@ def show_collab_ui(db):
             for c in filtered:
                 c_id = c['id']
                 
-                # --- [A] 일반 보기 모드 ---
+                # --- [A] 일반 보기 ---
                 if st.session_state.edit_contact_id != c_id:
                     rank_html = f"<span class='rank-badge'>{c.get('rank')}</span>" if c.get('rank') else ""
                     phone = c.get('phone', '')
                     
-                    # 전화 걸기 링크 (HTML a 태그 명시적 사용)
+                    # [Fix] 전화 걸기 링크 (unsafe_allow_html 필수)
                     phone_html = f'<a href="tel:{phone}" class="phone-btn">📞 {phone}</a>' if phone else '<span class="phone-btn" style="background:#cbd5e1;">번호 없음</span>'
 
                     st.markdown(f"""
@@ -309,11 +315,9 @@ def show_collab_ui(db):
                             ec1, ec2 = st.columns(2)
                             e_comp = ec1.text_input("업체명", value=c['company_name'])
                             e_name = ec2.text_input("담당자", value=c.get('person_name',''))
-                            
                             ec3, ec4 = st.columns(2)
                             e_rank = ec3.text_input("직급", value=c.get('rank',''))
                             e_phone = ec4.text_input("전화번호", value=c.get('phone',''))
-                            
                             e_email = st.text_input("이메일", value=c.get('email',''))
                             e_tags = st.text_input("태그", value=c.get('tags',''))
                             e_memo = st.text_area("메모", value=c.get('memo',''))
@@ -323,11 +327,9 @@ def show_collab_ui(db):
                                 db.update_contact(c_id, e_comp, e_name, e_phone, e_email, e_tags, e_memo, e_rank)
                                 st.session_state.edit_contact_id = None
                                 st.success("수정됨"); time.sleep(0.5); st.rerun()
-                            
                             if eb2.form_submit_button("취소"):
                                 st.session_state.edit_contact_id = None
                                 st.rerun()
-                                
                             if eb3.form_submit_button("🗑️ 삭제"):
                                 db.delete_contact(c_id)
                                 st.session_state.edit_contact_id = None
