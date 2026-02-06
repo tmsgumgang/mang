@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime, timedelta
+import time
+from datetime import datetime, timedelta, timezone
 
 def show_collab_ui(db):
     st.markdown("""<style>
@@ -23,18 +24,40 @@ def show_collab_ui(db):
             
             if schedules:
                 df = pd.DataFrame(schedules)
-                df['start_time'] = pd.to_datetime(df['start_time'])
                 
-                # 오늘 이후 일정만 필터링 or 전체 보기
-                upcoming = df[df['start_time'] >= datetime.now() - timedelta(days=1)]
+                # [Fix 1] DB의 시간(UTC)을 Pandas Timestamp(UTC)로 명확히 변환
+                df['start_time'] = pd.to_datetime(df['start_time'], utc=True)
                 
-                for _, row in upcoming.iterrows():
-                    with st.expander(f"[{row['category']}] {row['start_time'].strftime('%m-%d %H:%M')} : {row['title']}"):
-                        st.write(f"📝 내용: {row['description']}")
-                        st.caption(f"등록자: {row['created_by']}")
-                        if st.button("삭제", key=f"del_sch_{row['id']}"):
-                            db.delete_schedule(row['id'])
-                            st.rerun()
+                # [Fix 2] 현재 시간도 UTC 기준으로 가져와서 비교 (에러 해결 핵심)
+                now_utc = datetime.now(timezone.utc)
+                
+                # 어제 이후의 일정만 필터링 (최근 일정 보기)
+                upcoming = df[df['start_time'] >= now_utc - timedelta(days=1)]
+                
+                if not upcoming.empty:
+                    # 날짜순 정렬
+                    upcoming = upcoming.sort_values(by='start_time')
+                    
+                    for _, row in upcoming.iterrows():
+                        # [Display] 한국 시간(KST)으로 변환해서 보여주기
+                        try:
+                            kst_time = row['start_time'].tz_convert('Asia/Seoul')
+                        except:
+                            # 변환 실패시(라이브러리 부재 등) 9시간 수동 더하기 or 그대로 표시
+                            kst_time = row['start_time'] + timedelta(hours=9)
+                            
+                        time_str = kst_time.strftime('%m-%d %H:%M')
+                        
+                        with st.expander(f"[{row['category']}] {time_str} : {row['title']}"):
+                            st.write(f"📝 내용: {row['description']}")
+                            st.caption(f"등록자: {row['created_by']}")
+                            
+                            # 삭제 버튼
+                            if st.button("삭제", key=f"del_sch_{row['id']}"):
+                                db.delete_schedule(row['id'])
+                                st.rerun()
+                else:
+                    st.info("예정된 일정이 없습니다.")
             else:
                 st.info("등록된 일정이 없습니다.")
 
@@ -52,8 +75,12 @@ def show_collab_ui(db):
                 s_user = st.text_input("등록자", "관리자")
                 
                 if st.form_submit_button("일정 추가"):
-                    full_dt = datetime.combine(s_date, s_time).isoformat()
-                    if db.add_schedule(s_title, full_dt, full_dt, s_cat, s_desc, s_user):
+                    # 1. 사용자가 입력한 시간을 합침 (Local Time)
+                    local_dt = datetime.combine(s_date, s_time)
+                    
+                    # 2. DB에는 ISO 포맷 문자열로 저장 (타임존 정보 없이 보내면 보통 UTC나 그대로 저장됨)
+                    # 여기서는 심플하게 ISO 포맷 문자열로 변환하여 전송
+                    if db.add_schedule(s_title, local_dt.isoformat(), local_dt.isoformat(), s_cat, s_desc, s_user):
                         st.success("등록 완료!")
                         time.sleep(0.5)
                         st.rerun()
@@ -72,7 +99,12 @@ def show_collab_ui(db):
         if search_txt:
             search_txt = search_txt.lower()
             for c in all_contacts:
-                raw = f"{c['company_name']} {c['person_name']} {c['tags']}".lower()
+                # None 데이터 방지
+                c_name = c.get('company_name') or ""
+                p_name = c.get('person_name') or ""
+                tags = c.get('tags') or ""
+                
+                raw = f"{c_name} {p_name} {tags}".lower()
                 if search_txt in raw:
                     filtered.append(c)
         else:
@@ -81,9 +113,20 @@ def show_collab_ui(db):
         # 연락처 리스트 (데이터 에디터 사용)
         if filtered:
             df_con = pd.DataFrame(filtered)
-            # 표시할 컬럼만 선택 및 이름 변경
-            display_df = df_con[['id', 'company_name', 'person_name', 'phone', 'email', 'tags', 'memo']]
-            display_df.columns = ['ID', '업체명', '담당자', '전화번호', '이메일', '태그', '메모']
+            
+            # 에러 방지: 필요한 컬럼만 추출
+            target_cols = ['id', 'company_name', 'person_name', 'phone', 'email', 'tags', 'memo']
+            # 실제 존재하는 컬럼만 필터링
+            valid_cols = [col for col in target_cols if col in df_con.columns]
+            
+            display_df = df_con[valid_cols].copy()
+            
+            # 컬럼명 한글 변환
+            col_map = {
+                'id': 'ID', 'company_name': '업체명', 'person_name': '담당자',
+                'phone': '전화번호', 'email': '이메일', 'tags': '태그', 'memo': '메모'
+            }
+            display_df.rename(columns=col_map, inplace=True)
             
             edited_df = st.data_editor(
                 display_df, 
@@ -94,11 +137,8 @@ def show_collab_ui(db):
                 disabled=["ID"] # ID는 수정 불가
             )
             
-            # 수정 사항 감지 및 DB 업데이트 (옵션: 버튼 눌러서 저장)
-            if st.button("💾 변경사항 저장 (수정/삭제 반영)"):
-                # Streamlit data_editor는 복잡해서, 여기선 간단히 '추가' 폼만 따로 두고
-                # 리스트 수정은 고급 기능이라 일단 조회 위주로 갑니다.
-                # 필요시 추가 구현 가능. 여기서는 '새로고침' 역할만.
+            # 수정 사항 감지 및 DB 업데이트 (단순 새로고침용)
+            if st.button("💾 변경사항 저장 (새로고침)"):
                 st.toast("데이터가 갱신되었습니다.")
                 st.rerun()
         else:
@@ -128,4 +168,3 @@ def show_collab_ui(db):
                             st.rerun()
                     else:
                         st.error("업체명은 필수입니다.")
-import time # time 모듈 import
