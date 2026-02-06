@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components # [New] JS 실행을 위해 추가
 import pandas as pd
 import time
 import re
@@ -12,10 +13,10 @@ except ImportError:
     calendar = None
 
 def show_collab_ui(db):
-    # [CSS 1] 메인 화면용 스타일 (연락처 카드 등)
+    # [CSS] 메인 화면 스타일 (캘린더 외부)
     st.markdown("""<style>
-        /* 연락처 카드 */
-        .contact-card {
+        /* 연락처 카드 컨테이너 */
+        .contact-card-container {
             background-color: var(--secondary-background-color);
             border: 1px solid rgba(128, 128, 128, 0.2);
             border-radius: 12px;
@@ -27,72 +28,36 @@ def show_collab_ui(db):
         .person-info { font-size: 0.95rem; color: var(--text-color); margin-bottom: 8px; }
         .rank-badge { font-size: 0.75rem; background: #2563eb; color: white; padding: 2px 6px; border-radius: 4px; margin-left: 5px; font-weight: normal; }
         
-        /* 전화 걸기 버튼 스타일 */
-        a.phone-btn {
-            display: inline-block;
-            text-decoration: none !important;
-            color: white !important;
-            font-weight: bold;
-            background-color: #3b82f6;
-            padding: 8px 16px;
-            border-radius: 20px;
-            margin-top: 8px;
-            font-size: 0.95rem;
-            border: none;
-            cursor: pointer;
-        }
-        a.phone-btn:hover { background-color: #2563eb; }
-        
         .meta-info {
             margin-top: 10px; padding-top: 8px; border-top: 1px solid rgba(128, 128, 128, 0.2);
             font-size: 0.85rem; color: var(--text-color); opacity: 0.8;
         }
     </style>""", unsafe_allow_html=True)
 
-    # [CSS 2] 캘린더 내부 주입용 CSS (폰트 강제 축소 & 칸 높이 조절)
-    # 이 변수는 아래 calendar() 함수의 custom_css 인자로 전달됩니다.
+    # [CSS 2] 캘린더 내부 주입용 CSS
     calendar_custom_css = """
-        /* 헤더(년/월, 버튼) 여백 최소화 */
         .fc-header-toolbar {
             flex-direction: column !important;
             gap: 2px !important;
             margin-bottom: 5px !important;
         }
-        .fc-toolbar-title {
-            font-size: 1.0rem !important;
-        }
-        .fc-button {
-            font-size: 0.6rem !important; 
-            padding: 2px 6px !important;
-        }
-
-        /* [요청] 칸 높이 늘리기 (일정 더 많이 보기 위해) */
-        .fc-daygrid-day-frame {
-            min-height: 85px !important; /* 칸 높이 확보 */
-        }
-
-        /* [요청] 폰트 30% 이상 축소 (0.5rem 적용) */
-        .fc-col-header-cell-cushion { /* 요일 */
-            font-size: 0.55rem !important; 
-            padding: 1px !important;
-        }
-        .fc-daygrid-day-number { /* 날짜 */
-            font-size: 0.55rem !important; 
-            padding: 1px !important;
-        }
-        .fc-event-title, .fc-event-time { /* 일정 텍스트 */
-            font-size: 0.5rem !important; /* 아주 작게 */
-            font-weight: normal !important;
-            line-height: 1.1 !important;
-        }
+        .fc-toolbar-title { font-size: 1.0rem !important; }
+        .fc-button { font-size: 0.6rem !important; padding: 2px 6px !important; }
         
-        /* 이벤트 박스 여백 최소화 */
-        .fc-event {
-            margin-bottom: 1px !important;
-            padding: 0px 1px !important;
+        /* 칸 높이 확보 */
+        .fc-daygrid-day-frame { min-height: 85px !important; }
+        
+        /* 폰트 30% 이상 축소 */
+        .fc-col-header-cell-cushion { font-size: 0.5rem !important; padding: 1px !important; }
+        .fc-daygrid-day-number { font-size: 0.5rem !important; padding: 1px !important; }
+        .fc-event-title, .fc-event-time { 
+            font-size: 0.45rem !important; 
+            font-weight: normal !important;
+            line-height: 1.0 !important;
         }
-
-        /* 리스트 뷰에서 당직 숨기기 */
+        .fc-event { margin-bottom: 1px !important; padding: 0px 1px !important; }
+        
+        /* 리스트 뷰에서 당직 숨김 */
         .fc-list-table .duty-event { display: none !important; }
         .fc-list-event.duty-event { display: none !important; }
     """
@@ -120,7 +85,7 @@ def show_collab_ui(db):
             
             calendar_events = []
             
-            # 1. 일정 (Schedule)
+            # 1. 일정
             color_map = {"점검": "#3b82f6", "월간": "#8b5cf6", "회의": "#10b981", "행사": "#f59e0b", "기타": "#6b7280"}
             if schedules:
                 for s in schedules:
@@ -143,7 +108,7 @@ def show_collab_ui(db):
                         }
                     })
 
-            # 2. 당직 (Duty)
+            # 2. 당직
             if duties:
                 for d in duties:
                     calendar_events.append({
@@ -179,22 +144,18 @@ def show_collab_ui(db):
                 "locale": "ko",
                 "navLinks": True, 
                 "selectable": True, 
-                # [요청] 이번 달 것만 표시 (흐린 날짜 숨김)
                 "showNonCurrentDates": False, 
-                # [요청] 빈 줄(6주차) 강제 표시 끄기
                 "fixedWeekCount": False,
-                # [요청] 더 많이 보기
                 "dayMaxEvents": 4, 
                 "height": "auto",
                 "contentHeight": "auto"
             }
             
-            # [Fix 1] custom_css 파라미터 사용 -> Iframe 내부 스타일 적용
             cal_state = calendar(
                 events=calendar_events, 
                 options=calendar_options, 
-                custom_css=calendar_custom_css, # <--- 여기가 핵심입니다.
-                key="my_calendar_v272"
+                custom_css=calendar_custom_css, 
+                key="my_calendar_v274"
             )
 
             if cal_state.get("eventClick"):
@@ -216,7 +177,6 @@ def show_collab_ui(db):
 
                     with st.form(key=f"edit_sch_{props['id']}"):
                         e_title = st.text_input("제목", value=props['real_title'])
-                        
                         cat_opts = ["점검", "월간", "회의", "행사", "기타", "직접입력"]
                         curr_cat = props['category']
                         idx = cat_opts.index(curr_cat) if curr_cat in cat_opts else 5
@@ -257,7 +217,6 @@ def show_collab_ui(db):
         with c2:
             st.markdown("### 👮‍♂️ 당직 관리")
             d_tab1, d_tab2 = st.tabs(["📥 엑셀", "✍️ 수동"])
-            
             with d_tab1:
                 uploaded_file = st.file_uploader("당직표(A:날짜, B:이름)", type=['xlsx'])
                 if uploaded_file and st.button("업로드"):
@@ -267,7 +226,6 @@ def show_collab_ui(db):
                             db.set_duty_worker(pd.to_datetime(row.iloc[0]).strftime("%Y-%m-%d"), str(row.iloc[1]))
                         st.success("완료!"); time.sleep(1); st.rerun()
                     except: st.error("오류 발생")
-
             with d_tab2:
                 m_date = st.date_input("날짜", value=datetime.now().date())
                 m_name = st.text_input("이름")
@@ -277,14 +235,11 @@ def show_collab_ui(db):
                         st.success("등록됨"); time.sleep(0.5); st.rerun()
 
             st.divider()
-
             st.markdown("### ➕ 일정 등록")
             cat_select = st.selectbox("분류", ["점검", "월간", "회의", "행사", "기타", "직접입력"], key="n_cat")
             cat_manual = st.text_input("분류명", key="n_man") if cat_select == "직접입력" else ""
-            
             n_title = st.text_input("제목", key="n_tit")
             n_loc = st.text_input("장소", key="n_loc")
-            
             nd1, nt1 = st.columns(2)
             n_date = nd1.date_input("날짜", key="n_d")
             n_time = nt1.time_input("시간", value=datetime.now().time(), key="n_t")
@@ -300,7 +255,7 @@ def show_collab_ui(db):
                     st.success("저장됨"); time.sleep(0.5); st.rerun()
 
     # ------------------------------------------------------------------
-    # [Tab 2] 연락처 관리 (V272: target="_blank" 적용)
+    # [Tab 2] 연락처 관리 (V274: Javascript로 전화 걸기)
     # ------------------------------------------------------------------
     with tab2:
         st.subheader("📒 업체 연락처")
@@ -324,29 +279,68 @@ def show_collab_ui(db):
                     rank_html = f"<span class='rank-badge'>{c.get('rank')}</span>" if c.get('rank') else ""
                     phone = c.get('phone', '')
                     
-                    # [Fix 2] 전화 걸기: target="_blank" (새 창) 적용
-                    # _top이 막힌 환경에서는 _blank가 가장 확실한 대안입니다.
-                    phone_html = ""
+                    # [V274 Fix] HTML 컴포넌트를 사용하여 JS로 전화 걸기 구현
+                    # st.markdown 대신 HTML 코드를 직접 생성하여 렌더링
+                    html_content = f"""
+                    <div class="contact-card-container" style="
+                        background-color: #f0f2f6; 
+                        border: 1px solid rgba(128, 128, 128, 0.2); 
+                        border-radius: 12px; 
+                        padding: 16px; 
+                        margin-bottom: 12px;
+                        font-family: sans-serif;">
+                        
+                        <div style="font-size: 1.1rem; font-weight: bold; margin-bottom: 4px;">
+                            {c.get('company_name')}
+                        </div>
+                        <div style="font-size: 0.95rem; margin-bottom: 8px;">
+                            👤 {c.get('person_name')} {rank_html}
+                        </div>
+                    """
+                    
                     if phone:
                         clean_phone = re.sub(r'[^0-9]', '', str(phone))
-                        # 숫자로만 된 링크 + target="_blank"
-                        phone_html = f'<a href="tel:{clean_phone}" target="_blank" class="phone-btn">📞 {phone}</a>'
+                        # JS: window.parent.location.href 사용 (Iframe 탈출)
+                        html_content += f"""
+                        <button onclick="window.parent.location.href='tel:{clean_phone}'" 
+                            style="
+                            background-color: #3b82f6; 
+                            color: white; 
+                            border: none; 
+                            padding: 8px 16px; 
+                            border-radius: 20px; 
+                            font-size: 0.9rem; 
+                            font-weight: bold; 
+                            cursor: pointer;">
+                            📞 {phone}
+                        </button>
+                        """
                     else:
-                        phone_html = '<span class="phone-btn" style="background:#cbd5e1; cursor:default;">번호 없음</span>'
-
-                    st.markdown(f"""
-                    <div class="contact-card">
-                        <div class="comp-name">{c.get('company_name')}</div>
-                        <div class="person-info">👤 {c.get('person_name')} {rank_html}</div>
-                        {phone_html}
-                        <div class="meta-info">
+                        html_content += """
+                        <span style="
+                            background-color: #cbd5e1; 
+                            color: white; 
+                            padding: 8px 16px; 
+                            border-radius: 20px; 
+                            font-size: 0.9rem; 
+                            font-weight: bold;">
+                            번호 없음
+                        </span>
+                        """
+                        
+                    html_content += f"""
+                        <div style="margin-top: 10px; padding-top: 8px; border-top: 1px solid rgba(128, 128, 128, 0.2); font-size: 0.85rem; opacity: 0.8;">
                             <div>📧 {c.get('email','-')}</div>
                             <div style="margin-top:4px;">🏷️ {c.get('tags','')}</div>
                             <div style="margin-top:4px; color:gray;">{c.get('memo','')}</div>
                         </div>
                     </div>
-                    """, unsafe_allow_html=True)
+                    """
                     
+                    # HTML 렌더링 (height는 내용에 맞게 적절히 조절)
+                    components.html(html_content, height=180)
+                    
+                    # 수정 버튼은 Streamlit 네이티브 버튼 유지
                     if st.button("✏️ 수정", key=f"btn_edit_{c_id}"):
                         st.session_state.edit_contact_id = c_id
                         st.rerun()
