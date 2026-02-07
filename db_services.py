@@ -253,23 +253,70 @@ class DBManager:
         except: return "재고 검색 중 오류가 발생했습니다."
 
     # =========================================================
-    # [V288 Update] 🤝 협업 기능 (정밀 진단 및 안정화)
+    # [Knowledge Graph] 지식 그래프 관리
     # =========================================================
-    
+    def save_knowledge_triples(self, doc_id, triples):
+        if not triples: return False
+        try:
+            data = []
+            for t in triples:
+                if t.get('source') and t.get('target'):
+                    data.append({"source": self._clean_text(t['source']), "relation": t.get('relation', 'related_to'), "target": self._clean_text(t['target']), "doc_id": doc_id})
+            if data: self.supabase.table("knowledge_graph").insert(data).execute(); return True
+            return False
+        except: return False
+
+    def search_graph_relations(self, keyword):
+        try: return self.supabase.table("knowledge_graph").select("*").or_(f"source.ilike.%{keyword}%,target.ilike.%{keyword}%").limit(20).execute().data
+        except: return []
+
+    def update_graph_triple(self, rel_id, new_source, new_relation, new_target):
+        try:
+            payload = {"source": self._clean_text(new_source), "relation": new_relation, "target": self._clean_text(new_target)}
+            res = self.supabase.table("knowledge_graph").update(payload).eq("id", rel_id).execute()
+            return True if res.data else False
+        except: return False
+
+    def delete_graph_triple(self, rel_id):
+        try: self.supabase.table("knowledge_graph").delete().eq("id", rel_id).execute(); return True
+        except: return False
+
+    def bulk_rename_graph_node(self, old_name, new_name, target_scope="all"):
+        try:
+            count = 0
+            if target_scope in ["source", "all"]:
+                res = self.supabase.table("knowledge_graph").update({"source": self._clean_text(new_name)}).eq("source", old_name).execute()
+                if res.data: count += len(res.data)
+            if target_scope in ["target", "all"]:
+                res = self.supabase.table("knowledge_graph").update({"target": self._clean_text(new_name)}).eq("target", old_name).execute()
+                if res.data: count += len(res.data)
+            return True, count
+        except: return False, 0
+
+    def search_knowledge_for_admin(self, keyword):
+        try: return self.supabase.table("knowledge_base").select("*").or_(f"issue.ilike.%{keyword}%,solution.ilike.%{keyword}%").order("created_at", desc=True).limit(20).execute().data
+        except: return []
+
+    def update_knowledge_item(self, doc_id, new_issue, new_sol, mfr, model, item):
+        try:
+            from logic_ai import get_embedding
+            payload = {"issue": new_issue, "solution": new_sol, "manufacturer": self._clean_text(mfr), "model_name": self._clean_text(model), "measurement_item": self._normalize_tags(item), "embedding": get_embedding(f"증상: {new_issue}\n해결: {new_sol}"), "semantic_version": 2}
+            res = self.supabase.table("knowledge_base").update(payload).eq("id", doc_id).execute()
+            return True if res.data else False
+        except: return False
+
+    # =========================================================
+    # [Collab] 🤝 협업 기능 (V292: 정밀 관리 및 안정화)
+    # =========================================================
     def get_schedules(self, include_completed=True):
-        """ 실시간 일정 조회 (Fetch 강화) """
         try:
             query = self.supabase.table("collab_schedules").select("*").order("start_time", desc=False)
-            if not include_completed:
-                query = query.eq("status", "진행중")
+            if not include_completed: query = query.eq("status", "진행중")
             res = query.execute()
             return res.data if res.data else []
-        except Exception as e:
-            print(f"Fetch Error: {e}")
-            return []
+        except: return []
 
     def get_task_stats(self):
-        """ 실시간 통계 계산 """
         try:
             res = self.supabase.table("collab_schedules").select("status").execute()
             if not res or not res.data: return {"total": 0, "pending": 0, "completed": 0}
@@ -278,10 +325,6 @@ class DBManager:
         except: return {"total": 0, "pending": 0, "completed": 0}
 
     def add_schedule(self, title, start_dt, end_dt, cat, desc, user, location, assignee=None, sub_tasks=None):
-        """ 
-        일정 등록 (리턴값 상세화: (성공여부, 에러메시지))
-        사용자가 '일정이 안생겨'라고 할 때 정확한 원인을 추적하기 위해 튜플로 반환합니다.
-        """
         try:
             payload = {
                 "title": title, "start_time": start_dt, "end_time": end_dt,
@@ -291,35 +334,18 @@ class DBManager:
                 "sub_tasks": sub_tasks if sub_tasks is not None else []
             }
             res = self.supabase.table("collab_schedules").insert(payload).execute()
-            if hasattr(res, 'data') and res.data:
-                return (True, None)
-            return (False, "데이터가 삽입되었으나 응답을 받지 못했습니다.")
-        except Exception as e:
-            # 에러 메시지를 UI에 전달하기 위해 문자열로 변환하여 반환
-            return (False, str(e))
+            return (True, None) if res.data else (False, "데이터가 삽입되었으나 응답을 받지 못했습니다.")
+        except Exception as e: return (False, str(e))
 
     def update_schedule(self, sch_id, **kwargs):
-        """ 일정 유연하게 업데이트 """
         try:
             if not kwargs: return (True, None)
             res = self.supabase.table("collab_schedules").update(kwargs).eq("id", sch_id).execute()
-            if hasattr(res, 'data') and res.data:
-                return (True, None)
-            return (False, "수정은 되었으나 응답이 없습니다.")
-        except Exception as e:
-            return (False, str(e))
+            return (True, None) if res.data else (False, "수정은 되었으나 응답이 없습니다.")
+        except Exception as e: return (False, str(e))
 
     def delete_schedule(self, sch_id):
-        try:
-            self.supabase.table("collab_schedules").delete().eq("id", sch_id).execute()
-            return True
-        except: return False
-
-    def set_duty_worker(self, date_str, name):
-        try:
-            payload = {"date": date_str, "worker_name": name}
-            self.supabase.table("duty_roster").upsert(payload, on_conflict="date").execute()
-            return True
+        try: self.supabase.table("collab_schedules").delete().eq("id", sch_id).execute(); return True
         except: return False
 
     def get_duty_roster(self):
@@ -328,8 +354,19 @@ class DBManager:
             return res.data if res.data else []
         except: return []
 
+    def set_duty_worker(self, date_str, name):
+        try:
+            payload = {"date": date_str, "worker_name": name}
+            self.supabase.table("duty_roster").upsert(payload, on_conflict="date").execute()
+            return True
+        except: return False
+
+    def delete_duty_worker(self, duty_id):
+        try: self.supabase.table("duty_roster").delete().eq("id", duty_id).execute(); return True
+        except: return False
+
     def get_contacts(self):
-        try: return self.supabase.table("collab_contacts").select("*").order("company_name").execute().data
+        try: return self.supabase.table("collab_contacts").select("*").order("company_name").execute().data or []
         except: return []
 
     def add_contact(self, company, name, phone, email, tags, memo, rank):
@@ -341,10 +378,10 @@ class DBManager:
 
     def update_contact(self, contact_id, **kwargs):
         try:
-            if not kwargs: return False
+            if not kwargs: return (True, None)
             res = self.supabase.table("collab_contacts").update(kwargs).eq("id", contact_id).execute()
-            return True if res.data else False
-        except: return False
+            return (True, None) if res.data else (False, "응답 없음")
+        except Exception as e: return (False, str(e))
 
     def delete_contact(self, contact_id):
         try: self.supabase.table("collab_contacts").delete().eq("id", contact_id).execute(); return True
