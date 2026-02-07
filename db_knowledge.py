@@ -1,9 +1,10 @@
 from collections import Counter
+import re
 
 class DBKnowledge:
     """
     [Core Brain] 챗봇의 지능, 지식 검색, RAG, 메타데이터 조회를 담당합니다.
-    V306 수정: 검색어 누락 버그 수정 (Model, Item, Query Keyword 모두 검색)
+    V309: HAAS-4000 같은 모델명 검색 누락 방지 및 Graph RAG 기능 완벽 복구
     """
     def __init__(self, supabase_client):
         self.supabase = supabase_client
@@ -41,17 +42,6 @@ class DBKnowledge:
             return Counter([r['source_id'] for r in res.data])
         except: return {}
 
-    def save_relevance_feedback(self, query, doc_id, t_name, score, query_vec=None, reason=None):
-        try:
-            payload = {
-                "query_text": query.strip(), "doc_id": doc_id, "table_name": t_name,
-                "relevance_score": score, "reason": reason
-            }
-            if query_vec: payload["query_embedding"] = query_vec
-            self.supabase.table("relevance_feedback").insert(payload).execute()
-            return True
-        except: return False
-
     def get_semantic_context_blacklist(self, query_vec):
         try:
             res = self.supabase.rpc("match_relevance_feedback_batch", {
@@ -64,29 +54,29 @@ class DBKnowledge:
 
     def match_filtered_db(self, rpc_name, query_vec, threshold, intent, query_text, context_blacklist=None):
         """
-        [V306 핵심 수정] 검색어 조합 로직 전면 수정
-        - 기존: Intent가 있으면 일반 키워드를 무시함 (버그)
-        - 수정: Intent(모델, 항목) + Query Keywords를 모두 합집합(Union)으로 검색
+        [V309 핵심 수정] 검색어 조합 로직 강화
+        - 의도(Intent) 분석 결과와 별개로, 사용자가 입력한 핵심 키워드(모델명 등)를 
+          DB에서 직접 검색(OR 조건)하여 누락을 방지합니다.
         """
         try:
             # 1. Vector Search (임베딩 검색)
             vector_results = self.supabase.rpc(rpc_name, {"query_embedding": query_vec, "match_threshold": threshold, "match_count": 40}).execute().data or []
             
-            # 2. Keyword Search (키워드 검색) - 여기서 놓친 문서를 잡아야 함
+            # 2. Keyword Search (키워드 강제 소환)
             search_candidates = set()
             
-            # (1) 의도된 타겟 모델명 추가 (예: HAAS-4000)
+            # (1) 의도된 타겟 모델명/항목 추가
             if intent.get('target_model') and intent['target_model'] not in ['미지정', '공통', 'none']:
                 search_candidates.add(intent['target_model'].strip())
-                
-            # (2) 의도된 타겟 항목 추가 (예: 채수량)
             if intent.get('target_item') and intent['target_item'] not in ['미지정', '공통', 'none']:
                 search_candidates.add(intent['target_item'].strip())
+                
+            # (2) [복구된 로직] 사용자 질문의 핵심 단어 추출 (모델명 누락 방지)
+            # 특수문자 제거하되 하이픈(-)은 살림 (HAAS-4000 때문)
+            clean_q = re.sub(r'[^\w\s-]', ' ', query_text)
+            words = clean_q.split()
+            ignore_words = ['알려줘', '어떻게', '교체', '방법', '준비물', '해줘', '있어', '나요', '인가요', '늘리는', '법', '조절']
             
-            # (3) [복구된 로직] 사용자 질문의 일반 명사들도 무조건 추가
-            # 기존에는 위 (1),(2)가 있으면 이걸 건너뛰어서 문제였음
-            ignore_words = ['알려줘', '어떻게', '교체', '방법', '준비물', '해줘', '있어', '나요', '인가요']
-            words = query_text.split()
             for w in words:
                 if len(w) >= 2 and w not in ignore_words:
                     search_candidates.add(w)
@@ -94,31 +84,23 @@ class DBKnowledge:
             keyword_results = []
             if search_candidates:
                 t_name = "manual_base" if "manual" in rpc_name else "knowledge_base"
-                query_builder = self.supabase.table(t_name).select("*")
-                or_conditions = []
                 
-                for kw in search_candidates:
+                # 핵심 키워드(최대 5개)에 대해 DB 직접 검색
+                for kw in list(search_candidates)[:5]:
                     if not kw: continue
-                    # 특수문자 제거 등 안전장치
-                    clean_kw = kw.replace("'", "").replace('"', "")
-                    if t_name == "manual_base":
-                        or_conditions.append(f"measurement_item.ilike.%{clean_kw}%")
-                        or_conditions.append(f"model_name.ilike.%{clean_kw}%")
-                        or_conditions.append(f"content.ilike.%{clean_kw}%")
-                    else:
-                        or_conditions.append(f"measurement_item.ilike.%{clean_kw}%")
-                        or_conditions.append(f"issue.ilike.%{clean_kw}%")
-                        or_conditions.append(f"solution.ilike.%{clean_kw}%")
-                
-                if or_conditions:
-                    # 너무 긴 쿼리 방지를 위해 나눠서 처리하거나, 상위 30개만 조회
-                    final_filter = ",".join(or_conditions)
-                    res = query_builder.or_(final_filter).limit(30).execute()
-                    if res.data:
-                        for d in res.data:
-                            # 키워드로 찾은 문서는 신뢰도 최상(0.99) 부여
-                            d['similarity'] = 0.99 
-                            keyword_results.append(d)
+                    try:
+                        # 모델명, 항목, 내용 어디든 포함되면 가져옴
+                        or_filter = f"model_name.ilike.%{kw}%,measurement_item.ilike.%{kw}%,content.ilike.%{kw}%"
+                        if t_name == "knowledge_base":
+                             or_filter = f"model_name.ilike.%{kw}%,measurement_item.ilike.%{kw}%,issue.ilike.%{kw}%,solution.ilike.%{kw}%"
+                        
+                        # 상위 10개만 조회 (속도 최적화)
+                        res = self.supabase.table(t_name).select("*").or_(or_filter).limit(10).execute()
+                        if res.data:
+                            for d in res.data:
+                                d['similarity'] = 0.99 # 키워드로 찾은 건 신뢰도 최상
+                                keyword_results.append(d)
+                    except: continue
 
             # 3. 결과 병합 (Vector + Keyword)
             merged_map = {}
@@ -128,37 +110,33 @@ class DBKnowledge:
             final_results_list = list(merged_map.values())
             filtered_results = []
             
-            # 4. 키워드 점수 보정 (Re-scoring)
-            keywords = [k for k in query_text.split() if len(k) > 1]
+            # 4. 점수 보정 (Re-scoring)
+            keywords_list = [k.lower() for k in query_text.split() if len(k) > 1]
             t_name = "manual_base" if "manual" in rpc_name else "knowledge_base"
 
             for d in final_results_list:
                 if context_blacklist and (t_name, d['id']) in context_blacklist: continue
                 
                 final_score = d.get('similarity') or 0
+                doc_full_text = (str(d.get('manufacturer','')) + str(d.get('model_name','')) + str(d.get('content','') or d.get('solution',''))).lower()
                 
-                # 본문(Content)에 검색어가 포함되어 있으면 가산점
-                content = (d.get('content') or d.get('solution') or "").lower()
-                mfr_model = (d.get('manufacturer', '') + d.get('model_name', '')).lower()
+                for kw in keywords_list:
+                    if kw in doc_full_text: final_score += 0.05
+                    # [중요] 모델명에 키워드가 있으면 강력한 가산점 (HAAS-4000 구출)
+                    if kw in str(d.get('model_name','')).lower(): final_score += 0.2
                 
-                for kw in keywords:
-                    kw_lower = kw.lower()
-                    if kw_lower in content: final_score += 0.05
-                    if kw_lower in mfr_model: final_score += 0.1 # 모델명 일치 시 큰 가산점
-                
-                d['similarity'] = min(final_score, 1.0) # 1.0 초과 방지
+                d['similarity'] = min(final_score, 1.0)
                 filtered_results.append(d)
                 
             return filtered_results
         except Exception as e:
-            # 에러 발생 시 빈 리스트 반환 (시스템 멈춤 방지)
             print(f"DB Search Error: {e}")
             return []
 
     def search_keyword_fallback(self, query_text):
+        """[비상용] 모든 검색 실패 시 가장 긴 단어(모델명 추정)로 전수 조사"""
         keywords = [k for k in query_text.split() if len(k) >= 2]
         if not keywords: return []
-        # 가장 긴 단어(핵심 키워드일 확률 높음)로 비상 검색
         target_keyword = max(keywords, key=len)
         try:
             res = self.supabase.table("manual_base").select("*").or_(f"content.ilike.%{target_keyword}%,model_name.ilike.%{target_keyword}%").limit(5).execute()
@@ -168,7 +146,7 @@ class DBKnowledge:
         except: return []
 
     # =========================================================
-    # [Knowledge Graph] 지식 그래프
+    # [Knowledge Graph] 지식 그래프 (utils_search.py 등에서 호출됨)
     # =========================================================
     def save_knowledge_triples(self, doc_id, triples):
         if not triples: return False
@@ -306,4 +284,15 @@ class DBKnowledge:
 
     def add_comment(self, post_id, author, content):
         try: res = self.supabase.table("community_comments").insert({"post_id": post_id, "author": author, "content": content}).execute(); return True if res.data else False
+        except: return False
+
+    def save_relevance_feedback(self, query, doc_id, t_name, score, query_vec=None, reason=None):
+        try:
+            payload = {
+                "query_text": query.strip(), "doc_id": doc_id, "table_name": t_name,
+                "relevance_score": score, "reason": reason
+            }
+            if query_vec: payload["query_embedding"] = query_vec
+            self.supabase.table("relevance_feedback").insert(payload).execute()
+            return True
         except: return False
