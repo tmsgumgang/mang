@@ -241,12 +241,23 @@ class DBManager:
             return q.execute().data
         except: return []
 
+    def search_inventory_for_chat(self, query_text):
+        try:
+            keywords = [k for k in query_text.split() if len(k) >= 2]
+            if not keywords: return None
+            res = self.supabase.table("inventory_items").select("*").or_(",".join([f"item_name.ilike.%{kw}%" for kw in keywords])).execute()
+            if not res.data: return "🔍 재고 정보가 없습니다."
+            msg = f"📦 **재고 검색 결과 ({len(res.data)}건):**\n"
+            for i in res.data[:10]: msg += f"- [{i.get('category')}] **{i.get('item_name')}**: {i.get('current_qty')}개 ({i.get('location')})\n"
+            return msg
+        except: return "재고 검색 중 오류가 발생했습니다."
+
     # =========================================================
-    # [V287 Update] 🤝 협업 기능 (정밀 관리 및 안정화)
+    # [V288 Update] 🤝 협업 기능 (정밀 진단 및 안정화)
     # =========================================================
     
     def get_schedules(self, include_completed=True):
-        """ 실시간 일정 조회 """
+        """ 실시간 일정 조회 (Fetch 강화) """
         try:
             query = self.supabase.table("collab_schedules").select("*").order("start_time", desc=False)
             if not include_completed:
@@ -267,7 +278,10 @@ class DBManager:
         except: return {"total": 0, "pending": 0, "completed": 0}
 
     def add_schedule(self, title, start_dt, end_dt, cat, desc, user, location, assignee=None, sub_tasks=None):
-        """ 일정 등록 (데이터 누락 방지 강화) """
+        """ 
+        일정 등록 (리턴값 상세화: (성공여부, 에러메시지))
+        사용자가 '일정이 안생겨'라고 할 때 정확한 원인을 추적하기 위해 튜플로 반환합니다.
+        """
         try:
             payload = {
                 "title": title, "start_time": start_dt, "end_time": end_dt,
@@ -277,20 +291,23 @@ class DBManager:
                 "sub_tasks": sub_tasks if sub_tasks is not None else []
             }
             res = self.supabase.table("collab_schedules").insert(payload).execute()
-            return True if res.data else False
+            if hasattr(res, 'data') and res.data:
+                return (True, None)
+            return (False, "데이터가 삽입되었으나 응답을 받지 못했습니다.")
         except Exception as e:
-            print(f"Insert Error: {e}")
-            return False
+            # 에러 메시지를 UI에 전달하기 위해 문자열로 변환하여 반환
+            return (False, str(e))
 
     def update_schedule(self, sch_id, **kwargs):
-        """ 일정 업데이트 (kwargs 사용으로 인자 자유도 극대화) """
+        """ 일정 유연하게 업데이트 """
         try:
-            if not kwargs: return False
+            if not kwargs: return (True, None)
             res = self.supabase.table("collab_schedules").update(kwargs).eq("id", sch_id).execute()
-            return True if res.data else False
+            if hasattr(res, 'data') and res.data:
+                return (True, None)
+            return (False, "수정은 되었으나 응답이 없습니다.")
         except Exception as e:
-            print(f"Update Error: {e}")
-            return False
+            return (False, str(e))
 
     def delete_schedule(self, sch_id):
         try:
