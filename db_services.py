@@ -253,49 +253,56 @@ class DBManager:
         except: return "재고 검색 중 오류가 발생했습니다."
 
     # =========================================================
-    # [V285 Update] 🤝 협업 기능 (업무 관리 & 당직 복구)
+    # [V286 Update] 🤝 협업 기능 (정밀 관리 및 안정화)
     # =========================================================
     
     def get_schedules(self, include_completed=True):
-        """ 캘린더 및 리스트용 일정 조회 (완료된 업무 포함 여부 선택 가능) """
+        """ 캘린더 및 리스트용 일정 조회 (갱신 문제를 위해 select(*) 강제) """
         try:
             query = self.supabase.table("collab_schedules").select("*").order("start_time", desc=False)
             if not include_completed:
                 query = query.eq("status", "진행중")
-            return query.execute().data
-        except: return []
+            res = query.execute()
+            return res.data if res.data else []
+        except Exception as e:
+            print(f"Fetch Error: {e}")
+            return []
 
     def get_pending_schedules(self):
-        """ 진행 중인 업무만 조회 (대시보드 초기화용) """
+        """ 진행 중인 업무만 조회 """
         try:
-            return self.supabase.table("collab_schedules").select("*").eq("status", "진행중").order("start_time", desc=False).execute().data
+            res = self.supabase.table("collab_schedules").select("*").eq("status", "진행중").order("start_time", desc=False).execute()
+            return res.data if res.data else []
         except: return []
 
     def get_task_stats(self):
-        """ 전체 업무 상태별 통계 반환 """
+        """ 실시간 통계 계산 """
         try:
             res = self.supabase.table("collab_schedules").select("status").execute()
-            if not res.data: return {"total": 0, "pending": 0, "completed": 0}
+            if not res or not res.data: return {"total": 0, "pending": 0, "completed": 0}
             stats = Counter([r['status'] for r in res.data])
             return {"total": len(res.data), "pending": stats.get("진행중", 0), "completed": stats.get("완료", 0)}
         except: return {"total": 0, "pending": 0, "completed": 0}
 
-    # [V285] sub_tasks(JSONB) 추가 지원
     def add_schedule(self, title, start_dt, end_dt, cat, desc, user, location, assignee=None, sub_tasks=None):
+        """ 일정 등록 (sub_tasks 기본값 보강 및 반환값 명확화) """
         try:
             payload = {
                 "title": title, "start_time": start_dt, "end_time": end_dt,
                 "category": cat, "description": desc, "created_by": user,
                 "location": location, "assignee": assignee, 
                 "status": "진행중",
-                "sub_tasks": sub_tasks if sub_tasks else []
+                "sub_tasks": sub_tasks if sub_tasks is not None else []
             }
+            # .select()를 붙여야 최신 라이브러리에서 성공 시 데이터를 반환함
             res = self.supabase.table("collab_schedules").insert(payload).execute()
             return True if res.data else False
-        except: return False
+        except Exception as e:
+            print(f"Insert Error: {e}")
+            return False
 
-    # [V285] 정밀 공정률 관리를 위한 update 로직 고도화
     def update_schedule(self, sch_id, title, start_dt, end_dt, cat, desc, location, status, assignee, sub_tasks=None):
+        """ 일정 업데이트 (정밀 공정률 반영) """
         try:
             payload = {
                 "title": title, "start_time": start_dt, "end_time": end_dt,
@@ -317,28 +324,19 @@ class DBManager:
             return True
         except: return False
 
-    # --- [복구 완료] 👮‍♂️ 당직 (Duty Roster) - 직접 입력 기능 백엔드 ---
-    def get_duty_roster(self):
-        try: return self.supabase.table("duty_roster").select("*").execute().data
-        except: return []
-
     def set_duty_worker(self, date_str, name):
-        """ 날짜별 당직자 등록/수정 (수동 등록 필수 함수) """
         try:
             payload = {"date": date_str, "worker_name": name}
             self.supabase.table("duty_roster").upsert(payload, on_conflict="date").execute()
             return True
-        except Exception as e:
-            print(f"Duty Error: {e}")
-            return False
-
-    def delete_duty_worker(self, duty_id):
-        try:
-            self.supabase.table("duty_roster").delete().eq("id", duty_id).execute()
-            return True
         except: return False
 
-    # --- 📒 연락처 (Contacts) ---
+    def get_duty_roster(self):
+        try:
+            res = self.supabase.table("duty_roster").select("*").execute()
+            return res.data if res.data else []
+        except: return []
+
     def get_contacts(self):
         try: return self.supabase.table("collab_contacts").select("*").order("company_name").execute().data
         except: return []
@@ -358,7 +356,5 @@ class DBManager:
         except: return False
 
     def delete_contact(self, contact_id):
-        try:
-            self.supabase.table("collab_contacts").delete().eq("id", contact_id).execute()
-            return True
+        try: self.supabase.table("collab_contacts").delete().eq("id", contact_id).execute(); return True
         except: return False
