@@ -72,7 +72,6 @@ class DBKnowledge:
                 search_candidates.add(intent['target_item'].strip())
                 
             # (2) [복구된 로직] 사용자 질문의 핵심 단어 추출 (모델명 누락 방지)
-            # 특수문자 제거하되 하이픈(-)은 살림 (HAAS-4000 때문)
             clean_q = re.sub(r'[^\w\s-]', ' ', query_text)
             words = clean_q.split()
             ignore_words = ['알려줘', '어떻게', '교체', '방법', '준비물', '해줘', '있어', '나요', '인가요', '늘리는', '법', '조절']
@@ -133,15 +132,24 @@ class DBKnowledge:
             print(f"DB Search Error: {e}")
             return []
 
+    # -------------------------------------------------------------------------
+    # [Step 3] 구원투수: 키워드 폴백 (utils_search.py에서 호출됨)
+    # -------------------------------------------------------------------------
     def search_keyword_fallback(self, query_text):
         """[비상용] 모든 검색 실패 시 가장 긴 단어(모델명 추정)로 전수 조사"""
         keywords = [k for k in query_text.split() if len(k) >= 2]
         if not keywords: return []
+        
         target_keyword = max(keywords, key=len)
         try:
+            # 매뉴얼뿐만 아니라 지식노트까지 확장 검색하면 더 좋지만, 
+            # 일단 사용자님의 원본 코드대로 매뉴얼 우선 검색을 유지합니다.
             res = self.supabase.table("manual_base").select("*").or_(f"content.ilike.%{target_keyword}%,model_name.ilike.%{target_keyword}%").limit(5).execute()
             docs = res.data
-            for d in docs: d['similarity'] = 0.98; d['source_table'] = 'manual_base'; d['is_verified'] = False 
+            for d in docs: 
+                d['similarity'] = 0.98  # 면책 특권 점수 부여
+                d['source_table'] = 'manual_base'
+                d['is_verified'] = False 
             return docs
         except: return []
 
@@ -256,36 +264,6 @@ class DBKnowledge:
             return (True, "성공") if res.data else (False, "실패")
         except Exception as e: return (False, str(e))
     
-    def get_community_posts(self):
-        try: return self.supabase.table("community_posts").select("*").order("created_at", desc=True).execute().data
-        except: return []
-
-    def add_community_post(self, author, title, content, mfr, model, item):
-        try:
-            payload = {"author": author, "title": title, "content": content, "manufacturer": self._clean_text(mfr), "model_name": self._clean_text(model), "measurement_item": self._normalize_tags(item)}
-            res = self.supabase.table("community_posts").insert(payload).execute()
-            return True if res.data else False
-        except: return False
-
-    def update_community_post(self, post_id, title, content, mfr, model, item):
-        try:
-            payload = {"title": title, "content": content, "manufacturer": self._clean_text(mfr), "model_name": self._clean_text(model), "measurement_item": self._normalize_tags(item)}
-            res = self.supabase.table("community_posts").update(payload).eq("id", post_id).execute()
-            return True if res.data else False
-        except: return False
-
-    def delete_community_post(self, post_id):
-        try: res = self.supabase.table("community_posts").delete().eq("id", post_id).execute(); return True if res.data else False
-        except: return False
-
-    def get_comments(self, post_id):
-        try: return self.supabase.table("community_comments").select("*").eq("post_id", post_id).order("created_at").execute().data
-        except: return []
-
-    def add_comment(self, post_id, author, content):
-        try: res = self.supabase.table("community_comments").insert({"post_id": post_id, "author": author, "content": content}).execute(); return True if res.data else False
-        except: return False
-
     def save_relevance_feedback(self, query, doc_id, t_name, score, query_vec=None, reason=None):
         try:
             payload = {
