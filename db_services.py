@@ -241,23 +241,12 @@ class DBManager:
             return q.execute().data
         except: return []
 
-    def search_inventory_for_chat(self, query_text):
-        try:
-            keywords = [k for k in query_text.split() if len(k) >= 2]
-            if not keywords: return None
-            res = self.supabase.table("inventory_items").select("*").or_(",".join([f"item_name.ilike.%{kw}%" for kw in keywords])).execute()
-            if not res.data: return "🔍 재고 정보가 없습니다."
-            msg = f"📦 **재고 검색 결과 ({len(res.data)}건):**\n"
-            for i in res.data[:10]: msg += f"- [{i.get('category')}] **{i.get('item_name')}**: {i.get('current_qty')}개 ({i.get('location')})\n"
-            return msg
-        except: return "재고 검색 중 오류가 발생했습니다."
-
     # =========================================================
-    # [V286 Update] 🤝 협업 기능 (정밀 관리 및 안정화)
+    # [V287 Update] 🤝 협업 기능 (정밀 관리 및 안정화)
     # =========================================================
     
     def get_schedules(self, include_completed=True):
-        """ 캘린더 및 리스트용 일정 조회 (갱신 문제를 위해 select(*) 강제) """
+        """ 실시간 일정 조회 """
         try:
             query = self.supabase.table("collab_schedules").select("*").order("start_time", desc=False)
             if not include_completed:
@@ -267,13 +256,6 @@ class DBManager:
         except Exception as e:
             print(f"Fetch Error: {e}")
             return []
-
-    def get_pending_schedules(self):
-        """ 진행 중인 업무만 조회 """
-        try:
-            res = self.supabase.table("collab_schedules").select("*").eq("status", "진행중").order("start_time", desc=False).execute()
-            return res.data if res.data else []
-        except: return []
 
     def get_task_stats(self):
         """ 실시간 통계 계산 """
@@ -285,7 +267,7 @@ class DBManager:
         except: return {"total": 0, "pending": 0, "completed": 0}
 
     def add_schedule(self, title, start_dt, end_dt, cat, desc, user, location, assignee=None, sub_tasks=None):
-        """ 일정 등록 (sub_tasks 기본값 보강 및 반환값 명확화) """
+        """ 일정 등록 (데이터 누락 방지 강화) """
         try:
             payload = {
                 "title": title, "start_time": start_dt, "end_time": end_dt,
@@ -294,25 +276,17 @@ class DBManager:
                 "status": "진행중",
                 "sub_tasks": sub_tasks if sub_tasks is not None else []
             }
-            # .select()를 붙여야 최신 라이브러리에서 성공 시 데이터를 반환함
             res = self.supabase.table("collab_schedules").insert(payload).execute()
             return True if res.data else False
         except Exception as e:
             print(f"Insert Error: {e}")
             return False
 
-    def update_schedule(self, sch_id, title, start_dt, end_dt, cat, desc, location, status, assignee, sub_tasks=None):
-        """ 일정 업데이트 (정밀 공정률 반영) """
+    def update_schedule(self, sch_id, **kwargs):
+        """ 일정 업데이트 (kwargs 사용으로 인자 자유도 극대화) """
         try:
-            payload = {
-                "title": title, "start_time": start_dt, "end_time": end_dt,
-                "category": cat, "description": desc, "location": location,
-                "status": status, "assignee": assignee
-            }
-            if sub_tasks is not None:
-                payload["sub_tasks"] = sub_tasks
-            
-            res = self.supabase.table("collab_schedules").update(payload).eq("id", sch_id).execute()
+            if not kwargs: return False
+            res = self.supabase.table("collab_schedules").update(kwargs).eq("id", sch_id).execute()
             return True if res.data else False
         except Exception as e:
             print(f"Update Error: {e}")
@@ -348,10 +322,10 @@ class DBManager:
             return True if res.data else False
         except: return False
 
-    def update_contact(self, contact_id, company, name, phone, email, tags, memo, rank):
+    def update_contact(self, contact_id, **kwargs):
         try:
-            payload = {"company_name": company, "person_name": name, "phone": phone, "email": email, "tags": tags, "memo": memo, "rank": rank}
-            res = self.supabase.table("collab_contacts").update(payload).eq("id", contact_id).execute()
+            if not kwargs: return False
+            res = self.supabase.table("collab_contacts").update(kwargs).eq("id", contact_id).execute()
             return True if res.data else False
         except: return False
 
