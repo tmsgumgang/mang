@@ -6,16 +6,22 @@ from prompts import PROMPTS
 
 @st.cache_data(show_spinner=False)
 def get_embedding(text):
-    """[V243] 임베딩 모델 Fallback 로직 추가"""
+    """
+    [V243] 임베딩 모델 Fallback 로직 추가
+    """
     cleaned_text = clean_text_for_db(text)
     try:
+        # 1순위: 최신 모델
         result = genai.embed_content(model="models/text-embedding-004", content=cleaned_text, task_type="retrieval_document")
         return result['embedding']
-    except Exception:
+    except Exception as e:
+        # 2순위: 호환성 모델 (Fallback)
         try:
             result = genai.embed_content(model="models/embedding-001", content=cleaned_text, task_type="retrieval_document")
             return result['embedding']
-        except Exception: return []
+        except Exception as e2:
+            print(f"❌ Embedding Error: {e2}")
+            return []
 
 def semantic_split_v143(text, target_size=1200, min_size=600):
     flat_text = " ".join(text.split())
@@ -57,14 +63,21 @@ def extract_metadata_ai(ai_model, content):
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def analyze_search_intent(_ai_model, query):
-    default_intent = {"target_mfr": "미지정", "target_model": "미지정", "target_item": "공통", "target_action": "일반"}
+    default_intent = {
+        "target_mfr": "미지정", 
+        "target_model": "미지정", 
+        "target_item": "공통",
+        "target_action": "일반"
+    }
     try:
         prompt = PROMPTS["search_intent"].format(query=query)
         res = _ai_model.generate_content(prompt)
         intent_res = extract_json(res.text)
-        if intent_res and isinstance(intent_res, dict): return intent_res
+        if intent_res and isinstance(intent_res, dict):
+            return intent_res
         return default_intent
-    except: return default_intent
+    except:
+        return default_intent
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def quick_rerank_ai(_ai_model, query, results, intent):
@@ -75,7 +88,7 @@ def quick_rerank_ai(_ai_model, query, results, intent):
     safe_intent = intent if (intent and isinstance(intent, dict)) else {"target_mfr": "미지정", "target_item": "공통"}
     
     candidates = []
-    # 상위 8개 정밀 분석
+    # 상위 8개 정밀 분석 (속도 최적화)
     for r in results[:8]:
         mfr = r.get('manufacturer', '')
         model = r.get('model_name', '')
@@ -83,13 +96,19 @@ def quick_rerank_ai(_ai_model, query, results, intent):
         raw_content = (r.get('content') or r.get('solution') or "")[:400]
         
         # [핵심] 그래프 데이터 식별 및 강조
+        # source_table이나 manufacturer를 확인하여 그래프 데이터인지 판단
         is_graph = (r.get('source_table') == 'knowledge_graph') or ('지식그래프' in str(mfr))
+        
         if is_graph:
+            # 그래프 데이터는 AI가 놓치지 않도록 강렬한 태그 부착
             context_str = f"🔥[핵심인과관계/지식그래프] {raw_content}"
         else:
             context_str = f"[{mfr} {model} ({item})] {raw_content}"
         
-        candidates.append({"id": r.get('id'), "info": context_str})
+        candidates.append({
+            "id": r.get('id'),
+            "info": context_str 
+        })
 
     prompt = PROMPTS["rerank_score"].format(
         query=query, 
@@ -101,11 +120,14 @@ def quick_rerank_ai(_ai_model, query, results, intent):
     try:
         res = _ai_model.generate_content(prompt)
         scores = extract_json(res.text)
+        
         if scores and isinstance(scores, list):
             score_map = {str(item['id']): item.get('score', 0) for item in scores}
-            for r in results: r['rerank_score'] = score_map.get(str(r['id']), 0)
+            for r in results:
+                r['rerank_score'] = score_map.get(str(r['id']), 0)
             return sorted(results, key=lambda x: x.get('rerank_score', 0), reverse=True)
-        return results
+        else:
+            return results
     except: return results
 
 def generate_3line_summary_stream(ai_model, query, results):
@@ -116,28 +138,31 @@ def generate_3line_summary_stream(ai_model, query, results):
         yield "검색 결과가 부족하여 요약을 생성할 수 없습니다."
         return
 
-    full_context = []
-    
-    # 1. 데이터를 그래프(족보)와 일반 문서로 분류
+    # [핵심 수정] 데이터를 '그래프(족보)'와 '일반 문서'로 분류하여 AI에게 전달
     graph_data = []
     manual_data = []
     
     for r in results:
+        # 그래프 데이터 식별
         is_graph = (r.get('source_table') == 'knowledge_graph') or ('지식그래프' in str(r.get('manufacturer', '')))
+        
         mfr = r.get('manufacturer', '미지정')
         model = r.get('model_name', '공통')
         content = (r.get('content') or r.get('solution') or "").strip()
         
         if is_graph:
-            # [Smart Point] 그래프 데이터는 "결정적 단서"로 포장
+            # [Smart Point] 그래프 데이터는 "결정적 단서"로 포장하여 최우선 순위 부여
             graph_data.append(f"💡 결정적 단서 (Key Insight/Graph): {content}")
         else:
-            # 일반 문서는 출처 명시
+            # 일반 문서는 출처를 명확히 하여 신뢰성 확보
             manual_data.append(f"- 문서자료: [{mfr} {model}] {content}")
             
     # 2. 문맥 조합: 그래프 데이터를 최상단에 배치하여 AI가 먼저 읽게 함 (앵커링 효과)
     # 그래프 데이터는 최대 3개, 매뉴얼은 최대 4개로 제한하여 Context Window 효율화
     final_context_list = graph_data[:3] + manual_data[:4]
+    
+    # 디버깅용 로그 (터미널 확인 가능)
+    print(f"--- AI Input Context ({len(final_context_list)} items) ---")
     
     prompt = PROMPTS["summary_fact_lock"].format(
         query=query, 
@@ -146,7 +171,8 @@ def generate_3line_summary_stream(ai_model, query, results):
     
     response = ai_model.generate_content(prompt, stream=True)
     for chunk in response:
-        if chunk.text: yield chunk.text
+        if chunk.text:
+            yield chunk.text
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def unified_rerank_and_summary_ai(_ai_model, query, results, intent):
@@ -160,7 +186,11 @@ def unified_rerank_and_summary_ai(_ai_model, query, results, intent):
         content = (r.get('content') or r.get('solution'))[:300]
         candidates.append({"id": r['id'], "content": f"{meta} {content}"})
     
-    prompt = PROMPTS["unified_rerank"].format(query=query, safe_intent=safe_intent, candidates=candidates)
+    prompt = PROMPTS["unified_rerank"].format(
+        query=query, 
+        safe_intent=safe_intent, 
+        candidates=candidates
+    )
     
     try:
         res = _ai_model.generate_content(prompt)
@@ -171,20 +201,59 @@ def unified_rerank_and_summary_ai(_ai_model, query, results, intent):
     except: return results, "오류 발생"
 
 def generate_relevant_summary(ai_model, query, data):
-    prompt = PROMPTS["deep_report"].format(query=query, data=data)
+    prompt = PROMPTS["deep_report"].format(
+        query=query, 
+        data=data
+    )
     res = ai_model.generate_content(prompt)
     return res.text
 
-# [V252] Graph RAG 관계 추출 엔진
+# --------------------------------------------------------------------------------
+# [NEW V252] Graph RAG 관계 추출 엔진
+# --------------------------------------------------------------------------------
 def extract_triples_from_text(ai_model, text):
     graph_prompt = f"""
-    You are an expert Data Engineer specializing in Knowledge Graphs.
-    Target Relations: causes, part_of, consumable_of, is_facility_of, is_a, included_in, located_in, solved_by, has_status, requires, manufactured_by.
-    Return ONLY a JSON array. Format: [{{"source": "A", "relation": "causes", "target": "B"}}]
-    Text: {text[:3500]}
+    You are an expert Data Engineer specializing in Knowledge Graphs for Industrial/Environmental Facilities.
+    Analyze the provided technical text and extract relationships between entities.
+    
+    Target Entities: Device, Part, Symptom, Cause, Solution, Action, Value, Location, Manufacturer, Consumable, Process, Station, Facility.
+    
+    Target Relations: 
+    - causes (원인이다: A causes B)
+    - part_of (부품이다: A is a mechanical component of Device B)
+    - consumable_of (소모품이다: A is a disposable material for B. e.g., Reagent, Filter, Cable tie)
+    - is_facility_of (설비이다: A is a major facility/equipment installed at Station B. e.g., MCC Panel -> Station)
+    - is_a (종류이다: A is a type/category/instance of B. e.g., Iwon -> Measurement Station)
+    - included_in (일부이다: A is a step, section, or logical part of B. e.g., 'Step 1' is included in 'Calibration Process')
+    - located_in (위치한다: A is physically located in B)
+    - solved_by (해결된다: Symptom A is solved by Action B)
+    - has_status (상태다: Device A has status/symptom B)
+    - requires (필요로 한다: Action A requires Tool/Item B)
+    - manufactured_by (제조사다: Product A is made by Manufacturer B)
+
+    IMPORTANT: 
+    - Entities MUST be single nouns or short phrases (under 5 words). 
+    - Do NOT include full sentences as entities.
+    - Example 1: "The MCC Panel is installed at Iwon Station"
+      -> {{"source": "MCC Panel", "relation": "is_facility_of", "target": "Iwon Station"}}
+    - Example 2: "Iwon is a remote measurement station"
+      -> {{"source": "Iwon", "relation": "is_a", "target": "Measurement Station"}}
+    - Example 3: "Use cable ties for pump replacement" 
+      -> {{"source": "Cable ties", "relation": "consumable_of", "target": "Pump replacement"}}
+
+    Return ONLY a JSON array of objects. No markdown, no explanations.
+    Format: [{{"source": "Entity A", "relation": "relation_type", "target": "Entity B"}}]
+
+    Text to Analyze:
+    {text[:3500]}
     """
+    
     try:
         res = ai_model.generate_content(graph_prompt)
         triples = extract_json(res.text)
-        return triples if isinstance(triples, list) else []
-    except: return []
+        if triples and isinstance(triples, list):
+            return triples
+        return []
+    except Exception as e:
+        print(f"Graph Extraction Error: {e}")
+        return []
