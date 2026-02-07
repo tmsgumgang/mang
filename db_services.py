@@ -390,13 +390,8 @@ class DBManager:
     # [V236] 🕸️ 지식 그래프(Knowledge Graph) 저장 및 조회
     # =========================================================
     def save_knowledge_triples(self, doc_id, triples):
-        """
-        AI가 추출한 트리플(관계 데이터)을 DB에 저장합니다.
-        """
         if not triples: return False
-        
         try:
-            # 대량 삽입 (Bulk Insert) 준비
             data_to_insert = []
             for t in triples:
                 if t.get('source') and t.get('target'):
@@ -406,7 +401,6 @@ class DBManager:
                         "target": self._clean_text(t['target']),
                         "doc_id": doc_id
                     })
-            
             if data_to_insert:
                 self.supabase.table("knowledge_graph").insert(data_to_insert).execute()
                 return True
@@ -416,24 +410,14 @@ class DBManager:
             return False
 
     def search_graph_relations(self, keyword):
-        """
-        특정 키워드와 연결된 지식 그래프(인과관계)를 검색합니다.
-        """
         try:
-            # source나 target에 키워드가 포함된 모든 관계 조회
             res = self.supabase.table("knowledge_graph").select("*")\
                 .or_(f"source.ilike.%{keyword}%,target.ilike.%{keyword}%")\
                 .limit(20).execute()
             return res.data
         except: return []
 
-    # =========================================================
-    # [V240] 🛠️ 지식 그래프 교정 및 삭제 기능 추가
-    # =========================================================
     def update_graph_triple(self, rel_id, new_source, new_relation, new_target):
-        """
-        [NEW] 그래프의 특정 관계(노드 및 엣지)를 수정합니다.
-        """
         try:
             payload = {
                 "source": self._clean_text(new_source),
@@ -447,9 +431,6 @@ class DBManager:
             return False
 
     def delete_graph_triple(self, rel_id):
-        """
-        [NEW] 잘못 추출된 그래프 관계를 완전히 삭제(노이즈 제거)합니다.
-        """
         try:
             res = self.supabase.table("knowledge_graph").delete().eq("id", rel_id).execute()
             return True if res.data else False
@@ -457,37 +438,20 @@ class DBManager:
             print(f"Graph Delete Error: {e}")
             return False
 
-    # =========================================================
-    # [V242] 🚀 그래프 노드 일괄 변경 (Bulk Rename)
-    # =========================================================
     def bulk_rename_graph_node(self, old_name, new_name, target_scope="all"):
-        """
-        특정 단어(old_name)를 가진 모든 노드를 새 이름(new_name)으로 한 번에 바꿉니다.
-        """
         try:
             count = 0
-            
-            # 1. 출발점(Source) 변경
             if target_scope in ["source", "all"]:
                 res = self.supabase.table("knowledge_graph").update({"source": self._clean_text(new_name)}).eq("source", old_name).execute()
                 if res.data: count += len(res.data)
-
-            # 2. 도착점(Target) 변경
             if target_scope in ["target", "all"]:
                 res = self.supabase.table("knowledge_graph").update({"target": self._clean_text(new_name)}).eq("target", old_name).execute()
                 if res.data: count += len(res.data)
-                
             return True, count
         except Exception as e:
             return False, str(e)
 
-    # =========================================================
-    # [V250 New] 그래프 노드 부모 문서 메타데이터 조회
-    # =========================================================
     def get_doc_metadata_by_id(self, doc_id, source_type):
-        """
-        doc_id와 source_type(manual/knowledge)을 받아 제조사, 모델명, 항목을 반환
-        """
         try:
             t_name = "knowledge_base" if source_type == "knowledge" else "manual_base"
             res = self.supabase.table(t_name).select("manufacturer, model_name, measurement_item").eq("id", doc_id).execute()
@@ -496,17 +460,9 @@ class DBManager:
             return {}
         except: return {}
 
-    # =========================================================
-    # [V254] 🛠️ 지식 데이터 수정/관리 기능 (Knowledge Maintenance)
-    # =========================================================
     def search_knowledge_for_admin(self, keyword):
-        """
-        관리자용 지식 검색 (지식 베이스 내에서 키워드 또는 등록자 이름 검색)
-        [V254 Update] registered_by 컬럼 검색 추가
-        """
         try:
             if not keyword: return []
-            # issue(제목) or solution(내용) or registered_by(작성자) 검색
             res = self.supabase.table("knowledge_base").select("*")\
                 .or_(f"issue.ilike.%{keyword}%,solution.ilike.%{keyword}%,registered_by.ilike.%{keyword}%")\
                 .order("created_at", desc=True)\
@@ -515,79 +471,59 @@ class DBManager:
         except: return []
 
     def update_knowledge_item(self, doc_id, new_issue, new_sol, mfr, model, item):
-        """
-        지식 내용을 수정하고, 내용이 바뀌었으면 임베딩(Vector)도 재생성합니다.
-        """
         try:
-            # 1. 임베딩 재생성을 위해 logic_ai 함수 가져오기 (순환 참조 방지)
             from logic_ai import get_embedding
-            
-            # 2. 업데이트할 데이터 준비
             payload = {
-                "issue": new_issue,
-                "solution": new_sol,
-                "manufacturer": self._clean_text(mfr),
-                "model_name": self._clean_text(model),
+                "issue": new_issue, "solution": new_sol,
+                "manufacturer": self._clean_text(mfr), "model_name": self._clean_text(model),
                 "measurement_item": self._normalize_tags(item),
-                "semantic_version": 2 # 버전 업
+                "semantic_version": 2
             }
-            
-            # 3. 텍스트 내용이 바뀌었으므로 임베딩도 다시 계산해서 넣음
-            # (제목 + 내용을 합쳐서 임베딩)
             combined_text = f"증상: {new_issue}\n해결: {new_sol}"
             new_vec = get_embedding(combined_text)
-            if new_vec:
-                payload["embedding"] = new_vec
-            
-            # 4. DB 업데이트
+            if new_vec: payload["embedding"] = new_vec
             res = self.supabase.table("knowledge_base").update(payload).eq("id", doc_id).execute()
             return True if res.data else False
-            
         except Exception as e:
             print(f"Update Error: {e}")
             return False
 
     # =========================================================
-    # [V262] 🤝 협업 기능 (일정 & 연락처 & 당직) (직급 기능 추가)
+    # [V283 Update] 🤝 협업 기능 (일정 & 업무 관리)
     # =========================================================
     
-    # --- 📅 일정 (Schedule) [Updated V280] ---
     def get_schedules(self):
         try:
-            # status, assignee 컬럼이 추가되었으므로 * 로 가져오면 자동으로 포함됨
             return self.supabase.table("collab_schedules").select("*").order("start_time", desc=False).execute().data
         except: return []
 
-    # [V280 Update] assignee(담당자) 추가
+    # [신규 추가] '진행중'인 업무만 필터링하여 조회 (업무 관리 탭 전용)
+    def get_pending_schedules(self):
+        try:
+            return self.supabase.table("collab_schedules")\
+                .select("*")\
+                .eq("status", "진행중")\
+                .order("start_time", desc=False)\
+                .execute().data
+        except: return []
+
     def add_schedule(self, title, start_dt, end_dt, cat, desc, user, location, assignee=None):
         try:
             payload = {
-                "title": title, 
-                "start_time": start_dt, 
-                "end_time": end_dt,
-                "category": cat, 
-                "description": desc, 
-                "created_by": user,
-                "location": location,
-                "assignee": assignee, # 담당자 할당
-                "status": "진행중"    # 기본 상태
+                "title": title, "start_time": start_dt, "end_time": end_dt,
+                "category": cat, "description": desc, "created_by": user,
+                "location": location, "assignee": assignee, "status": "진행중"
             }
             res = self.supabase.table("collab_schedules").insert(payload).execute()
             return True if res.data else False
         except: return False
 
-    # [V280 Update] status(상태), assignee(담당자) 수정 기능 추가
     def update_schedule(self, sch_id, title, start_dt, end_dt, cat, desc, location, status, assignee):
         try:
             payload = {
-                "title": title, 
-                "start_time": start_dt, 
-                "end_time": end_dt,
-                "category": cat, 
-                "description": desc, 
-                "location": location,
-                "status": status,       # 진행중/완료 상태 변경
-                "assignee": assignee    # 담당자 변경
+                "title": title, "start_time": start_dt, "end_time": end_dt,
+                "category": cat, "description": desc, "location": location,
+                "status": status, "assignee": assignee
             }
             res = self.supabase.table("collab_schedules").update(payload).eq("id", sch_id).execute()
             return True if res.data else False
@@ -601,16 +537,12 @@ class DBManager:
             return True
         except: return False
 
-    # --- 👮‍♂️ 당직 (Duty Roster) ---
     def get_duty_roster(self):
-        try:
-            return self.supabase.table("duty_roster").select("*").execute().data
+        try: return self.supabase.table("duty_roster").select("*").execute().data
         except: return []
 
     def set_duty_worker(self, date_str, name):
-        """ 날짜별 당직자 등록/수정 (Upsert) """
         try:
-            # 날짜 중복 시 업데이트 (upsert)
             payload = {"date": date_str, "worker_name": name}
             self.supabase.table("duty_roster").upsert(payload, on_conflict="date").execute()
             return True
@@ -624,31 +556,26 @@ class DBManager:
             return True
         except: return False
 
-    # --- 📒 연락처 (Contacts) [Updated] ---
     def get_contacts(self):
         try:
             return self.supabase.table("collab_contacts").select("*").order("company_name").execute().data
         except: return []
 
-    # [V262] rank(직급) 파라미터 추가
     def add_contact(self, company, name, phone, email, tags, memo, rank):
         try:
             payload = {
                 "company_name": company, "person_name": name, "phone": phone,
-                "email": email, "tags": tags, "memo": memo,
-                "rank": rank # 직급 추가
+                "email": email, "tags": tags, "memo": memo, "rank": rank
             }
             res = self.supabase.table("collab_contacts").insert(payload).execute()
             return True if res.data else False
         except: return False
 
-    # [V262] 연락처 수정 기능 추가
     def update_contact(self, contact_id, company, name, phone, email, tags, memo, rank):
         try:
             payload = {
                 "company_name": company, "person_name": name, "phone": phone,
-                "email": email, "tags": tags, "memo": memo,
-                "rank": rank # 직급 포함 수정
+                "email": email, "tags": tags, "memo": memo, "rank": rank
             }
             res = self.supabase.table("collab_contacts").update(payload).eq("id", contact_id).execute()
             return True if res.data else False
