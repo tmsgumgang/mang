@@ -305,8 +305,15 @@ class DBManager:
             return True if res.data else False
         except: return False
 
+    # [중요] 챗봇용 메타데이터 조회 함수 (복구 완료)
+    def get_doc_metadata_by_id(self, doc_id, table_name):
+        try:
+            res = self.supabase.table(table_name).select("*").eq("id", doc_id).execute()
+            return res.data[0] if res.data else {}
+        except: return {}
+
     # =========================================================
-    # [Collab] 🤝 협업 기능 (V296: 최신 인터페이스 유지)
+    # [Collab] 🤝 협업 기능 (전 기능 보존)
     # =========================================================
     def get_schedules(self, include_completed=True):
         try:
