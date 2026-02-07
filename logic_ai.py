@@ -49,6 +49,8 @@ def clean_text_for_db(text):
 def extract_json(text):
     try:
         cleaned = re.sub(r'```json\s*|```', '', text).strip()
+        # JSON 포맷 보정 시도
+        if cleaned.startswith('{') and not cleaned.endswith('}'): cleaned += '}'
         return json.loads(cleaned)
     except: return None
 
@@ -82,16 +84,24 @@ def analyze_search_intent(_ai_model, query):
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def quick_rerank_ai(_ai_model, query, results, intent):
+    """
+    [V303 지능 복구] 리랭킹 시 메타데이터(제조사/모델명)를 명시적으로 주입
+    """
     if not results: return []
     safe_intent = intent if (intent and isinstance(intent, dict)) else {"target_mfr": "미지정", "target_item": "공통"}
     
     candidates = []
-    for r in results[:5]:
+    for r in results[:7]: # 상위 7개만 정밀 분석
+        # [핵심] 제조사와 모델명을 본문 앞에 붙여서 AI가 헷갈리지 않게 함
+        meta_info = f"[{r.get('manufacturer', '')} {r.get('model_name', '')}]"
+        raw_content = (r.get('content') or r.get('solution') or "")[:300]
+        
         candidates.append({
             "id": r.get('id'), 
             "mfr": r.get('manufacturer'), 
             "item": r.get('measurement_item'),
-            "content": (r.get('content') or r.get('solution'))[:200]
+            # AI에게 보여줄 때는 메타데이터와 본문을 합쳐서 전달
+            "content": f"{meta_info} {raw_content}" 
         })
 
     prompt = PROMPTS["rerank_score"].format(
@@ -104,24 +114,39 @@ def quick_rerank_ai(_ai_model, query, results, intent):
     try:
         res = _ai_model.generate_content(prompt)
         scores = extract_json(res.text)
-        score_map = {item['id']: item['score'] for item in scores}
-        for r in results: r['rerank_score'] = score_map.get(r['id'], 0)
-        return sorted(results, key=lambda x: x['rerank_score'], reverse=True)
+        
+        # 점수 매핑 (리스트 형태 체크)
+        if scores and isinstance(scores, list):
+            score_map = {str(item['id']): item.get('score', 0) for item in scores}
+            for r in results:
+                # 기존 ID가 int일 수도 있고 str일 수도 있으므로 str로 통일해서 비교
+                r['rerank_score'] = score_map.get(str(r['id']), 0)
+            return sorted(results, key=lambda x: x.get('rerank_score', 0), reverse=True)
+        else:
+            return results # 포맷 안맞으면 기존 순서 유지
     except: return results
 
 def generate_3line_summary_stream(ai_model, query, results):
+    """
+    [V303 지능 복구] 답변 생성 시 '출처(Metadata)'를 포함하여 Fact Grounding 강화
+    """
     if not results:
         yield "검색 결과가 부족하여 요약을 생성할 수 없습니다."
         return
 
+    # [핵심 수정] 단순히 content만 나열하지 않고, [제조사 모델명]을 앞에 붙임
+    full_context = []
+    
+    # 1. 최우선 자료 처리
     top_doc = results[0]
-    top_content = f"★최우선참고자료(Fact Source): {top_doc.get('content') or top_doc.get('solution')}"
+    top_meta = f"[{top_doc.get('manufacturer','')} {top_doc.get('model_name','')}]"
+    top_content = f"★최우선참고자료(Fact Source): {top_meta} {top_doc.get('content') or top_doc.get('solution')}"
+    full_context.append(top_content)
     
-    other_context = []
-    for r in results[1:3]:
-        other_context.append(f"- 보조자료: {r.get('content') or r.get('solution')}")
-    
-    full_context = [top_content] + other_context
+    # 2. 보조 자료 처리 (상위 3개까지)
+    for r in results[1:4]:
+        sub_meta = f"[{r.get('manufacturer','')} {r.get('model_name','')}]"
+        full_context.append(f"- 보조자료: {sub_meta} {r.get('content') or r.get('solution')}")
     
     prompt = PROMPTS["summary_fact_lock"].format(
         query=query, 
@@ -137,7 +162,13 @@ def generate_3line_summary_stream(ai_model, query, results):
 def unified_rerank_and_summary_ai(_ai_model, query, results, intent):
     if not results: return [], "관련 지식을 찾지 못했습니다."
     safe_intent = intent if (intent and isinstance(intent, dict)) else {"target_mfr": "미지정", "target_item": "공통"}
-    candidates = [{"id":r['id'],"content":(r.get('content')or r.get('solution'))[:300]} for r in results[:5]]
+    
+    # 여기도 메타데이터 주입
+    candidates = []
+    for r in results[:5]:
+        meta = f"[{r.get('manufacturer','')} {r.get('model_name','')}]"
+        content = (r.get('content') or r.get('solution'))[:300]
+        candidates.append({"id": r['id'], "content": f"{meta} {content}"})
     
     prompt = PROMPTS["unified_rerank"].format(
         query=query, 
