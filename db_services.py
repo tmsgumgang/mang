@@ -306,7 +306,7 @@ class DBManager:
         except: return False
 
     # =========================================================
-    # [Collab] 🤝 협업 기능 (V292: 정밀 관리 및 안정화)
+    # [Collab] 🤝 협업 기능 (V293: 메모 복구 및 로직 보강)
     # =========================================================
     def get_schedules(self, include_completed=True):
         try:
@@ -365,13 +365,17 @@ class DBManager:
         try: self.supabase.table("duty_roster").delete().eq("id", duty_id).execute(); return True
         except: return False
 
+    # --- 📒 연락처 (V293: 메모(memo) 필드 완전 복구) ---
     def get_contacts(self):
         try: return self.supabase.table("collab_contacts").select("*").order("company_name").execute().data or []
         except: return []
 
     def add_contact(self, company, name, phone, email, tags, memo, rank):
         try:
-            payload = {"company_name": company, "person_name": name, "phone": phone, "email": email, "tags": tags, "memo": memo, "rank": rank}
+            payload = {
+                "company_name": company, "person_name": name, "phone": phone, 
+                "email": email, "tags": tags, "memo": memo, "rank": rank
+            }
             res = self.supabase.table("collab_contacts").insert(payload).execute()
             return True if res.data else False
         except: return False
