@@ -7,22 +7,20 @@ from prompts import PROMPTS
 @st.cache_data(show_spinner=False)
 def get_embedding(text):
     """
-    [V243] 임베딩 모델 Fallback 로직 추가 (004 모델 실패 시 001 사용)
-    - Google API의 모델 버전 이슈나 지역 제한으로 인한 404 오류 방지
+    [V243] 임베딩 모델 Fallback 로직 추가
     """
     cleaned_text = clean_text_for_db(text)
     try:
-        # 1순위: 최신 모델 시도 (성능 우수)
+        # 1순위: 최신 모델
         result = genai.embed_content(model="models/text-embedding-004", content=cleaned_text, task_type="retrieval_document")
         return result['embedding']
     except Exception as e:
-        # 2순위: 실패 시 안정화(구형) 모델 사용 (호환성 우수)
+        # 2순위: 호환성 모델 (Fallback)
         try:
-            # print(f"⚠️ 임베딩 모델 004 실패 -> 001로 전환: {e}")
             result = genai.embed_content(model="models/embedding-001", content=cleaned_text, task_type="retrieval_document")
             return result['embedding']
         except Exception as e2:
-            print(f"❌ 모든 임베딩 모델 실패: {e2}")
+            print(f"❌ Embedding Error: {e2}")
             return []
 
 def semantic_split_v143(text, target_size=1200, min_size=600):
@@ -49,7 +47,6 @@ def clean_text_for_db(text):
 def extract_json(text):
     try:
         cleaned = re.sub(r'```json\s*|```', '', text).strip()
-        # JSON 포맷 보정 시도
         if cleaned.startswith('{') and not cleaned.endswith('}'): cleaned += '}'
         return json.loads(cleaned)
     except: return None
@@ -85,23 +82,27 @@ def analyze_search_intent(_ai_model, query):
 @st.cache_data(ttl=3600, show_spinner=False)
 def quick_rerank_ai(_ai_model, query, results, intent):
     """
-    [V303 지능 복구] 리랭킹 시 메타데이터(제조사/모델명)를 명시적으로 주입
+    [V303 수정] 리랭킹 시 Model Name을 포함하여 AI가 정확한 장비를 식별하도록 개선
     """
     if not results: return []
     safe_intent = intent if (intent and isinstance(intent, dict)) else {"target_mfr": "미지정", "target_item": "공통"}
     
     candidates = []
-    for r in results[:7]: # 상위 7개만 정밀 분석
-        # [핵심] 제조사와 모델명을 본문 앞에 붙여서 AI가 헷갈리지 않게 함
-        meta_info = f"[{r.get('manufacturer', '')} {r.get('model_name', '')}]"
+    # 상위 7개만 정밀 분석 (속도 최적화)
+    for r in results[:7]:
+        # [핵심 수정] 제조사/모델명/항목을 하나의 문자열로 합쳐서 AI에게 전달
+        # 기존에는 model_name이 누락되어 있어서 '멍청한' 판단을 했음
+        mfr = r.get('manufacturer', '')
+        model = r.get('model_name', '')
+        item = r.get('measurement_item', '')
         raw_content = (r.get('content') or r.get('solution') or "")[:300]
         
+        # AI가 볼 문맥: "[시마즈 TOC-4200 (TOC)] 튜브 교체 방법은..."
+        context_str = f"[{mfr} {model} ({item})] {raw_content}"
+        
         candidates.append({
-            "id": r.get('id'), 
-            "mfr": r.get('manufacturer'), 
-            "item": r.get('measurement_item'),
-            # AI에게 보여줄 때는 메타데이터와 본문을 합쳐서 전달
-            "content": f"{meta_info} {raw_content}" 
+            "id": r.get('id'),
+            "info": context_str  # 단순 content 대신 메타데이터가 포함된 info 전달
         })
 
     prompt = PROMPTS["rerank_score"].format(
@@ -115,39 +116,39 @@ def quick_rerank_ai(_ai_model, query, results, intent):
         res = _ai_model.generate_content(prompt)
         scores = extract_json(res.text)
         
-        # 점수 매핑 (리스트 형태 체크)
         if scores and isinstance(scores, list):
             score_map = {str(item['id']): item.get('score', 0) for item in scores}
             for r in results:
-                # 기존 ID가 int일 수도 있고 str일 수도 있으므로 str로 통일해서 비교
+                # ID 타입 불일치 방지를 위해 str 변환 후 매칭
                 r['rerank_score'] = score_map.get(str(r['id']), 0)
             return sorted(results, key=lambda x: x.get('rerank_score', 0), reverse=True)
         else:
-            return results # 포맷 안맞으면 기존 순서 유지
+            return results
     except: return results
 
 def generate_3line_summary_stream(ai_model, query, results):
     """
-    [V303 지능 복구] 답변 생성 시 '출처(Metadata)'를 포함하여 Fact Grounding 강화
+    [V303 수정] 답변 생성 시 '출처(Metadata)'를 명시하여 팩트 그라운딩 강화
     """
     if not results:
         yield "검색 결과가 부족하여 요약을 생성할 수 없습니다."
         return
 
-    # [핵심 수정] 단순히 content만 나열하지 않고, [제조사 모델명]을 앞에 붙임
+    # [핵심 수정] 내용(Content)만 주는 게 아니라 [누구의 문서인지] 꼬리표를 달아줌
     full_context = []
     
-    # 1. 최우선 자료 처리
+    # 1. 최우선 자료
     top_doc = results[0]
     top_meta = f"[{top_doc.get('manufacturer','')} {top_doc.get('model_name','')}]"
     top_content = f"★최우선참고자료(Fact Source): {top_meta} {top_doc.get('content') or top_doc.get('solution')}"
     full_context.append(top_content)
     
-    # 2. 보조 자료 처리 (상위 3개까지)
+    # 2. 보조 자료
     for r in results[1:4]:
         sub_meta = f"[{r.get('manufacturer','')} {r.get('model_name','')}]"
         full_context.append(f"- 보조자료: {sub_meta} {r.get('content') or r.get('solution')}")
     
+    # Context에 메타데이터가 포함되어야 AI가 '시마즈 TOC'라고 특정해서 말할 수 있음
     prompt = PROMPTS["summary_fact_lock"].format(
         query=query, 
         context=json.dumps(full_context, ensure_ascii=False)
@@ -193,13 +194,9 @@ def generate_relevant_summary(ai_model, query, data):
     return res.text
 
 # --------------------------------------------------------------------------------
-# [NEW V252] Graph RAG 관계 추출 엔진 (소모품/설비/정의 관계 추가)
+# [NEW V252] Graph RAG 관계 추출 엔진
 # --------------------------------------------------------------------------------
 def extract_triples_from_text(ai_model, text):
-    """
-    텍스트에서 (주어) -> [관계] -> (목적어) 트리플을 추출합니다.
-    [V252 업데이트] 소모품(consumable), 설비(is_facility_of), 정의(is_a) 등 상세 관계 추가
-    """
     graph_prompt = f"""
     You are an expert Data Engineer specializing in Knowledge Graphs for Industrial/Environmental Facilities.
     Analyze the provided technical text and extract relationships between entities.
