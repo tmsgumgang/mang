@@ -489,7 +489,7 @@ class DBManager:
             return False
 
     # =========================================================
-    # [V283 Update] 🤝 협업 기능 (일정 & 업무 관리)
+    # [V284 Update] 🤝 협업 기능 (일정 & 업무 관리 고도화)
     # =========================================================
     
     def get_schedules(self):
@@ -497,7 +497,6 @@ class DBManager:
             return self.supabase.table("collab_schedules").select("*").order("start_time", desc=False).execute().data
         except: return []
 
-    # [신규 추가] '진행중'인 업무만 필터링하여 조회 (업무 관리 탭 전용)
     def get_pending_schedules(self):
         try:
             return self.supabase.table("collab_schedules")\
@@ -506,6 +505,23 @@ class DBManager:
                 .order("start_time", desc=False)\
                 .execute().data
         except: return []
+
+    # [V284 신규 추가] 업무 대시보드용 통계 지표 계산
+    def get_task_stats(self):
+        """ 전체 업무, 진행 중, 완료 건수 통계를 반환 """
+        try:
+            res = self.supabase.table("collab_schedules").select("status").execute()
+            if not res.data: return {"total": 0, "pending": 0, "completed": 0}
+            
+            stats = Counter([r['status'] for r in res.data])
+            return {
+                "total": len(res.data),
+                "pending": stats.get("진행중", 0),
+                "completed": stats.get("완료", 0)
+            }
+        except Exception as e:
+            print(f"Stats Error: {e}")
+            return {"total": 0, "pending": 0, "completed": 0}
 
     def add_schedule(self, title, start_dt, end_dt, cat, desc, user, location, assignee=None):
         try:
