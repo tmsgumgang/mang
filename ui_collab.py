@@ -24,10 +24,6 @@ def show_collab_ui(db):
         .task-title { font-size: 1.1rem; font-weight: bold; margin-bottom: 5px; }
         .progress-text { font-size: 0.85rem; font-weight: bold; color: #3b82f6; }
         
-        /* 상태별 라벨 스타일 */
-        .status-badge-pending { color: #f59e0b; font-weight: bold; font-size: 0.8rem; }
-        .status-badge-done { color: #10b981; font-weight: bold; font-size: 0.8rem; }
-
         a.custom-phone-btn {
             display: block; width: 100%; background-color: #3b82f6;
             color: white !important; text-decoration: none !important;
@@ -76,7 +72,6 @@ def show_collab_ui(db):
                 bg_color = color_map.get(s.get('category', '기타'), "#6b7280")
                 if status == '완료': bg_color = "#9ca3af" 
                 
-                # [요청 4] 완료 안된 업무는 ⏳ 표시를 추가하여 구분감 강화
                 prefix = "✅ " if status == '완료' else "⏳ "
                 calendar_events.append({
                     "title": prefix + s['title'],
@@ -100,7 +95,7 @@ def show_collab_ui(db):
             cal_state = calendar(events=calendar_events, options={
                 "headerToolbar": {"left": "prev,next today", "center": "title", "right": "dayGridMonth,dayGridWeek,listMonth"},
                 "initialView": "dayGridMonth", "locale": "ko", "fixedWeekCount": False, "displayEventTime": False
-            }, custom_css=calendar_custom_css, key="my_calendar_v289")
+            }, custom_css=calendar_custom_css, key="my_calendar_v293")
 
             if cal_state.get("eventClick"): st.session_state.selected_event = cal_state["eventClick"]["event"]
 
@@ -131,12 +126,7 @@ def show_collab_ui(db):
                 if n_title:
                     h, m = map(int, n_time_str.split(':'))
                     start = datetime.combine(n_date, datetime.now().replace(hour=h, minute=m).time())
-                    res, err = db.add_schedule(
-                        title=n_title, start_dt=start.isoformat(), 
-                        end_dt=(start + timedelta(hours=1)).isoformat(), 
-                        cat="기타", desc="", user="관리자", 
-                        location=n_loc, assignee=n_assignee, sub_tasks=[]
-                    )
+                    res, err = db.add_schedule(title=n_title, start_dt=start.isoformat(), end_dt=(start + timedelta(hours=1)).isoformat(), cat="기타", desc="", user="관리자", location=n_loc, assignee=n_assignee, sub_tasks=[])
                     if res: st.success("저장됨!"); time.sleep(0.5); st.rerun()
                     else: st.error(f"저장 실패: {err}")
 
@@ -156,7 +146,7 @@ def show_collab_ui(db):
                     if m_name: db.set_duty_worker(str(m_date), m_name); st.rerun()
 
     # ------------------------------------------------------------------
-    # [Tab 2] 정밀 업무 관리 (체크리스트 & 완료 취소 & 세부 수정)
+    # [Tab 2] 정밀 업무 관리 (체크리스트 수정/삭제 포함)
     # ------------------------------------------------------------------
     with tab2:
         st.subheader("🚀 공정률 관리 대시보드")
@@ -167,12 +157,10 @@ def show_collab_ui(db):
         m3.metric("완료됨", f"{stats['completed']}건")
         
         c_f1, c_f2, c_f3 = st.columns([2, 2, 1.5])
-        view_all = c_f3.toggle("✅ 완료된 업무도 보기", value=False)
+        view_all = c_f3.toggle("✅ 완료된 업무 포함", value=False)
         all_tasks = db.get_schedules(include_completed=view_all)
         
-        if not all_tasks:
-            st.info("조회할 업무가 없습니다.")
-        else:
+        if all_tasks:
             loc_list = sorted(list(set([t.get('location') or "미지정" for t in all_tasks])))
             user_list = sorted(list(set([t.get('assignee') or "미지정" for t in all_tasks])))
             sel_loc = c_f1.multiselect("📍 장소 필터", options=loc_list)
@@ -201,22 +189,18 @@ def show_collab_ui(db):
                         st.progress(progress / 100)
                     
                     with col_t2:
-                        # [요청 2] 완료 취소 기능 추가
                         if task['status'] == '완료':
                             if st.button("⏪ 진행 복구", key=f"rev_{t_id}", use_container_width=True):
-                                db.update_schedule(t_id, status="진행중")
-                                st.rerun()
+                                db.update_schedule(t_id, status="진행중"); st.rerun()
                         else:
                             is_ready = (progress == 100)
                             if st.button("최종 완료", key=f"comp_{t_id}", disabled=not is_ready, use_container_width=True, type="primary"):
-                                db.update_schedule(t_id, status="완료")
-                                st.balloons(); st.rerun()
+                                db.update_schedule(t_id, status="완료"); st.balloons(); st.rerun()
                             if not is_ready: st.caption("❌ 체크리스트 미달성")
 
-                    # [요청 3, 5, 6] 체크리스트 관리 및 업무 세부 수정 기능 통합
                     exp_label = f"🛠️ 관리 및 체크리스트 ({done_sub}/{total_sub})"
                     with st.expander(exp_label):
-                        # 6. 업무 세부 내용 수정 폼
+                        # 업무 정보 수정
                         st.markdown("##### ✏️ 업무 정보 수정")
                         with st.form(key=f"edit_detail_{t_id}"):
                             u_col1, u_col2 = st.columns(2)
@@ -224,43 +208,101 @@ def show_collab_ui(db):
                             u_loc = u_col2.text_input("장소", value=task.get('location', ''))
                             u_asgn = st.text_input("담당자", value=task.get('assignee', ''))
                             if st.form_submit_button("정보 업데이트"):
-                                db.update_schedule(t_id, title=u_title, location=u_loc, assignee=u_asgn)
-                                st.rerun()
+                                db.update_schedule(t_id, title=u_title, location=u_loc, assignee=u_asgn); st.rerun()
                         
                         st.divider()
-                        st.markdown("##### 📝 체크리스트 항목")
-                        # 체크리스트 상태 변경
+                        st.markdown("##### 📝 체크리스트 정밀 관리")
+                        # [요청 1] 하위 체크리스트 개별 수정 및 삭제
                         new_sub_tasks = []
-                        changed = False
-                        for idx, stk in enumerate(sub_tasks):
-                            c_cb = st.checkbox(stk['name'], value=stk.get('done', False), key=f"chk_{t_id}_{idx}")
-                            if c_cb != stk.get('done'):
-                                stk['done'] = c_cb
-                                changed = True
-                            new_sub_tasks.append(stk)
+                        checklist_changed = False
                         
-                        # [요청 5] 체크리스트 추가 시 깜빡임 개선을 위한 폼 사용
+                        for idx, stk in enumerate(sub_tasks):
+                            r1, r2, r3, r4 = st.columns([0.1, 0.7, 0.1, 0.1])
+                            # 1. 상태 변경
+                            c_done = r1.checkbox(" ", value=stk.get('done', False), key=f"chk_{t_id}_{idx}", label_visibility="collapsed")
+                            # 2. 이름 수정
+                            c_name = r2.text_input(" ", value=stk['name'], key=f"edt_{t_id}_{idx}", label_visibility="collapsed")
+                            
+                            if c_done != stk.get('done') or c_name != stk['name']:
+                                stk['done'] = c_done
+                                stk['name'] = c_name
+                                checklist_changed = True
+                            
+                            # 3. 항목별 즉시 저장 버튼 (깜빡임 최소화)
+                            if r3.button("🔄", key=f"save_sub_{t_id}_{idx}"): checklist_changed = True
+                            
+                            # 4. 삭제 버튼
+                            if r4.button("🗑️", key=f"del_sub_{t_id}_{idx}"):
+                                sub_tasks.pop(idx)
+                                db.update_schedule(t_id, sub_tasks=sub_tasks)
+                                st.rerun()
+                            
+                            new_sub_tasks.append(stk)
+
+                        # 신규 추가 폼
                         with st.form(key=f"add_sub_form_{t_id}", clear_on_submit=True):
                             ac1, ac2 = st.columns([3, 1])
-                            new_item_name = ac1.text_input("새 하위 업무 입력", placeholder="예: 시약 보충")
+                            new_item_name = ac1.text_input("새 하위 업무 입력", placeholder="항목 입력...")
                             if ac2.form_submit_button("추가"):
                                 if new_item_name:
                                     new_sub_tasks.append({"name": new_item_name, "done": False})
-                                    changed = True
+                                    checklist_changed = True
                         
-                        if changed:
-                            db.update_schedule(t_id, sub_tasks=new_sub_tasks)
-                            st.rerun()
+                        if checklist_changed:
+                            db.update_schedule(t_id, sub_tasks=new_sub_tasks); st.rerun()
 
-    # [Tab 3] 업체 연락처 (기존 유지)
+    # ------------------------------------------------------------------
+    # [Tab 3] 업체 연락처 (신규 등록/수정/삭제 전 기능 복구)
+    # ------------------------------------------------------------------
     with tab3:
-        st.subheader("📒 업체 연락처")
+        st.subheader("📒 업체 연락처 관리")
+        
+        # 1. 신규 업체 등록 섹션 복구
+        with st.expander("➕ 새 연락처 등록"):
+            with st.form(key="add_contact_form", clear_on_submit=True):
+                nc1, nc2 = st.columns(2)
+                nc_comp = nc1.text_input("업체명")
+                nc_rank = nc2.text_input("직급/분류")
+                nc_name = nc1.text_input("담당자명")
+                nc_phone = nc2.text_input("전화번호")
+                nc_tags = st.text_input("태그 (쉼표 구분)")
+                if st.form_submit_button("저장하기"):
+                    if nc_comp and nc_name:
+                        db.add_contact(nc_comp, nc_name, nc_phone, "", nc_tags, "", nc_rank)
+                        st.success(f"{nc_comp} 등록 완료"); st.rerun()
+
+        if "edit_contact_id" not in st.session_state: st.session_state.edit_contact_id = None
+        
         search_txt = st.text_input("🔍 검색 (업체, 담당자, 태그...)", key="con_search")
-        if search_txt:
-            all_contacts = db.get_contacts()
-            filtered = [c for c in all_contacts if search_txt.lower() in f"{c.get('company_name')} {c.get('person_name')} {c.get('tags')}".lower()]
-            for c in filtered:
+        all_contacts = db.get_contacts()
+        filtered_contacts = [c for c in all_contacts if not search_txt or search_txt.lower() in f"{c.get('company_name')} {c.get('person_name')} {c.get('tags')}".lower()]
+        
+        for c in filtered_contacts:
+            cid = c['id']
+            if st.session_state.edit_contact_id != cid:
                 with st.container(border=True):
-                    st.markdown(f"**{c['company_name']}** / 👤 {c.get('person_name')}")
-                    if c.get('phone'):
-                        st.markdown(f'<a href="tel:{re.sub(r"[^0-9]", "", str(c["phone"]))}" target="_self" class="custom-phone-btn">📞 {c["phone"]} 전화걸기</a>', unsafe_allow_html=True)
+                    lcol, rcol = st.columns([5, 1])
+                    with lcol:
+                        st.markdown(f"**{c['company_name']}** ({c.get('rank', '일반')}) / 👤 {c.get('person_name')}")
+                        if c.get('phone'):
+                            st.markdown(f'<a href="tel:{re.sub(r"[^0-9]", "", str(c["phone"]))}" target="_self" class="custom-phone-btn">📞 {c["phone"]} 전화걸기</a>', unsafe_allow_html=True)
+                    with rcol:
+                        if st.button("✏️", key=f"edt_btn_{cid}"):
+                            st.session_state.edit_contact_id = cid; st.rerun()
+                        if st.button("🗑️", key=f"del_btn_{cid}"):
+                            db.delete_contact(cid); st.warning("삭제되었습니다."); st.rerun()
+            else:
+                # 수정 모드 폼
+                with st.form(key=f"edit_contact_form_{cid}"):
+                    st.info("✏️ 연락처 수정 중")
+                    ec1, ec2 = st.columns(2)
+                    u_comp = ec1.text_input("업체명", value=c['company_name'])
+                    u_rank = ec2.text_input("직급", value=c.get('rank',''))
+                    u_name = ec1.text_input("담당자", value=c.get('person_name',''))
+                    u_phone = ec2.text_input("전화번호", value=c.get('phone',''))
+                    eb1, eb2 = st.columns(2)
+                    if eb1.form_submit_button("저장"):
+                        db.update_contact(cid, company_name=u_comp, person_name=u_name, phone=u_phone, rank=u_rank)
+                        st.session_state.edit_contact_id = None; st.rerun()
+                    if eb2.form_submit_button("취소"):
+                        st.session_state.edit_contact_id = None; st.rerun()
