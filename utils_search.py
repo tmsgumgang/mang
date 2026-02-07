@@ -13,8 +13,8 @@ def normalize_model_name(text):
 
 def filter_candidates_logic(candidates, intent, penalties, strict_mode=True):
     """
-    [V304] 필터링 로직 개선 (과잉 필터링 방지)
-    - 키워드가 정확히 일치하지 않아도, 벡터 유사도가 일정 수준(0.7) 이상이면 통과시킵니다.
+    [V305] 라벨링 우선 정책 적용
+    - 키워드가 본문에 없어도, '모델명'이 정확히 일치하면 생존(Pass) 시킵니다.
     """
     filtered = []
     
@@ -31,7 +31,6 @@ def filter_candidates_logic(candidates, intent, penalties, strict_mode=True):
     is_model_locked = (t_model not in generic_keywords) and (len(t_model) > 1)
     is_specific_target = (t_item not in generic_keywords) and (len(t_item) > 1)
     
-    # 주요 카테고리 (교차 검증용)
     major_categories = ['tn', 'tp', 'toc', 'cod', 'ph', 'ss', '채수펌프', '채수기']
 
     for d in candidates:
@@ -50,46 +49,56 @@ def filter_candidates_logic(candidates, intent, penalties, strict_mode=True):
         
         # 문서가 '공통' 모델인지 확인
         is_doc_model_common = any(k in d_model_raw.lower() for k in generic_keywords) or d_model == ""
+        
+        # [핵심 수정 V305] 라벨링 일치 여부를 미리 판단 (생존권 부여)
+        is_label_match = False
+        if is_model_locked and d_model:
+            # 질문한 모델명(HAAS-4000)이 문서 모델명에 포함되면 라벨 일치로 간주
+            if t_model in d_model or d_model in t_model:
+                is_label_match = True
 
         if strict_mode and not is_force_pass:
-            # 1. 모델 독점 모드 체크 (모델명이 명확히 다른 경우만 필터링)
+            # 1. 모델 독점 모드 체크
             if is_model_locked and not is_doc_model_common:
-                if d_model and (t_model not in d_model and d_model not in t_model):
-                    # 모델명이 완전히 다르면 탈락 (단, 유사도가 매우 높으면 봐줌)
-                    if similarity < 0.80: continue 
+                # 모델명이 다르고, 라벨링 매치도 아니면 탈락
+                if not is_label_match:
+                     # 모델명이 아예 딴판이면(유사도 낮으면) 탈락
+                     if d_model and (t_model not in d_model and d_model not in t_model):
+                         if similarity < 0.80: continue 
 
-            # 2. 카테고리 교차 검증 (엉뚱한 측정 항목 제외)
+            # 2. 카테고리 교차 검증
             if is_specific_target:
                 doc_identity = d_item_raw.lower() + " " + d_model_raw.lower()
                 is_identity_mismatch = False
                 for cat in major_categories:
                     if cat in doc_identity:
-                        # 질문은 TOC인데 문서는 TN이면 탈락
                         if cat not in raw_t_item.lower() and raw_t_item.lower() not in cat:
-                            # 예외: 채수기/채수펌프는 서로 연관됨
                             if not (('채수' in cat and '채수' in raw_t_item.lower()) or 
                                     ('펌프' in cat and '펌프' in raw_t_item.lower())):
-                                if similarity < 0.85: # 유사도가 높으면 통과
+                                # 라벨링이 일치하면 카테고리가 좀 달라도 봐줌
+                                if not is_label_match and similarity < 0.85: 
                                     is_identity_mismatch = True
                                     break
                 if is_identity_mismatch: continue
 
-            # 3. [핵심 수정] 키워드 검증 완화 (0.95 -> 0.70)
-            # "채수량" 단어가 없어도 의미가 비슷하면(벡터 점수 0.7 이상) 살려줍니다.
+            # 3. [핵심 수정] 키워드 검증 로직 개선
+            # "채수량"이 본문에 없어도, 라벨(모델명)이 정확히 맞으면(is_label_match) 살려줍니다.
             if is_specific_target:
                 d_content_full = (d_mfr_raw + d_model_raw + d_item_raw + str(d.get('content') or '')).lower().replace(" ", "")
                 if normalized_target not in d_content_full:
-                    # 기존 0.95는 너무 가혹함 -> 0.70으로 완화
-                    if similarity < 0.70: 
-                        continue 
+                    # 라벨이 일치하면 키워드가 없어도 통과! (여기가 해결책)
+                    if not is_label_match:
+                        # 라벨도 안 맞는데 키워드도 없으면 그때 탈락 (기준 0.75)
+                        if similarity < 0.75: 
+                            continue 
 
         # 점수 계산 및 포맷팅
         score = similarity
         if d.get('is_verified'): score += 0.15
         
-        # 모델명 일치 시 가산점
-        if t_model != '미지정' and (t_model in d_model or d_model in t_model):
-            score += 0.2
+        # 모델명 일치 시 가산점 (확실히 챙겨줌)
+        if is_label_match:
+            score += 0.3 # 가산점 상향
 
         filtered.append({**d, 'final_score': score, 'u_key': u_key})
         
@@ -141,12 +150,11 @@ def perform_unified_search(ai_model, db, user_q, u_threshold):
                         'model_name': '공통'
                     })
 
-    # 4. [Labeling] 메타데이터 강제 주입 (4번 기능 연결)
+    # 4. [Labeling] 메타데이터 강제 주입
     raw_results = m_res + k_res
     enriched_results = []
     
     for r in raw_results:
-        # DB에서 가져온 데이터에 제조사/모델명이 비어있으면 다시 채워넣음
         if not r.get('manufacturer') or not r.get('model_name'):
             source = r.get('source_table', 'manual_base')
             meta = db.get_doc_metadata_by_id(r['id'], 'knowledge' if source == 'knowledge_base' else 'manual')
@@ -169,6 +177,7 @@ def perform_unified_search(ai_model, db, user_q, u_threshold):
     # 6. 필터링 및 리랭킹
     filtered_candidates = filter_candidates_logic(unique_pool, intent, {}, strict_mode=True)
     
+    # 결과가 너무 적으면 완화 모드로 재시도
     if len(filtered_candidates) < 2:
         fallback_candidates = filter_candidates_logic(unique_pool, intent, {}, strict_mode=False)
         existing_ids = {f"{c.get('source_table')}_{c['id']}" for c in filtered_candidates}
