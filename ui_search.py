@@ -5,21 +5,12 @@ import re
 from logic_ai import *
 from utils_search import perform_unified_search
 
-# [V255] 정도검사 UI 모듈 가져오기
-from ui_qc import show_qc_ui
-# [V256] 협업(일정/연락처) UI 모듈 가져오기
-from ui_collab import show_collab_ui
-
 # =========================================================================
-# [V252] 그래프 관계 매핑 (모든 관계 유형 포함)
+# [V247] 그래프 관계 매핑 (채팅창에서도 한국어로 직관적 표시)
 # =========================================================================
 REL_MAP = {
     "causes": "원인이다 (A가 B를 유발)",
-    "part_of": "부품이다 (A는 B의 기계적 부품)",
-    "consumable_of": "소모품이다 (A는 B의 소모자재)",
-    "is_facility_of": "설비이다 (A는 B의 주요 설비)",
-    "is_a": "종류이다 (A는 B의 일종/정의)",
-    "included_in": "일부이다 (A는 B의 구성요소/과정)",
+    "part_of": "부품이다 (A는 B의 일부)",
     "solved_by": "해결된다 (A는 B로 해결)",
     "requires": "필요로 한다 (A는 B가 필요)",
     "has_status": "상태다 (A는 B라는 증상/상태)",
@@ -51,58 +42,40 @@ def show_search_ui(ai_model, db):
         .report-box { background-color: #ffffff; border: 1px solid #004a99; padding: 25px; border-radius: 12px; color: #0f172a !important; box-shadow: inset 0 2px 4px 0 rgba(0, 0, 0, 0.05); line-height: 1.8; }
         .doc-feedback-area { background-color: #f1f5f9; padding: 10px; border-radius: 8px; margin-top: 10px; border: 1px solid #e2e8f0; font-size: 0.9rem;}
         .graph-insight-box { background-color: #fff7ed; border-left: 4px solid #f97316; padding: 15px; border-radius: 4px; margin-bottom: 15px; color: #431407; font-size: 0.95rem; }
-        .editor-meta { background-color: #f8fafc; padding: 10px; border-radius: 8px; margin-bottom: 10px; border: 1px dashed #94a3b8; }
         .stSelectbox, .stTextInput { margin-bottom: 5px !important; }
     </style>""", unsafe_allow_html=True)
 
     # ----------------------------------------------------------------------
-    # [Input] 검색 입력창 & 모드 선택
+    # [Input] 검색 입력창
     # ----------------------------------------------------------------------
     _, main_col, _ = st.columns([1, 2, 1])
     with main_col:
-        # [V256] 협업 메뉴 추가
-        s_mode = st.radio("기능 선택", ["업무기술 🛠️", "소모품 재고 📦", "정도검사 ⚖️", "협업 🤝", "생활정보 🍴"], horizontal=True, label_visibility="collapsed")
+        s_mode = st.radio("검색 모드", ["업무기술 🛠️", "소모품 재고 📦", "생활정보 🍴"], horizontal=True, label_visibility="collapsed")
         
-        # 검색창 표시 조건 (정도검사, 협업 모드에서는 검색창 숨김)
-        if s_mode not in ["정도검사 ⚖️", "협업 🤝"]:
-            if s_mode == "업무기술 🛠️" or s_mode == "생활정보 🍴":
-                u_threshold = st.slider("정밀도 설정", 0.0, 1.0, 0.6, 0.05)
-                ph_text = "예: 시마즈 TOC 고장 조치"
-            else: # 소모품 재고
-                u_threshold = 0.0
-                ph_text = "예: 배양액, 3way valve (단어만 입력)"
-            
-            user_q = st.text_input("질문/검색어 입력", placeholder=ph_text, label_visibility="collapsed")
-            search_btn = st.button("🔍 검색", use_container_width=True, type="primary")
+        if s_mode != "소모품 재고 📦":
+            u_threshold = st.slider("정밀도 설정", 0.0, 1.0, 0.6, 0.05)
         else:
-            # 특수 모드일 때는 변수 초기화
-            user_q = None
-            search_btn = False
+            u_threshold = 0.0 
+            
+        ph_text = "예: 시마즈 TOC 고장 조치"
+        if s_mode == "소모품 재고 📦":
+            ph_text = "예: 배양액, 3way valve (단어만 입력해도 됩니다)"
+            
+        user_q = st.text_input("질문 입력", placeholder=ph_text, label_visibility="collapsed")
+        search_btn = st.button("🔍 검색", use_container_width=True, type="primary")
 
     # ----------------------------------------------------------------------
-    # [Logic] 모드별 기능 실행
+    # [Logic] 검색 실행 및 결과 출력
     # ----------------------------------------------------------------------
-    
-    # [CASE 4] 협업 기능 (V256 New)
-    if s_mode == "협업 🤝":
-        st.divider()
-        show_collab_ui(db) # ui_collab.py 호출
-        return
-
-    # [CASE 3] 정도검사 (V255)
-    if s_mode == "정도검사 ⚖️":
-        st.divider()
-        show_qc_ui() # ui_qc.py 호출
-        return 
-
-    # [CASE 1 & 2] 검색 로직 (기존 유지)
     if user_q and (search_btn or user_q):
         if "last_query" not in st.session_state or st.session_state.last_query != user_q:
             st.session_state.last_query = user_q
             if "full_report" in st.session_state: del st.session_state.full_report
             if "streamed_summary" in st.session_state: del st.session_state.streamed_summary
 
-        # === 소모품 재고 검색 ===
+        # =========================================================
+        # [CASE 1] 소모품 재고 검색 모드
+        # =========================================================
         if s_mode == "소모품 재고 📦":
             with st.spinner("📦 창고 데이터를 조회하고 있습니다..."):
                 inv_result = db.search_inventory_for_chat(user_q)
@@ -116,7 +89,9 @@ def show_search_ui(ai_model, db):
                     st.warning("🔍 검색 결과가 없습니다.")
             return 
 
-        # === 일반 기술/생활 정보 검색 (Graph RAG V247) ===
+        # =========================================================
+        # [CASE 2] 일반 기술/생활 정보 검색 (Graph RAG V247)
+        # =========================================================
         with st.spinner("지식을 탐색 중입니다... (Graph + Vector)"):
             try:
                 final, intent, q_vec = perform_unified_search(ai_model, db, user_q, u_threshold)
@@ -156,27 +131,34 @@ def show_search_ui(ai_model, db):
                     st.write(st.session_state.full_report)
                     st.markdown('</div>', unsafe_allow_html=True)
 
-                # (3) 참조 데이터 및 연관성 평가 (그래프/원본 분리 표시)
+                # --------------------------------------------------------------------------
+                # (3) [V247 핵심] 참조 데이터 (그래프와 원본 문서를 분리해서 표시)
+                # --------------------------------------------------------------------------
                 st.subheader("📚 참조 근거 자료 (Reference)")
                 search_keywords = user_q.split()
 
-                # -- A. 그래프 지식 (Insights) --
+                # 1. 데이터를 타입별로 분리
                 graph_docs = [d for d in final if d.get('source_table') == 'knowledge_graph']
+                normal_docs = [d for d in final if d.get('source_table') != 'knowledge_graph']
+
+                # 2. [A] 그래프 지식 (Insights) 먼저 표시
                 if graph_docs:
                     with st.expander("💡 [AI 그래프 분석] 발견된 인과관계 (Knowledge Graph)", expanded=True):
-                        for gd in graph_docs[:5]: 
+                        for gd in graph_docs[:5]: # 너무 길어지지 않게 5개 제한
+                            # content에 이미 AI가 요약한 문장(A는 B의 원인이다 등)이 들어있음
                             content = gd.get('content','').replace("\n", "<br>")
                             st.markdown(f'<div class="graph-insight-box">{content}</div>', unsafe_allow_html=True)
 
-                # -- B. 원본 문서 (Original Source) --
-                normal_docs = [d for d in final if d.get('source_table') != 'knowledge_graph']
+                # 3. [B] 원본 문서 (Original Source) 표시 - 그래프가 많아도 밀리지 않도록 별도 출력
                 if normal_docs:
                     st.markdown("---")
                     st.caption("📄 원본 문서 내용 (Manual & Knowledge Base)")
-                    for d in normal_docs[:5]:
+                    
+                    for d in normal_docs[:5]: # 최대 5개까지 원본 표시
                         v_mark = ' ✅ 인증' if d.get('is_verified') else ''
                         score = d.get('rerank_score', 0)
                         
+                        # 아이콘 및 출처 표시
                         icon = "💡"
                         source_label = "지식 베이스(경험)"
                         if d.get('source_table') == 'manual_base': 
@@ -184,13 +166,16 @@ def show_search_ui(ai_model, db):
                             source_label = "PDF 매뉴얼"
                         
                         with st.expander(f"{icon} [{source_label}] {d.get('measurement_item','-')} - {d.get('model_name','공통')} (연관도: {score}%) {v_mark}"):
+                            # 메타 정보 바
                             st.markdown(f'''<div class="meta-bar">
                                 <span>🏢 제조사: <b>{d.get("manufacturer","미지정")}</b></span>
                                 <span>🧪 항목: <b>{d.get("measurement_item","공통")}</b></span>
                                 <span>🏷️ 모델: <b>{d.get("model_name","공통")}</b></span>
                             </div>''', unsafe_allow_html=True)
                             
+                            # 원본 내용 표시 (인간 작성 텍스트)
                             raw_content = d.get('content') or d.get('solution') or ""
+                            # 이슈 내용이 별도로 있으면 병기 (지식베이스 경우)
                             if d.get('issue'):
                                 raw_content = f"<b>[증상/이슈]</b> {d['issue']}<br><br><b>[해결/내용]</b> {raw_content}"
                                 
@@ -213,80 +198,59 @@ def show_search_ui(ai_model, db):
                                     st.toast("기록됨")
                             st.markdown('</div>', unsafe_allow_html=True)
                 else:
+                    # 원본 문서가 없는 경우
                     st.info("ℹ️ 매뉴얼 원본 문서를 찾지 못했습니다. (지식 그래프 분석 결과만 표시됩니다)")
 
                 # -------------------------------------------------------------
-                # [V250] 🛠️ 채팅창 내 그래프 즉시 수정 (제조사 라벨 수정 기능 포함)
+                # [V247] 🛠️ 채팅창 내 그래프 즉시 수정 (수정+삭제 기능)
                 # -------------------------------------------------------------
+                # 키워드 관련 그래프 지식을 불러와서 바로 수정할 수 있게 함
                 keywords = [k for k in user_q.split() if len(k) >= 2]
                 graph_hits = []
                 for kw in keywords:
                     rels = db.search_graph_relations(kw)
-                    if rels: graph_hits.extend(rels[:2])
+                    if rels: graph_hits.extend(rels[:2]) # 너무 많이 뜨지 않게 조절
 
                 if graph_hits:
                     st.divider()
                     with st.expander("🛠️ 그래프 지식 즉시 교정 (전문가 모드)", expanded=False):
-                        st.info("⚠️ 주의: 여기서 제조사/모델을 수정하면, 원본 문서의 정보가 영구적으로 변경됩니다!")
+                        st.info("AI가 분석한 인과관계가 틀렸다면 여기서 바로 수정하거나 삭제하세요.")
                         
+                        # 중복 제거
                         unique_hits = {v['id']:v for v in graph_hits}.values()
                         relation_keys = list(REL_MAP.keys())
 
                         for rel in unique_hits:
                             rid = rel['id']
-                            doc_id = rel.get('doc_id')
-                            source_type = rel.get('source_type', 'manual')
-                            
-                            meta = {}
-                            if doc_id:
-                                meta = db.get_doc_metadata_by_id(doc_id, source_type)
-                            
                             with st.form(key=f"chat_edit_graph_{rid}"):
-                                # 1. 문서 메타데이터 수정 (라벨링 오류 수정용)
-                                st.markdown('<div class="editor-meta">', unsafe_allow_html=True)
-                                st.caption("📄 원본 문서 라벨 (필터링의 기준이 됩니다)")
-                                mc1, mc2, mc3 = st.columns(3)
-                                e_mfr = mc1.text_input("🏢 제조사", value=meta.get('manufacturer', '미지정'), key=f"emfr_{rid}")
-                                e_mod = mc2.text_input("🏷️ 모델명", value=meta.get('model_name', '미지정'), key=f"emod_{rid}")
-                                e_itm = mc3.text_input("🧪 항목", value=meta.get('measurement_item', '공통'), key=f"eitm_{rid}")
-                                st.markdown('</div>', unsafe_allow_html=True)
-
-                                # 2. 그래프 관계 수정
                                 c1, c_mid1, c2, c_mid2, c3, c4 = st.columns([2.5, 0.5, 2.5, 0.5, 2.5, 1.5])
                                 
+                                # 수정 입력창
                                 e_src = c1.text_input("주어", value=rel['source'], label_visibility="collapsed")
                                 c_mid1.markdown("<div style='text-align: center; margin-top: 10px; font-size: 0.8rem;'>는(은)</div>", unsafe_allow_html=True)
                                 
                                 e_tgt = c2.text_input("목적어", value=rel['target'], label_visibility="collapsed")
                                 c_mid2.markdown("<div style='text-align: center; margin-top: 10px; font-size: 0.8rem;'>의</div>", unsafe_allow_html=True)
                                 
+                                # 관계 선택 (한국어)
                                 curr_rel = rel['relation']
                                 opts = relation_keys if curr_rel in relation_keys else relation_keys + [curr_rel]
                                 e_rel = c3.selectbox("관계", options=opts, index=opts.index(curr_rel), 
                                                    format_func=lambda x: REL_MAP.get(x, x), label_visibility="collapsed")
                                 
+                                # 버튼
                                 bc1, bc2 = c4.columns(2)
                                 save = bc1.form_submit_button("💾")
                                 delete = bc2.form_submit_button("🗑️")
 
                                 if save:
-                                    graph_updated = db.update_graph_triple(rid, e_src, e_rel, e_tgt)
-                                    doc_updated = False
-                                    if doc_id:
-                                        t_name = "knowledge_base" if source_type == "knowledge" else "manual_base"
-                                        res = db.update_record_labels(t_name, doc_id, e_mfr, e_mod, e_itm)
-                                        doc_updated = res[0]
-
-                                    if graph_updated:
-                                        msg = "✅ 관계 수정 완료!"
-                                        if doc_updated: msg += " (원본 라벨도 함께 수정됨)"
-                                        st.success(msg); time.sleep(0.5); st.rerun()
-                                    else: st.error("수정 실패")
+                                    if db.update_graph_triple(rid, e_src, e_rel, e_tgt):
+                                        st.success("수정 완료!"); time.sleep(0.5); st.rerun()
+                                    else: st.error("실패")
                                 
                                 if delete:
                                     if db.delete_graph_triple(rid):
-                                        st.warning("🗑️ 관계 삭제 완료!"); time.sleep(0.5); st.rerun()
-                                    else: st.error("삭제 실패")
+                                        st.warning("삭제 완료!"); time.sleep(0.5); st.rerun()
+                                    else: st.error("실패")
         else:
-            if s_mode not in ["정도검사 ⚖️", "협업 🤝"]:
-                st.warning("🔍 검색 결과가 없습니다.")
+            st.warning("🔍 검색 결과가 없습니다.")
