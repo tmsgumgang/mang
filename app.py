@@ -2,12 +2,15 @@ import streamlit as st
 import google.generativeai as genai
 from supabase import create_client
 from db_services import DBManager
-from logic_ai import *
 import ui_search
 import ui_admin
 import ui_community
-# [NEW] 재고관리 UI 모듈 임포트 (다음 단계에서 파일 생성 예정)
-import ui_inventory 
+import ui_inventory
+
+# --------------------------------------------------------------------------
+# [UI] 공통 레이아웃 설정 (반드시 맨 처음에 위치해야 함)
+# --------------------------------------------------------------------------
+st.set_page_config(page_title="금강수계 AI V161", layout="wide", initial_sidebar_state="collapsed")
 
 # --------------------------------------------------------------------------
 # [설정] 환경 변수 로드
@@ -22,6 +25,10 @@ except FileNotFoundError:
 
 @st.cache_resource
 def init_system():
+    """
+    시스템 초기화: AI 모델 및 DB 연결
+    DBManager는 이제 [검색 지능 + 커뮤니티 + 재고관리]가 통합된 객체입니다.
+    """
     genai.configure(api_key=GEMINI_API_KEY)
     ai_model = genai.GenerativeModel('gemini-2.0-flash')
     sb_client = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -30,9 +37,8 @@ def init_system():
 ai_model, db = init_system()
 
 # --------------------------------------------------------------------------
-# [UI] 공통 레이아웃 설정
+# [Header] 상단 고정 헤더
 # --------------------------------------------------------------------------
-st.set_page_config(page_title="금강수계 AI V161", layout="wide", initial_sidebar_state="collapsed")
 st.markdown("""<style>
     .fixed-header { position: fixed; top: 0; left: 0; width: 100%; background-color: #004a99; color: white; padding: 10px 0; z-index: 999; text-align: center; font-weight: bold; }
     .main .block-container { padding-top: 5.5rem !important; }
@@ -43,7 +49,7 @@ st.markdown("""<style>
 # --------------------------------------------------------------------------
 _, menu_col, _ = st.columns([1, 2, 1])
 with menu_col:
-    # [NEW] "📦 소모품 재고관리" 메뉴 추가
+    # 모든 기능이 통합된 메뉴 구성
     mode = st.selectbox("작업 메뉴 선택", 
                         ["🔍 통합 지식 검색", 
                          "👥 현장 지식 커뮤니티", 
@@ -55,21 +61,34 @@ with menu_col:
 
 st.divider()
 
+# --------------------------------------------------------------------------
+# [기능 연결] 각 모듈별 UI 호출
+# --------------------------------------------------------------------------
 if mode == "🔍 통합 지식 검색":
+    # utils_search V313 (구원투수 로직 포함)이 적용된 검색 UI
     ui_search.show_search_ui(ai_model, db)
 
 elif mode == "👥 현장 지식 커뮤니티":
+    # db_collab.py 기능을 사용하는 커뮤니티 UI
     ui_community.show_community_ui(ai_model, db)
 
-# [NEW] 재고관리 화면 연결
 elif mode == "📦 소모품 재고관리":
+    # db_services.py (상속받은 기능)를 사용하는 재고 UI
     ui_inventory.show_inventory_ui(db)
 
 elif mode == "🛠️ 데이터 전체 관리":
+    # 지식 그래프 관리 및 데이터 조회
     ui_admin.show_admin_ui(ai_model, db)
 
 elif mode == "📄 문서(매뉴얼) 등록":
-    ui_admin.show_manual_upload_ui(ai_model, db)
+    # PDF 업로드 및 파싱
+    if hasattr(ui_admin, 'show_pdf_reg_ui'):
+        ui_admin.show_pdf_reg_ui(ai_model, db)
+    elif hasattr(ui_admin, 'show_manual_upload_ui'):
+        ui_admin.show_manual_upload_ui(ai_model, db)
+    else:
+        st.error("문서 등록 UI 함수를 찾을 수 없습니다. (ui_admin.py 확인 필요)")
 
 elif mode == "📝 지식 등록":
+    # 텍스트 직접 등록
     ui_admin.show_knowledge_reg_ui(ai_model, db)
