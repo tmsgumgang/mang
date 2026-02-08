@@ -1,8 +1,13 @@
 from collections import Counter
+# [추가] 분리된 게시판 모듈 가져오기
+from db_collab import DBCollab
 
-class DBManager:
+# [수정] DBManager가 DBCollab 기능을 상속받음
+class DBManager(DBCollab):
     def __init__(self, supabase_client):
         self.supabase = supabase_client
+        # [수정] 부모 클래스(DBCollab) 초기화 (필수)
+        super().__init__()
 
     # =========================================================
     # [Helper] 데이터 정규화
@@ -149,81 +154,8 @@ class DBManager:
             return docs
         except: return []
 
-    def get_community_posts(self):
-        try: return self.supabase.table("community_posts").select("*").order("created_at", desc=True).execute().data
-        except: return []
-
-    def add_community_post(self, author, title, content, mfr, model, item):
-        try:
-            payload = {"author": author, "title": title, "content": content, "manufacturer": self._clean_text(mfr), "model_name": self._clean_text(model), "measurement_item": self._normalize_tags(item)}
-            res = self.supabase.table("community_posts").insert(payload).execute()
-            return True if res.data else False
-        except: return False
-
-    def update_community_post(self, post_id, title, content, mfr, model, item):
-        try:
-            payload = {"title": title, "content": content, "manufacturer": self._clean_text(mfr), "model_name": self._clean_text(model), "measurement_item": self._normalize_tags(item)}
-            res = self.supabase.table("community_posts").update(payload).eq("id", post_id).execute()
-            return True if res.data else False
-        except: return False
-
-    def delete_community_post(self, post_id):
-        try:
-            res = self.supabase.table("community_posts").delete().eq("id", post_id).execute()
-            return True if res.data else False
-        except: return False
-
-    def get_comments(self, post_id):
-        try: return self.supabase.table("community_comments").select("*").eq("post_id", post_id).order("created_at").execute().data
-        except: return []
-
-    def add_comment(self, post_id, author, content):
-        try:
-            res = self.supabase.table("community_comments").insert({"post_id": post_id, "author": author, "content": content}).execute()
-            return True if res.data else False
-        except: return False
-
-    def promote_to_knowledge(self, issue, solution, mfr, model, item, author="익명"):
-        try:
-            from logic_ai import get_embedding
-            payload = {
-                "domain": "기술지식", "issue": issue, "solution": solution, "embedding": get_embedding(issue), 
-                "semantic_version": 1, "is_verified": True, 
-                "manufacturer": self._clean_text(mfr), "model_name": self._clean_text(model), "measurement_item": self._normalize_tags(item),
-                "registered_by": author 
-            }
-            res = self.supabase.table("knowledge_base").insert(payload).execute()
-            return (True, "성공") if res.data else (False, "실패")
-        except Exception as e: return (False, str(e))
-
-    def update_file_labels(self, table_name, file_name, mfr, model, item):
-        try:
-            clean_mfr = self._clean_text(mfr)
-            clean_model = self._clean_text(model)
-            clean_item = self._normalize_tags(item)
-            payload = {
-                "manufacturer": clean_mfr, 
-                "model_name": clean_model, 
-                "measurement_item": clean_item, 
-                "semantic_version": 1, 
-                "review_required": False
-            }
-            res = self.supabase.table(table_name).update(payload).eq("file_name", file_name).or_(f'manufacturer.eq.미지정,manufacturer.is.null,manufacturer.eq.""').execute()
-            return True, f"{len(res.data)}건 일괄 분류 완료"
-        except Exception as e: return False, str(e)
-
-    def update_vector(self, table_name, row_id, vec):
-        try: self.supabase.table(table_name).update({"embedding": vec}).eq("id", row_id).execute(); return True
-        except: return False
-
-    def delete_record(self, table_name, row_id):
-        try:
-            res = self.supabase.table(table_name).delete().eq("id", row_id).execute()
-            return (True, "성공") if res.data else (False, "실패")
-        except Exception as e: return (False, str(e))
-
     # =========================================================
-    # [V233] 📦 소모품 재고관리 (Inventory)
+    # [Inventory] 재고관리 (기존 코드 유지)
     # =========================================================
     def get_inventory_items(self):
         try:
@@ -334,9 +266,6 @@ class DBManager:
             return query.execute().data
         except: return []
 
-    # =========================================================
-    # [V234 Final] 🤖 챗봇용 재고 검색 함수
-    # =========================================================
     def search_inventory_for_chat(self, query_text):
         try:
             stop_words = ['재고', '수량', '몇개', '몇', '개', '있어', '있나요', '알려줘', '확인', '조회', '어디', '있니', '현황', '보여줘', '소모품']
@@ -387,16 +316,12 @@ class DBManager:
             return f"재고 검색 중 오류 발생: {str(e)}"
 
     # =========================================================
-    # [V236] 🕸️ 지식 그래프(Knowledge Graph) 저장 및 조회
+    # [Knowledge Graph] 지식 그래프 기능
     # =========================================================
     def save_knowledge_triples(self, doc_id, triples):
-        """
-        AI가 추출한 트리플(관계 데이터)을 DB에 저장합니다.
-        """
         if not triples: return False
         
         try:
-            # 대량 삽입 (Bulk Insert) 준비
             data_to_insert = []
             for t in triples:
                 if t.get('source') and t.get('target'):
@@ -416,24 +341,14 @@ class DBManager:
             return False
 
     def search_graph_relations(self, keyword):
-        """
-        특정 키워드와 연결된 지식 그래프(인과관계)를 검색합니다.
-        """
         try:
-            # source나 target에 키워드가 포함된 모든 관계 조회
             res = self.supabase.table("knowledge_graph").select("*")\
                 .or_(f"source.ilike.%{keyword}%,target.ilike.%{keyword}%")\
                 .limit(20).execute()
             return res.data
         except: return []
 
-    # =========================================================
-    # [V240] 🛠️ 지식 그래프 교정 및 삭제 기능 추가
-    # =========================================================
     def update_graph_triple(self, rel_id, new_source, new_relation, new_target):
-        """
-        [NEW] 그래프의 특정 관계(노드 및 엣지)를 수정합니다.
-        """
         try:
             payload = {
                 "source": self._clean_text(new_source),
@@ -447,9 +362,6 @@ class DBManager:
             return False
 
     def delete_graph_triple(self, rel_id):
-        """
-        [NEW] 잘못 추출된 그래프 관계를 완전히 삭제(노이즈 제거)합니다.
-        """
         try:
             res = self.supabase.table("knowledge_graph").delete().eq("id", rel_id).execute()
             return True if res.data else False
@@ -457,22 +369,13 @@ class DBManager:
             print(f"Graph Delete Error: {e}")
             return False
 
-    # =========================================================
-    # [V242] 🚀 그래프 노드 일괄 변경 (Bulk Rename)
-    # =========================================================
     def bulk_rename_graph_node(self, old_name, new_name, target_scope="all"):
-        """
-        특정 단어(old_name)를 가진 모든 노드를 새 이름(new_name)으로 한 번에 바꿉니다.
-        """
         try:
             count = 0
-            
-            # 1. 출발점(Source) 변경
             if target_scope in ["source", "all"]:
                 res = self.supabase.table("knowledge_graph").update({"source": self._clean_text(new_name)}).eq("source", old_name).execute()
                 if res.data: count += len(res.data)
 
-            # 2. 도착점(Target) 변경
             if target_scope in ["target", "all"]:
                 res = self.supabase.table("knowledge_graph").update({"target": self._clean_text(new_name)}).eq("target", old_name).execute()
                 if res.data: count += len(res.data)
