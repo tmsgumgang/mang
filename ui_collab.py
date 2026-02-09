@@ -32,7 +32,6 @@ def show_collab_ui(db):
                 
                 if st.form_submit_button("저장"):
                     # [수정] DB 함수 인자 개수(location, assignee)를 맞춰주어 에러 방지
-                    # (title, start_dt, end_dt, cat, desc, user, location, assignee)
                     res = db.add_schedule(title, d1, d2, cat, desc, author, location="현장", assignee=author)
                     
                     # 결과가 튜플일 경우와 불리언일 경우 모두 처리
@@ -50,21 +49,24 @@ def show_collab_ui(db):
         if schedules:
             df = pd.DataFrame(schedules)
             
-            # [핵심 수정] DB 컬럼(start_time)을 UI 컬럼(start_date)으로 변환
-            # KeyError 방지 로직
+            # [핵심 수정] errors='coerce' 추가 -> 날짜 형식이 깨진 데이터가 있어도 무시하고 진행
             if 'start_time' in df.columns:
-                df['start_date'] = pd.to_datetime(df['start_time']).dt.date
+                df['start_date'] = pd.to_datetime(df['start_time'], errors='coerce').dt.date
             if 'end_time' in df.columns:
-                df['end_date'] = pd.to_datetime(df['end_time']).dt.date
+                df['end_date'] = pd.to_datetime(df['end_time'], errors='coerce').dt.date
             
+            # 날짜 변환 실패로 NaT(결측치)가 된 행 제거 (안전장치)
+            df = df.dropna(subset=['start_date'])
+
             # 만약 데이터가 비어서 컬럼 변환이 안 된 경우 방어
-            if 'start_date' in df.columns and 'end_date' in df.columns:
+            if 'start_date' in df.columns and 'end_date' in df.columns and not df.empty:
                 # 날짜순 정렬
                 df = df.sort_values(by='start_date')
                 
                 for _, row in df.iterrows():
                     d_str = f"{row['start_date']}"
-                    if row['start_date'] != row['end_date']:
+                    # 종료일이 있고 시작일과 다르면 표시
+                    if pd.notnull(row['end_date']) and row['start_date'] != row['end_date']:
                         d_str += f" ~ {row['end_date']}"
                         
                     with st.expander(f"[{row['category']}] {d_str} : {row['title']}"):
@@ -75,7 +77,7 @@ def show_collab_ui(db):
                             db.delete_schedule(row['id'])
                             st.rerun()
             else:
-                st.warning("데이터 형식이 올바르지 않습니다.")
+                st.info("표시할 수 있는 유효한 일정이 없습니다.")
         else:
             st.info("등록된 일정이 없습니다.")
 
@@ -102,7 +104,6 @@ def show_collab_ui(db):
                 memo = st.text_area("메모 (주요 취급 품목 등)")
                 
                 if st.form_submit_button("저장"):
-                    # add_contact 인자 순서: company, name, phone, email, tags, memo, rank
                     if db.add_contact(comp, name, phone, email, cat, memo, "일반"):
                         st.success("저장되었습니다.")
                         st.session_state['show_contact_form'] = False
@@ -121,7 +122,6 @@ def show_collab_ui(db):
                 
             # 실제로 존재하는 컬럼만 선택해서 표시 (KeyError 방지)
             cols = ['category', 'company_name', 'manager_name', 'phone', 'email', 'memo']
-            # DB 컬럼명이 person_name인 경우 매핑
             if 'person_name' in df_c.columns:
                 df_c['manager_name'] = df_c['person_name']
             
