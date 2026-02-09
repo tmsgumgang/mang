@@ -1,139 +1,193 @@
 import streamlit as st
 import pandas as pd
-from datetime import date
+import time
+import re
+from datetime import datetime, timedelta, timezone
+
+# 캘린더 라이브러리 임포트
+try:
+    from streamlit_calendar import calendar
+except ImportError:
+    st.error("⚠️ 'streamlit-calendar' 라이브러리가 필요합니다.")
+    calendar = None
 
 def show_collab_ui(db):
-    st.title("🤝 협업 공간 (Collab)")
+    # [CSS 1] 다크모드 대응 및 모바일 최적화 스타일
+    st.markdown("""<style>
+        .task-card {
+            background-color: rgba(128, 128, 128, 0.1); 
+            border: 1px solid rgba(128, 128, 128, 0.2);
+            border-radius: 12px; padding: 12px; margin-bottom: 8px; color: inherit;
+        }
+        .contact-memo { font-size: 0.8rem; color: #aaa; font-style: italic; margin-top: 5px; border-left: 2px solid #3b82f6; padding-left: 5px; }
+        a.custom-phone-btn { display: block; width: 100%; background-color: #3b82f6; color: white !important; text-decoration: none !important; text-align: center; padding: 8px 0; border-radius: 8px; margin-top: 5px; }
+    </style>""", unsafe_allow_html=True)
 
-    tab1, tab2 = st.tabs(["📅 월별 일정 (Calendar)", "📞 업체 연락처 (Contacts)"])
+    # [CSS 2] 캘린더 커스텀 (글자 크기 등)
+    calendar_custom_css = """
+        .fc-toolbar-title { font-size: 1rem !important; }
+        .fc-event-title { font-size: 0.75rem !important; white-space: nowrap !important; overflow: hidden !important; }
+        .fc-daygrid-day-frame { min-height: 80px !important; }
+    """
+
+    if "expanded_task_id" not in st.session_state: st.session_state.expanded_task_id = None
+
+    tab1, tab2, tab3 = st.tabs(["📅 일정 & 당직", "🚀 정밀 업무 관리", "📒 업체 연락처"])
 
     # ------------------------------------------------------------------
-    # [Tab 1] 일정 관리
+    # [Tab 1] 일정 & 당직 (캘린더 시각화 복구)
     # ------------------------------------------------------------------
     with tab1:
-        c1, c2 = st.columns([3, 1])
+        if calendar is None: return 
+        c1, c2 = st.columns([3, 1.2]) 
+        
         with c1:
-            st.markdown("### 📆 이달의 주요 일정")
+            st.subheader("📆 스케줄 확인")
+            if "selected_event" not in st.session_state: st.session_state.selected_event = None
+
+            # 데이터 로드
+            schedules = db.get_schedules(include_completed=True)
+            duties = db.get_duty_roster()
+            calendar_events = []
+            
+            # (1) 스케줄 이벤트 변환
+            color_map = {"점검": "#3b82f6", "월간": "#8b5cf6", "회의": "#10b981", "행사": "#f59e0b", "기타": "#6b7280"}
+            if schedules:
+                for s in schedules:
+                    # [Safety] 날짜 유효성 검사 (ValueError 방지)
+                    try:
+                        # start_time이 비어있거나 이상하면 건너뜀
+                        if not s.get('start_time'): continue
+                        pd.to_datetime(s['start_time']) # 테스트 파싱
+                    except: continue
+
+                    status = s.get('status', '진행중')
+                    bg_color = color_map.get(s.get('category', '기타'), "#6b7280")
+                    if status == '완료': bg_color = "#9ca3af" 
+                    
+                    prefix = "✅ " if status == '완료' else "⏳ "
+                    calendar_events.append({
+                        "title": prefix + s['title'],
+                        "start": s['start_time'], "end": s['end_time'],
+                        "backgroundColor": bg_color,
+                        "extendedProps": {
+                            "type": "schedule", "id": str(s['id']), "real_title": s['title'],
+                            "category": s.get('category', '기타'), "location": s.get('location', ''),
+                            "status": status, "assignee": s.get('assignee', '')
+                        }
+                    })
+
+            # (2) 당직(Duty) 이벤트 변환
+            for d in duties:
+                calendar_events.append({
+                    "title": f"👮‍♂️ {d['worker_name']}", "start": d['date'], "allDay": True,
+                    "backgroundColor": "#16a34a", "display": "block",
+                    "extendedProps": { "type": "duty", "id": str(d['id']) }
+                })
+
+            # 캘린더 그리기
+            cal_state = calendar(events=calendar_events, options={
+                "headerToolbar": {"left": "prev,next today", "center": "title", "right": "dayGridMonth,listMonth"},
+                "initialView": "dayGridMonth", "locale": "ko", "fixedWeekCount": False, "displayEventTime": False
+            }, custom_css=calendar_custom_css, key="my_calendar_v300")
+
+            # 이벤트 클릭 시 수정 폼
+            if cal_state.get("eventClick"): st.session_state.selected_event = cal_state["eventClick"]["event"]
+
+            if st.session_state.selected_event:
+                evt = st.session_state.selected_event
+                props = evt["extendedProps"]
+                if props.get("type") == "schedule":
+                    st.divider()
+                    with st.form(key=f"edit_sch_cal_{props['id']}"):
+                        st.info(f"📍 {props.get('location')} | 담당: {props.get('assignee', '미정')}")
+                        e_title = st.text_input("업무명", value=props['real_title'])
+                        e_status = st.selectbox("상태", ["진행중", "완료"], index=0 if props['status'] == '진행중' else 1)
+                        if st.form_submit_button("상태 저장"):
+                            db.update_schedule(props['id'], title=e_title, status=e_status)
+                            st.session_state.selected_event = None; st.rerun()
+
         with c2:
-            if st.button("➕ 일정 등록"):
-                st.session_state['show_sched_form'] = not st.session_state.get('show_sched_form', False)
-
-        # 일정 등록 폼
-        if st.session_state.get('show_sched_form', False):
-            with st.form("add_sched_form"):
-                st.write("새 일정 추가")
-                sc1, sc2 = st.columns(2)
-                title = sc1.text_input("일정명 (예: 정기점검)")
-                cat = sc2.selectbox("구분", ["점검", "공사", "회의", "휴가", "기타"])
-                d1 = sc1.date_input("시작일", date.today())
-                d2 = sc2.date_input("종료일", date.today())
-                desc = st.text_area("상세 내용")
-                author = st.text_input("등록자")
-                
-                if st.form_submit_button("저장"):
-                    # [수정] DB 함수 인자 개수(location, assignee)를 맞춰주어 에러 방지
-                    res = db.add_schedule(title, d1, d2, cat, desc, author, location="현장", assignee=author)
-                    
-                    # 결과가 튜플일 경우와 불리언일 경우 모두 처리
-                    is_success = res[0] if isinstance(res, tuple) else res
-                    
-                    if is_success:
-                        st.success("등록되었습니다.")
-                        st.session_state['show_sched_form'] = False
-                        st.rerun()
-                    else:
-                        st.error("등록 실패")
-
-        # 일정 목록 조회
-        schedules = db.get_schedules() 
-        if schedules:
-            df = pd.DataFrame(schedules)
+            st.markdown("### ➕ 일정 등록")
+            n_title = st.text_input("제목", key="n_tit")
+            n_loc = st.text_input("장소", key="n_loc")
+            n_assignee = st.text_input("담당자", key="n_asgn")
+            n_date = st.date_input("날짜", key="n_d", value=date.today())
+            time_options = [f"{h:02d}:{m:02d}" for h in range(7, 22) for m in (0, 30)] 
+            n_time_str = st.selectbox("시간", time_options, index=6)
             
-            # [핵심 수정] errors='coerce' 추가 -> 날짜 형식이 깨진 데이터가 있어도 무시하고 진행
-            if 'start_time' in df.columns:
-                df['start_date'] = pd.to_datetime(df['start_time'], errors='coerce').dt.date
-            if 'end_time' in df.columns:
-                df['end_date'] = pd.to_datetime(df['end_time'], errors='coerce').dt.date
-            
-            # 날짜 변환 실패로 NaT(결측치)가 된 행 제거 (안전장치)
-            df = df.dropna(subset=['start_date'])
+            if st.button("업무 추가", type="primary", use_container_width=True):
+                if n_title:
+                    h, m = map(int, n_time_str.split(':'))
+                    start = datetime.combine(n_date, datetime.now().replace(hour=h, minute=m).time())
+                    # 인자 개수 맞춤
+                    res = db.add_schedule(title=n_title, start_dt=start.isoformat(), end_dt=(start + timedelta(hours=1)).isoformat(), cat="기타", desc="", user="관리자", location=n_loc, assignee=n_assignee, sub_tasks=[])
+                    if res: st.success("저장됨!"); time.sleep(0.5); st.rerun()
+                    else: st.error("실패")
 
-            # 만약 데이터가 비어서 컬럼 변환이 안 된 경우 방어
-            if 'start_date' in df.columns and 'end_date' in df.columns and not df.empty:
-                # 날짜순 정렬
-                df = df.sort_values(by='start_date')
-                
-                for _, row in df.iterrows():
-                    d_str = f"{row['start_date']}"
-                    # 종료일이 있고 시작일과 다르면 표시
-                    if pd.notnull(row['end_date']) and row['start_date'] != row['end_date']:
-                        d_str += f" ~ {row['end_date']}"
-                        
-                    with st.expander(f"[{row['category']}] {d_str} : {row['title']}"):
-                        st.write(f"**내용:** {row.get('description', '-')}")
-                        st.write(f"**등록자:** {row.get('created_by') or row.get('author') or '-'}")
-                        
-                        if st.button("삭제", key=f"del_sched_{row['id']}"):
-                            db.delete_schedule(row['id'])
-                            st.rerun()
-            else:
-                st.info("표시할 수 있는 유효한 일정이 없습니다.")
-        else:
-            st.info("등록된 일정이 없습니다.")
+            st.divider()
+            st.markdown("### 👮‍♂️ 당직 등록")
+            m_date = st.date_input("당직 날짜", key="m_duty_d", value=date.today())
+            m_name = st.text_input("당직자 이름", key="m_duty_n")
+            if st.button("당직 저장", use_container_width=True):
+                if m_name: db.set_duty_worker(str(m_date), m_name); st.success("저장됨"); st.rerun()
 
     # ------------------------------------------------------------------
-    # [Tab 2] 연락처 관리
+    # [Tab 2] 정밀 업무 관리
     # ------------------------------------------------------------------
     with tab2:
-        c1, c2 = st.columns([3, 1])
-        with c1:
-            st.markdown("### 📒 업체/담당자 비상 연락망")
-        with c2:
-            if st.button("➕ 연락처 추가"):
-                st.session_state['show_contact_form'] = not st.session_state.get('show_contact_form', False)
-
-        # 연락처 등록 폼
-        if st.session_state.get('show_contact_form', False):
-            with st.form("add_contact_form"):
-                cc1, cc2 = st.columns(2)
-                cat = cc1.selectbox("분류", ["제조사", "시약업체", "공사업체", "유관기관", "기타"])
-                comp = cc2.text_input("업체명")
-                name = cc1.text_input("담당자명")
-                phone = cc2.text_input("전화번호")
-                email = st.text_input("이메일")
-                memo = st.text_area("메모 (주요 취급 품목 등)")
-                
-                if st.form_submit_button("저장"):
-                    if db.add_contact(comp, name, phone, email, cat, memo, "일반"):
-                        st.success("저장되었습니다.")
-                        st.session_state['show_contact_form'] = False
-                        st.rerun()
-                    else:
-                        st.error("저장 실패")
-
-        # 연락처 목록
-        contacts = db.get_contacts()
-        if contacts:
-            df_c = pd.DataFrame(contacts)
+        st.subheader("🚀 공정률 관리")
+        view_all = st.checkbox("완료된 업무 포함 보기", value=False)
+        all_tasks = db.get_schedules(include_completed=view_all)
+        
+        if all_tasks:
+            # [Fix] ValueError 방지 로직 적용
+            df = pd.DataFrame(all_tasks)
+            if 'start_time' in df.columns:
+                df['start_date'] = pd.to_datetime(df['start_time'], errors='coerce').dt.date
+            else:
+                df['start_date'] = None
             
-            # DB 컬럼이 tags인데 UI에서 category로 쓰려는 경우 매핑
-            if 'tags' in df_c.columns and 'category' not in df_c.columns:
-                df_c['category'] = df_c['tags']
-                
-            # 실제로 존재하는 컬럼만 선택해서 표시 (KeyError 방지)
-            cols = ['category', 'company_name', 'manager_name', 'phone', 'email', 'memo']
-            if 'person_name' in df_c.columns:
-                df_c['manager_name'] = df_c['person_name']
+            # NaT 제거
+            df = df.dropna(subset=['start_date']).sort_values('start_date')
             
-            available_cols = [c for c in cols if c in df_c.columns]
-            
-            st.dataframe(
-                df_c[available_cols],
-                column_config={
-                    "category": "분류", "company_name": "업체명", "manager_name": "담당자",
-                    "phone": "전화번호", "email": "이메일", "memo": "비고"
-                },
-                use_container_width=True
-            )
+            for _, row in df.iterrows():
+                with st.expander(f"{row['start_date']} : {row['title']} ({row.get('status','-')})"):
+                    st.write(f"담당: {row.get('assignee','-')} | 장소: {row.get('location','-')}")
+                    if st.button("삭제", key=f"del_t_{row['id']}"):
+                        db.delete_schedule(row['id']); st.rerun()
         else:
-            st.info("등록된 연락처가 없습니다.")
+            st.info("표시할 업무가 없습니다.")
+
+    # ------------------------------------------------------------------
+    # [Tab 3] 업체 연락처
+    # ------------------------------------------------------------------
+    with tab3:
+        st.subheader("📒 업체 연락처 관리")
+        with st.expander("➕ 새 연락처 등록"):
+            with st.form("add_contact_form", clear_on_submit=True):
+                c1, c2 = st.columns(2)
+                comp = c1.text_input("업체명")
+                name = c2.text_input("담당자명")
+                phone = c1.text_input("전화번호")
+                cat = c2.selectbox("분류", ["제조사", "시약", "공사", "기타"])
+                memo = st.text_area("메모")
+                if st.form_submit_button("저장"):
+                    if db.add_contact(comp, name, phone, "", cat, memo, "일반"):
+                        st.success("저장 완료"); st.rerun()
+
+        search = st.text_input("🔍 검색", placeholder="업체명, 담당자...")
+        contacts = db.get_contacts()
+        
+        if contacts:
+            for c in contacts:
+                if search and search not in str(c.values()): continue
+                with st.container(border=True):
+                    l, r = st.columns([4, 1])
+                    with l:
+                        st.markdown(f"**{c['company_name']}** ({c.get('person_name','')})")
+                        if c.get('phone'): st.markdown(f"📞 {c['phone']}")
+                        if c.get('memo'): st.caption(c['memo'])
+                    with r:
+                        if st.button("🗑️", key=f"del_c_{c['id']}"):
+                            db.delete_contact(c['id']); st.rerun()
