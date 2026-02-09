@@ -50,7 +50,7 @@ st.markdown("""<style>
 # --------------------------------------------------------------------------
 _, menu_col, _ = st.columns([1, 2, 1])
 with menu_col:
-    # [UPDATE] 메뉴 구조 재정립 (협업 공간 추가)
+    # [UPDATE] 메뉴 구조 재정립 (협업 공간 포함)
     mode = st.selectbox("작업 메뉴 선택", 
                         ["🔍 통합 지식 검색", 
                          "👥 현장 지식 커뮤니티", 
@@ -76,6 +76,7 @@ elif mode == "👥 현장 지식 커뮤니티":
 
 elif mode == "🤝 협업 공간 (Collab)":
     # [NEW] 캘린더, 일정, 연락처 관리 (db_collab의 Schedule/Contact 기능 사용)
+    # 반드시 ui_collab.py의 KeyError 수정본이 적용되어 있어야 합니다.
     ui_collab.show_collab_ui(db)
 
 elif mode == "📦 소모품 재고관리":
@@ -93,7 +94,7 @@ elif mode == "📄 문서(매뉴얼) 등록":
     elif hasattr(ui_admin, 'show_manual_upload_ui'):
         ui_admin.show_manual_upload_ui(ai_model, db)
     else:
-        st.error("문서 등록 UI 함수를 찾을 수 없습니다.")
+        st.error("문서 등록 UI 함수를 찾을 수 없습니다. (ui_admin.py 확인 필요)")
 
 elif mode == "📝 지식 등록":
     # 텍스트 지식 직접 등록
