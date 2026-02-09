@@ -1,4 +1,3 @@
-# ui_collab.py
 import streamlit as st
 import pandas as pd
 from datetime import date
@@ -32,27 +31,51 @@ def show_collab_ui(db):
                 author = st.text_input("등록자")
                 
                 if st.form_submit_button("저장"):
-                    if db.add_schedule(title, d1, d2, cat, desc, author):
+                    # [수정] DB 함수 인자 개수(location, assignee)를 맞춰주어 에러 방지
+                    # (title, start_dt, end_dt, cat, desc, user, location, assignee)
+                    res = db.add_schedule(title, d1, d2, cat, desc, author, location="현장", assignee=author)
+                    
+                    # 결과가 튜플일 경우와 불리언일 경우 모두 처리
+                    is_success = res[0] if isinstance(res, tuple) else res
+                    
+                    if is_success:
                         st.success("등록되었습니다.")
                         st.session_state['show_sched_form'] = False
                         st.rerun()
+                    else:
+                        st.error("등록 실패")
 
         # 일정 목록 조회
-        schedules = db.get_schedules() # 전체 조회 (필요 시 월별 필터 추가 가능)
+        schedules = db.get_schedules() 
         if schedules:
-            # 캘린더처럼 보이게 하거나 리스트로 출력
             df = pd.DataFrame(schedules)
-            df['start_date'] = pd.to_datetime(df['start_date']).dt.date
-            df['end_date'] = pd.to_datetime(df['end_date']).dt.date
             
-            # 보기 좋게 출력
-            for _, row in df.iterrows():
-                with st.expander(f"[{row['category']}] {row['start_date']} ~ {row['end_date']} : {row['title']}"):
-                    st.write(f"**내용:** {row['description']}")
-                    st.write(f"**등록자:** {row['author']}")
-                    if st.button("삭제", key=f"del_sched_{row['id']}"):
-                        db.delete_schedule(row['id'])
-                        st.rerun()
+            # [핵심 수정] DB 컬럼(start_time)을 UI 컬럼(start_date)으로 변환
+            # KeyError 방지 로직
+            if 'start_time' in df.columns:
+                df['start_date'] = pd.to_datetime(df['start_time']).dt.date
+            if 'end_time' in df.columns:
+                df['end_date'] = pd.to_datetime(df['end_time']).dt.date
+            
+            # 만약 데이터가 비어서 컬럼 변환이 안 된 경우 방어
+            if 'start_date' in df.columns and 'end_date' in df.columns:
+                # 날짜순 정렬
+                df = df.sort_values(by='start_date')
+                
+                for _, row in df.iterrows():
+                    d_str = f"{row['start_date']}"
+                    if row['start_date'] != row['end_date']:
+                        d_str += f" ~ {row['end_date']}"
+                        
+                    with st.expander(f"[{row['category']}] {d_str} : {row['title']}"):
+                        st.write(f"**내용:** {row.get('description', '-')}")
+                        st.write(f"**등록자:** {row.get('created_by') or row.get('author') or '-'}")
+                        
+                        if st.button("삭제", key=f"del_sched_{row['id']}"):
+                            db.delete_schedule(row['id'])
+                            st.rerun()
+            else:
+                st.warning("데이터 형식이 올바르지 않습니다.")
         else:
             st.info("등록된 일정이 없습니다.")
 
@@ -79,18 +102,33 @@ def show_collab_ui(db):
                 memo = st.text_area("메모 (주요 취급 품목 등)")
                 
                 if st.form_submit_button("저장"):
-                    if db.add_contact(cat, comp, name, phone, email, memo):
+                    # add_contact 인자 순서: company, name, phone, email, tags, memo, rank
+                    if db.add_contact(comp, name, phone, email, cat, memo, "일반"):
                         st.success("저장되었습니다.")
                         st.session_state['show_contact_form'] = False
                         st.rerun()
+                    else:
+                        st.error("저장 실패")
 
         # 연락처 목록
         contacts = db.get_contacts()
         if contacts:
             df_c = pd.DataFrame(contacts)
-            # 깔끔한 테이블 뷰
+            
+            # DB 컬럼이 tags인데 UI에서 category로 쓰려는 경우 매핑
+            if 'tags' in df_c.columns and 'category' not in df_c.columns:
+                df_c['category'] = df_c['tags']
+                
+            # 실제로 존재하는 컬럼만 선택해서 표시 (KeyError 방지)
+            cols = ['category', 'company_name', 'manager_name', 'phone', 'email', 'memo']
+            # DB 컬럼명이 person_name인 경우 매핑
+            if 'person_name' in df_c.columns:
+                df_c['manager_name'] = df_c['person_name']
+            
+            available_cols = [c for c in cols if c in df_c.columns]
+            
             st.dataframe(
-                df_c[['category', 'company_name', 'manager_name', 'phone', 'email', 'memo']],
+                df_c[available_cols],
                 column_config={
                     "category": "분류", "company_name": "업체명", "manager_name": "담당자",
                     "phone": "전화번호", "email": "이메일", "memo": "비고"
