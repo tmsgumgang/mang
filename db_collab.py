@@ -3,12 +3,27 @@ from datetime import datetime
 
 class DBCollab:
     """
-    [Extension] 현장 협업 통합 모듈 (Inventory + Schedule + Contact + Community)
-    - DBManager가 이 클래스를 상속받아 사용합니다.
+    [Extension] 현장 협업 통합 모듈
+    기능: 재고관리, 일정/당직(캘린더), 연락처, 지식공유 게시판
     """
     
+    # ---------------------------------------------------------
+    # [Helper] 텍스트 처리
+    # ---------------------------------------------------------
+    def _collab_clean_text(self, text):
+        if not text or str(text).lower() in ['none', 'nan', 'null', '미지정']: return "미지정"
+        return str(text).strip()
+
+    def _collab_normalize_tags(self, raw_tags):
+        if not raw_tags or str(raw_tags).lower() in ['none', 'nan', 'null']: return "공통"
+        tags = [t.strip() for t in str(raw_tags).split(',')]
+        clean_tags = []
+        for tag in tags:
+            if tag and tag not in set(clean_tags): clean_tags.append(tag)
+        return ", ".join(clean_tags) if clean_tags else "공통"
+
     # =========================================================
-    # [Inventory] 재고관리 (관리자용 CRUD) - 원본 복구
+    # [1] 📦 재고관리 (Inventory)
     # =========================================================
     def get_inventory_items(self):
         try: return self.supabase.table("inventory_items").select("*").order("category").order("item_name").execute().data
@@ -70,22 +85,15 @@ class DBCollab:
         try:
             current = self.supabase.table("inventory_items").select("current_qty").eq("id", item_id).execute()
             old_qty = current.data[0]['current_qty'] if current.data else 0
-            
             if old_qty == new_qty: return True, "변경 없음"
-
             self.supabase.table("inventory_items").update({"current_qty": new_qty}).eq("id", item_id).execute()
-            
             diff = new_qty - old_qty
-            log_type = "입고" if diff > 0 else "출고"
-            reason = f"엑셀 갱신 ({old_qty} → {new_qty})"
-            
-            self.log_inventory_change(item_id, log_type, abs(diff), worker, reason)
+            self.log_inventory_change(item_id, "입고" if diff > 0 else "출고", abs(diff), worker, f"엑셀 갱신 ({old_qty} -> {new_qty})")
             return True, "갱신 성공"
-        except Exception as e:
-            return False, str(e)
+        except Exception as e: return False, str(e)
 
     # =========================================================
-    # [Collab] 일정 및 당직 (Schedule) - 원본 복구
+    # [2] 📅 일정 및 당직 (Schedule & Duty)
     # =========================================================
     def get_schedules(self, include_completed=True):
         try:
@@ -143,7 +151,7 @@ class DBCollab:
         except: return False
 
     # =========================================================
-    # [Collab] 연락처 (Contact) - 원본 복구
+    # [3] 📞 업체 연락처 (Contact)
     # =========================================================
     def get_contacts(self):
         try: return self.supabase.table("collab_contacts").select("*").order("company_name").execute().data or []
@@ -168,20 +176,8 @@ class DBCollab:
         except: return False
 
     # =========================================================
-    # [Community] 게시판 (Community) - [추가됨]
+    # [4] 👥 현장 지식 커뮤니티 (Community) - [누락 복구]
     # =========================================================
-    def _collab_clean_text(self, text):
-        if not text or str(text).lower() in ['none', 'nan', 'null', '미지정']: return "미지정"
-        return str(text).strip()
-
-    def _collab_normalize_tags(self, raw_tags):
-        if not raw_tags or str(raw_tags).lower() in ['none', 'nan', 'null']: return "공통"
-        tags = [t.strip() for t in str(raw_tags).split(',')]
-        clean_tags = []
-        for tag in tags:
-            if tag and tag not in set(clean_tags): clean_tags.append(tag)
-        return ", ".join(clean_tags) if clean_tags else "공통"
-
     def get_community_posts(self):
         try: return self.supabase.table("community_posts").select("*").order("created_at", desc=True).execute().data
         except: return []
@@ -222,7 +218,6 @@ class DBCollab:
 
     def promote_to_knowledge(self, issue, solution, mfr, model, item, author="익명"):
         try:
-            # 순환 참조 방지용 내부 import
             from logic_ai import get_embedding
             payload = {
                 "domain": "기술지식", "issue": issue, "solution": solution, 
@@ -243,14 +238,10 @@ class DBCollab:
             if res.data:
                 for p in res.data:
                     results.append({
-                        "id": p['id'],
-                        "content": p['title'] + "\n" + p['content'][:100],
-                        "source_table": "community_posts",
-                        "similarity": 0.90,
-                        "manufacturer": p.get('manufacturer', '게시판'),
-                        "model_name": p.get('model_name', 'User'),
-                        "measurement_item": p.get('measurement_item', 'Q&A'),
-                        "is_verified": False
+                        "id": p['id'], "content": p['title'] + "\n" + p['content'][:100],
+                        "source_table": "community_posts", "similarity": 0.90,
+                        "manufacturer": p.get('manufacturer', '게시판'), "model_name": p.get('model_name', 'User'),
+                        "measurement_item": p.get('measurement_item', 'Q&A'), "is_verified": False
                     })
             return results
         except: return []
