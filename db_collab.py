@@ -216,7 +216,7 @@ class DBCollab:
             return True if res.data else False
         except: return False
 
-    # [수정됨] 임베딩 실패 시 에러 처리 로직 추가
+    # [수정된 핵심 함수] 임베딩 실패 시 에러 처리 및 메시지 반환
     def promote_to_knowledge(self, issue, solution, mfr, model, item, author="익명"):
         try:
             from logic_ai import get_embedding
@@ -227,7 +227,7 @@ class DBCollab:
             
             # [안전장치] 벡터 생성 실패(빈 리스트) 시 DB 저장 중단 및 에러 반환
             if not vec or len(vec) == 0:
-                return False, "AI 모델이 텍스트를 분석하지 못했습니다. (임베딩 실패)"
+                return False, "AI 모델이 텍스트를 분석하지 못했습니다. (임베딩 실패: 잠시 후 다시 시도하거나, API 상태를 확인하세요)"
 
             payload = {
                 "domain": "기술지식", "issue": issue, "solution": solution, 
@@ -236,7 +236,7 @@ class DBCollab:
                 "measurement_item": self._collab_normalize_tags(item), "registered_by": author
             }
             res = self.supabase.table("knowledge_base").insert(payload).execute()
-            return (True, "성공") if res.data else (False, "실패")
+            return (True, "성공") if res.data else (False, "DB 응답 없음")
         except Exception as e: return (False, str(e))
     
     def search_community_match(self, keyword):
