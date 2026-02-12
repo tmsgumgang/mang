@@ -176,7 +176,7 @@ class DBCollab:
         except: return False
 
     # =========================================================
-    # [4] 👥 현장 지식 커뮤니티 (Community) - [누락 복구]
+    # [4] 👥 현장 지식 커뮤니티 (Community)
     # =========================================================
     def get_community_posts(self):
         try: return self.supabase.table("community_posts").select("*").order("created_at", desc=True).execute().data
@@ -216,12 +216,22 @@ class DBCollab:
             return True if res.data else False
         except: return False
 
+    # [수정됨] 임베딩 실패 시 에러 처리 로직 추가
     def promote_to_knowledge(self, issue, solution, mfr, model, item, author="익명"):
         try:
             from logic_ai import get_embedding
+            
+            # 검색 정확도를 위해 이슈와 솔루션을 합쳐서 임베딩
+            text_to_embed = f"{issue}\n{solution}"
+            vec = get_embedding(text_to_embed)
+            
+            # [안전장치] 벡터 생성 실패(빈 리스트) 시 DB 저장 중단 및 에러 반환
+            if not vec or len(vec) == 0:
+                return False, "AI 모델이 텍스트를 분석하지 못했습니다. (임베딩 실패)"
+
             payload = {
                 "domain": "기술지식", "issue": issue, "solution": solution, 
-                "embedding": get_embedding(issue), "semantic_version": 1, "is_verified": True, 
+                "embedding": vec, "semantic_version": 1, "is_verified": True, 
                 "manufacturer": self._collab_clean_text(mfr), "model_name": self._collab_clean_text(model), 
                 "measurement_item": self._collab_normalize_tags(item), "registered_by": author
             }
