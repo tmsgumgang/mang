@@ -7,19 +7,35 @@ from prompts import PROMPTS
 @st.cache_data(show_spinner=False)
 def get_embedding(text):
     """
-    [V243] 임베딩 모델 Fallback 로직 추가 (004 모델 실패 시 001 사용)
-    - Google API의 모델 버전 이슈나 지역 제한으로 인한 404 오류 방지
+    [V243] 임베딩 모델 Fallback 로직 보완
+    - text-embedding-004 실패 시 embedding-001 사용
+    - [Fix] embedding-001은 task_type 파라미터를 지원하지 않으므로 제거하여 호출
     """
     cleaned_text = clean_text_for_db(text)
+    
+    # 1. 텍스트가 비어있으면 API 호출 없이 종료 (불필요한 에러 방지)
+    if not cleaned_text:
+        return []
+
     try:
         # 1순위: 최신 모델 시도 (성능 우수)
-        result = genai.embed_content(model="models/text-embedding-004", content=cleaned_text, task_type="retrieval_document")
+        # task_type은 최신 모델에서 검색 성능을 높여줍니다.
+        result = genai.embed_content(
+            model="models/text-embedding-004", 
+            content=cleaned_text, 
+            task_type="retrieval_document"
+        )
         return result['embedding']
     except Exception as e:
         # 2순위: 실패 시 안정화(구형) 모델 사용 (호환성 우수)
         try:
+            # [핵심 수정] embedding-001 모델은 task_type을 지원하지 않을 수 있어 제거함
             # print(f"⚠️ 임베딩 모델 004 실패 -> 001로 전환: {e}")
-            result = genai.embed_content(model="models/embedding-001", content=cleaned_text, task_type="retrieval_document")
+            result = genai.embed_content(
+                model="models/embedding-001", 
+                content=cleaned_text
+                # task_type 제거됨
+            )
             return result['embedding']
         except Exception as e2:
             print(f"❌ 모든 임베딩 모델 실패: {e2}")
