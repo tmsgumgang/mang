@@ -5,7 +5,7 @@ class DBManager:
         self.supabase = supabase_client
 
     # =========================================================
-    # [Helper] 데이터 정규화
+    # [Helper] Data Normalization
     # =========================================================
     def _normalize_tags(self, raw_tags):
         if not raw_tags or str(raw_tags).lower() in ['none', 'nan', 'null']:
@@ -183,11 +183,23 @@ class DBManager:
             return True if res.data else False
         except: return False
 
+    # [CRITICAL FIX] Added embedding validation to prevent DB crashes
     def promote_to_knowledge(self, issue, solution, mfr, model, item, author="익명"):
         try:
             from logic_ai import get_embedding
+            
+            # Combine text for better embedding context
+            full_text = f"{issue}\n{solution}"
+            vec = get_embedding(full_text)
+            
+            # [SAFETY CHECK] If embedding fails (empty list), stop here.
+            # This prevents the 'vector must have at least 1 dimension' error.
+            if not vec or len(vec) == 0:
+                return False, "AI embedding failed. (Please check API status or try again later)"
+
             payload = {
-                "domain": "기술지식", "issue": issue, "solution": solution, "embedding": get_embedding(issue), 
+                "domain": "기술지식", "issue": issue, "solution": solution, 
+                "embedding": vec, 
                 "semantic_version": 1, "is_verified": True, 
                 "manufacturer": self._clean_text(mfr), "model_name": self._clean_text(model), "measurement_item": self._normalize_tags(item),
                 "registered_by": author 
