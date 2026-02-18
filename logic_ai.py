@@ -7,36 +7,41 @@ from prompts import PROMPTS
 @st.cache_data(show_spinner=False)
 def get_embedding(text):
     """
-    [V243] Embedding Model Fallback Logic Improved
-    - Primary: text-embedding-004 (High performance, requires task_type)
-    - Fallback: embedding-001 (High stability, DOES NOT support task_type)
+    [V244 안정화 패치]
+    - 최신 모델(004)과 구형 라이브러리 간 호환성 문제 해결을 위해
+    - 가장 안정적인 'embedding-001' 모델을 1순위로 사용합니다.
+    - 001 모델은 task_type 파라미터를 지원하지 않으므로 제거했습니다.
     """
     cleaned_text = clean_text_for_db(text)
     
-    # [Optimization] Return early if text is empty to prevent API errors
+    # 1. 텍스트가 없으면 API 호출 방지 (비용/에러 절약)
     if not cleaned_text:
         return []
 
     try:
-        # 1. Try Latest Model (Best Performance)
+        # [변경 1순위] 안정적인 구형 모델 사용 (task_type 옵션 제거 필수)
         result = genai.embed_content(
-            model="models/text-embedding-004", 
-            content=cleaned_text, 
-            task_type="retrieval_document"
+            model="models/embedding-001", 
+            content=cleaned_text
         )
         return result['embedding']
     except Exception as e:
-        # 2. Fallback to Stable Model (Compatibility Mode)
+        # 1차 실패 시 로그 출력
+        print(f"⚠️ 1차 임베딩(001) 실패: {e}")
+        
         try:
-            # [CRITICAL FIX] Removed 'task_type' argument for embedding-001
-            # The 001 model does not support this parameter and causes crashes if included.
+            # [변경 2순위] 1차가 안 될 경우에만 최신 모델 시도
             result = genai.embed_content(
-                model="models/embedding-001", 
-                content=cleaned_text
+                model="models/text-embedding-004", 
+                content=cleaned_text,
+                task_type="retrieval_document"
             )
             return result['embedding']
         except Exception as e2:
-            print(f"❌ All embedding models failed: {e2}")
+            # 최종 실패 시 에러 로그 출력
+            print(f"❌ 모든 임베딩 모델 실패: {e2}")
+            # 화면에도 에러 원인을 표시하여 디버깅 도움
+            st.error(f"AI 임베딩 오류: {e2}")
             return []
 
 def semantic_split_v143(text, target_size=1200, min_size=600):
@@ -67,7 +72,7 @@ def extract_json(text):
     except: return None
 
 # --------------------------------------------------------------------------------
-# [V206] Automatic Keyword Tagging Engine
+# [V206] 자동 키워드 태깅(Auto-Tagging) 엔진
 # --------------------------------------------------------------------------------
 def extract_metadata_ai(ai_model, content):
     try:
@@ -176,13 +181,13 @@ def generate_relevant_summary(ai_model, query, data):
     return res.text
 
 # --------------------------------------------------------------------------------
-# [NEW V246] Graph RAG Relation Extraction Engine
+# [NEW V246] Graph RAG 관계 추출 엔진 (제조사 관계 추가)
 # --------------------------------------------------------------------------------
 def extract_triples_from_text(ai_model, text):
     """
-    Extracts (Subject) -> [Relation] -> (Object) triples from text.
+    텍스트에서 (주어) -> [관계] -> (목적어) 트리플을 추출합니다.
     """
-    # Graph Extraction Prompt
+    # Graph Extraction 전용 프롬프트 (제조사 관계 추가됨)
     graph_prompt = f"""
     You are an expert Data Engineer specializing in Knowledge Graphs.
     Analyze the provided technical text and extract relationships between entities.
