@@ -1,29 +1,63 @@
 import re
 import json
+import requests
 import streamlit as st
 import google.generativeai as genai
 from prompts import PROMPTS 
 
-# [V247] 임베딩 로직 안정화: 404 에러 원천 차단
+# [V248] 임베딩 로직 안정화: REST API 직접 호출 (404 에러 원천 차단)
 @st.cache_data(show_spinner=False)
 def get_embedding(text):
     """
-    - API v1beta 환경 404 에러를 피하기 위해 최신 모델(004) 호출을 제거합니다.
-    - 전 세계 100% 호환되는 'models/embedding-001' 단일 모델로 빠르고 안전하게 임베딩을 수행합니다.
+    - 구형 라이브러리의 내부 버그(404 에러)를 피하기 위해,
+    - 라이브러리를 거치지 않고 구글 서버로 직접 데이터를 쏴서 벡터를 받아옵니다.
     """
     cleaned_text = clean_text_for_db(text)
-    if not cleaned_text: return []
+    if not cleaned_text: 
+        return []
 
     try:
-        # 안정적인 구형 모델 전용 호출 (task_type 등 충돌 옵션 제거)
-        result = genai.embed_content(
-            model="models/embedding-001", 
-            content=cleaned_text
-        )
-        return result['embedding']
+        api_key = st.secrets["GEMINI_API_KEY"]
+        # 최신 모델부터 구형 모델까지 순서대로 구글 서버에 직접 찔러봅니다.
+        models_to_try = ["text-embedding-004", "embedding-001"]
+        last_error = ""
+
+        for model_name in models_to_try:
+            try:
+                # 구글 서버 다이렉트 주소
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:embedContent?key={api_key}"
+                headers = {'Content-Type': 'application/json'}
+                payload = {
+                    "model": f"models/{model_name}",
+                    "content": {
+                        "parts": [{"text": cleaned_text}]
+                    }
+                }
+                
+                # 라이브러리 없이 직접 통신!
+                response = requests.post(url, headers=headers, json=payload)
+                
+                if response.status_code == 200:
+                    res_data = response.json()
+                    if 'embedding' in res_data and 'values' in res_data['embedding']:
+                        return res_data['embedding']['values']
+                else:
+                    last_error = f"{response.status_code} - {response.text}"
+                    print(f"⚠️ {model_name} 직접 호출 실패: {last_error}")
+                    
+            except Exception as req_err:
+                last_error = str(req_err)
+                print(f"⚠️ {model_name} 네트워크 에러: {last_error}")
+
+        # 모든 모델 시도 실패 시
+        error_msg = f"🚨 AI 임베딩 서버 직접 통신 실패.\n원인: {last_error}"
+        print(error_msg)
+        st.error(error_msg)
+        return []
+
     except Exception as e:
-        print(f"❌ 임베딩 생성 실패: {e}")
-        st.error(f"AI 임베딩 생성에 실패했습니다: {e}")
+        print(f"❌ 임베딩 함수 내부 에러: {e}")
+        st.error(f"임베딩 로직 오류: {e}")
         return []
 
 def semantic_split_v143(text, target_size=1200, min_size=600):
