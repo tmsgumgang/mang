@@ -5,59 +5,43 @@ import streamlit as st
 import google.generativeai as genai
 from prompts import PROMPTS 
 
-# [V248] 임베딩 로직 안정화: REST API 직접 호출 (404 에러 원천 차단)
-@st.cache_data(show_spinner=False)
+# [진단 모드] 에러를 숨기지 않고, 캐시도 사용하지 않아 매번 구글 서버에 직접 물어봅니다.
 def get_embedding(text):
-    """
-    - 구형 라이브러리의 내부 버그(404 에러)를 피하기 위해,
-    - 라이브러리를 거치지 않고 구글 서버로 직접 데이터를 쏴서 벡터를 받아옵니다.
-    """
     cleaned_text = clean_text_for_db(text)
-    if not cleaned_text: 
-        return []
+    if not cleaned_text: return []
 
     try:
         api_key = st.secrets["GEMINI_API_KEY"]
-        # 최신 모델부터 구형 모델까지 순서대로 구글 서버에 직접 찔러봅니다.
-        models_to_try = ["text-embedding-004", "embedding-001"]
-        last_error = ""
+        
+        # 진단 1. 이 API 키가 사용할 수 있는 진짜 모델 목록 조회
+        list_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
+        list_res = requests.get(list_url)
+        if list_res.status_code == 200:
+            models = [m['name'] for m in list_res.json().get('models', []) if 'embedContent' in m.get('supportedGenerationMethods', [])]
+            st.warning(f"🔎 [진단 1] 현재 API 키로 허용된 임베딩 모델 목록:\n{models}")
+        else:
+            st.error(f"🚨 [진단 1 실패] API 키 목록 조회 권한 거부:\n{list_res.text}")
 
-        for model_name in models_to_try:
-            try:
-                # 구글 서버 다이렉트 주소
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:embedContent?key={api_key}"
-                headers = {'Content-Type': 'application/json'}
-                payload = {
-                    "model": f"models/{model_name}",
-                    "content": {
-                        "parts": [{"text": cleaned_text}]
-                    }
-                }
-                
-                # 라이브러리 없이 직접 통신!
-                response = requests.post(url, headers=headers, json=payload)
-                
-                if response.status_code == 200:
-                    res_data = response.json()
-                    if 'embedding' in res_data and 'values' in res_data['embedding']:
-                        return res_data['embedding']['values']
-                else:
-                    last_error = f"{response.status_code} - {response.text}"
-                    print(f"⚠️ {model_name} 직접 호출 실패: {last_error}")
-                    
-            except Exception as req_err:
-                last_error = str(req_err)
-                print(f"⚠️ {model_name} 네트워크 에러: {last_error}")
-
-        # 모든 모델 시도 실패 시
-        error_msg = f"🚨 AI 임베딩 서버 직접 통신 실패.\n원인: {last_error}"
-        print(error_msg)
-        st.error(error_msg)
-        return []
+        # 진단 2. text-embedding-004 직접 호출 (진짜 에러 이유 뜯어보기)
+        model_name = "text-embedding-004"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:embedContent?key={api_key}"
+        payload = {
+            "model": f"models/{model_name}",
+            "content": {"parts": [{"text": cleaned_text}]}
+        }
+        
+        response = requests.post(url, headers={'Content-Type': 'application/json'}, json=payload)
+        
+        if response.status_code == 200:
+            st.success("✅ [진단 2] 004 모델 호출 성공! 데이터가 정상 저장됩니다.")
+            return response.json()['embedding']['values']
+        else:
+            # 구글 서버가 뱉어내는 진짜 거절 사유를 그대로 화면에 띄웁니다.
+            st.error(f"🚨 [진단 2 실패] 004 모델 호출이 구글에 의해 거절되었습니다!\n- 상태 코드: {response.status_code}\n- 거절 상세 이유: {response.text}")
+            return []
 
     except Exception as e:
-        print(f"❌ 임베딩 함수 내부 에러: {e}")
-        st.error(f"임베딩 로직 오류: {e}")
+        st.error(f"🚨 [진단 3] 시스템 또는 네트워크 통신 에러:\n{e}")
         return []
 
 def semantic_split_v143(text, target_size=1200, min_size=600):
@@ -88,7 +72,7 @@ def extract_json(text):
     except: return None
 
 # --------------------------------------------------------------------------------
-# [V206] 자동 키워드 태깅 (App.py의 어댑터와 호환)
+# [V206] 자동 키워드 태깅
 # --------------------------------------------------------------------------------
 def extract_metadata_ai(ai_model, content):
     try:
@@ -163,10 +147,7 @@ def generate_3line_summary_stream(ai_model, query, results):
         context=json.dumps(full_context, ensure_ascii=False)
     )
     
-    # [V245] 어댑터가 stream 요청도 처리하도록 설계됨
     response = ai_model.generate_content(prompt, stream=True)
-    
-    # 신형 라이브러리의 스트림 응답 처리
     for chunk in response:
         if chunk.text:
             yield chunk.text
@@ -200,12 +181,9 @@ def generate_relevant_summary(ai_model, query, data):
     return res.text
 
 # --------------------------------------------------------------------------------
-# [NEW V246] Graph RAG 관계 추출 엔진 (제조사 관계 추가)
+# [NEW V246] Graph RAG 관계 추출 엔진
 # --------------------------------------------------------------------------------
 def extract_triples_from_text(ai_model, text):
-    """
-    텍스트에서 (주어) -> [관계] -> (목적어) 트리플을 추출합니다.
-    """
     graph_prompt = f"""
     You are an expert Data Engineer specializing in Knowledge Graphs.
     Analyze the provided technical text and extract relationships between entities.
