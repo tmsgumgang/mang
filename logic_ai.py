@@ -9,9 +9,9 @@ from prompts import PROMPTS
 @st.cache_data(show_spinner=False)
 def get_embedding(text):
     """
-    [V246] 신형 라이브러리(google-genai) 호환성 강화
-    - 여러 모델명 형식을 순차적으로 시도하여 성공률을 높입니다.
-    - 실패 시 화면에 정확한 에러 원인을 출력합니다.
+    [V246] 신형 라이브러리(google-genai) 호환성 강화 및 404 에러 대응
+    - 계정이나 지역에 따라 text-embedding-004 지원 여부가 다를 수 있으므로,
+    - 전 세계 공통 지원되는 embedding-001까지 모두 후보군에 넣어 자동 탐색합니다.
     """
     cleaned_text = clean_text_for_db(text)
     if not cleaned_text: return []
@@ -21,8 +21,13 @@ def get_embedding(text):
         api_key = st.secrets["GEMINI_API_KEY"]
         client = genai.Client(api_key=api_key)
         
-        # 2. 시도할 모델명 후보군 (환경에 따라 맞는 게 다를 수 있음)
-        candidate_models = ["text-embedding-004", "models/text-embedding-004"]
+        # 2. 시도할 모델명 후보군 (최신 모델부터 가장 안정적인 모델까지)
+        candidate_models = [
+            "text-embedding-004", 
+            "models/text-embedding-004",
+            "embedding-001",
+            "models/embedding-001"
+        ]
         
         last_error = None
         
@@ -31,8 +36,8 @@ def get_embedding(text):
             try:
                 response = client.models.embed_content(
                     model=model_name,
-                    contents=cleaned_text,
-                    # config=types.EmbedContentConfig(task_type="RETRIEVAL_DOCUMENT") # 필요시 주석 해제
+                    contents=cleaned_text
+                    # config=types.EmbedContentConfig(task_type="RETRIEVAL_DOCUMENT") # 호환성을 위해 제외
                 )
                 
                 # 성공 시 바로 반환
@@ -193,10 +198,14 @@ def generate_relevant_summary(ai_model, query, data):
     res = ai_model.generate_content(prompt)
     return res.text
 
+# --------------------------------------------------------------------------------
+# [NEW V246] Graph RAG 관계 추출 엔진 (제조사 관계 추가)
+# --------------------------------------------------------------------------------
 def extract_triples_from_text(ai_model, text):
     """
     텍스트에서 (주어) -> [관계] -> (목적어) 트리플을 추출합니다.
     """
+    # Graph Extraction 전용 프롬프트 (제조사 관계 추가됨) - [완전 복구됨]
     graph_prompt = f"""
     You are an expert Data Engineer specializing in Knowledge Graphs.
     Analyze the provided technical text and extract relationships between entities.
@@ -204,17 +213,22 @@ def extract_triples_from_text(ai_model, text):
     Target Entities: Device, Part, Symptom, Cause, Solution, Action, Value, Location, Manufacturer.
     Target Relations: 
     - causes (원인이다)
-    - part_of (의 부품이다)
+    - part_of (의 부품이다: Use for components inside a machine)
     - located_in (에 위치한다)
     - solved_by (로 해결된다)
     - has_status (상태를 가진다)
     - requires (을 필요로 한다)
-    - manufactured_by (이 제조했다)
+    - manufactured_by (이 제조했다: Use when Entity B is the Brand/Maker of Entity A)
 
     IMPORTANT: 
-    - Entities MUST be single nouns or short phrases.
-    - Return ONLY a JSON array of objects.
-    
+    - Entities MUST be single nouns or short phrases (under 5 words). 
+    - Do NOT include full sentences as entities.
+    - If a sentence is "Use cable ties for pump replacement", extract: {{"source": "Pump replacement", "relation": "requires", "target": "Cable ties"}}
+    - If "Shimadzu TOC analyzer has an error", extract: {{"source": "TOC analyzer", "relation": "manufactured_by", "target": "Shimadzu"}}
+
+    Return ONLY a JSON array of objects. No markdown, no explanations.
+    Format: [{{"source": "Entity A", "relation": "relation_type", "target": "Entity B"}}]
+
     Text to Analyze:
     {text[:2500]}
     """
