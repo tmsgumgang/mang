@@ -1,10 +1,10 @@
 streamlit
+google-genai
 supabase
-google-generativeai
 pandas
-PyPDF2
+pdfplumber
 pytesseract
 pdf2image
-pdfplumber
 openpyxl
-streamlit-calendar
+plotly
+tenacity
