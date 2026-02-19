@@ -1,47 +1,28 @@
 import re
 import json
-import requests
 import streamlit as st
 import google.generativeai as genai
-from prompts import PROMPTS 
+from prompts import PROMPTS
 
-# [진단 모드] 에러를 숨기지 않고, 캐시도 사용하지 않아 매번 구글 서버에 직접 물어봅니다.
+@st.cache_data(show_spinner=False)
 def get_embedding(text):
+    """
+    [완벽 해결] 진단 결과를 바탕으로, 현재 API 키에 유일하게 허락된 
+    최신 공식 모델 'gemini-embedding-001'을 정확히 호출합니다.
+    """
     cleaned_text = clean_text_for_db(text)
     if not cleaned_text: return []
 
     try:
-        api_key = st.secrets["GEMINI_API_KEY"]
-        
-        # 진단 1. 이 API 키가 사용할 수 있는 진짜 모델 목록 조회
-        list_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
-        list_res = requests.get(list_url)
-        if list_res.status_code == 200:
-            models = [m['name'] for m in list_res.json().get('models', []) if 'embedContent' in m.get('supportedGenerationMethods', [])]
-            st.warning(f"🔎 [진단 1] 현재 API 키로 허용된 임베딩 모델 목록:\n{models}")
-        else:
-            st.error(f"🚨 [진단 1 실패] API 키 목록 조회 권한 거부:\n{list_res.text}")
-
-        # 진단 2. text-embedding-004 직접 호출 (진짜 에러 이유 뜯어보기)
-        model_name = "text-embedding-004"
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:embedContent?key={api_key}"
-        payload = {
-            "model": f"models/{model_name}",
-            "content": {"parts": [{"text": cleaned_text}]}
-        }
-        
-        response = requests.post(url, headers={'Content-Type': 'application/json'}, json=payload)
-        
-        if response.status_code == 200:
-            st.success("✅ [진단 2] 004 모델 호출 성공! 데이터가 정상 저장됩니다.")
-            return response.json()['embedding']['values']
-        else:
-            # 구글 서버가 뱉어내는 진짜 거절 사유를 그대로 화면에 띄웁니다.
-            st.error(f"🚨 [진단 2 실패] 004 모델 호출이 구글에 의해 거절되었습니다!\n- 상태 코드: {response.status_code}\n- 거절 상세 이유: {response.text}")
-            return []
-
+        # 팩트 체크 완료: 구글이 응답한 정확한 모델명으로만 호출합니다!
+        result = genai.embed_content(
+            model="models/gemini-embedding-001", 
+            content=cleaned_text
+        )
+        return result['embedding']
     except Exception as e:
-        st.error(f"🚨 [진단 3] 시스템 또는 네트워크 통신 에러:\n{e}")
+        print(f"❌ 임베딩 생성 실패: {e}")
+        st.error(f"AI 임베딩 생성 오류: {e}")
         return []
 
 def semantic_split_v143(text, target_size=1200, min_size=600):
@@ -181,9 +162,12 @@ def generate_relevant_summary(ai_model, query, data):
     return res.text
 
 # --------------------------------------------------------------------------------
-# [NEW V246] Graph RAG 관계 추출 엔진
+# [NEW V246] Graph RAG 관계 추출 엔진 (제조사 관계 추가)
 # --------------------------------------------------------------------------------
 def extract_triples_from_text(ai_model, text):
+    """
+    텍스트에서 (주어) -> [관계] -> (목적어) 트리플을 추출합니다.
+    """
     graph_prompt = f"""
     You are an expert Data Engineer specializing in Knowledge Graphs.
     Analyze the provided technical text and extract relationships between entities.
@@ -191,17 +175,22 @@ def extract_triples_from_text(ai_model, text):
     Target Entities: Device, Part, Symptom, Cause, Solution, Action, Value, Location, Manufacturer.
     Target Relations: 
     - causes (원인이다)
-    - part_of (의 부품이다)
+    - part_of (의 부품이다: Use for components inside a machine)
     - located_in (에 위치한다)
     - solved_by (로 해결된다)
     - has_status (상태를 가진다)
     - requires (을 필요로 한다)
-    - manufactured_by (이 제조했다)
+    - manufactured_by (이 제조했다: Use when Entity B is the Brand/Maker of Entity A)
 
     IMPORTANT: 
-    - Entities MUST be single nouns or short phrases.
-    - Return ONLY a JSON array of objects.
-    
+    - Entities MUST be single nouns or short phrases (under 5 words). 
+    - Do NOT include full sentences as entities.
+    - If a sentence is "Use cable ties for pump replacement", extract: {{"source": "Pump replacement", "relation": "requires", "target": "Cable ties"}}
+    - If "Shimadzu TOC analyzer has an error", extract: {{"source": "TOC analyzer", "relation": "manufactured_by", "target": "Shimadzu"}}
+
+    Return ONLY a JSON array of objects. No markdown, no explanations.
+    Format: [{{"source": "Entity A", "relation": "relation_type", "target": "Entity B"}}]
+
     Text to Analyze:
     {text[:2500]}
     """
