@@ -1,48 +1,46 @@
 import re
 import json
-import google.generativeai as genai
 import streamlit as st
+from google import genai
 from prompts import PROMPTS 
+
+# [V245] 신형 라이브러리(google-genai) 적용 완료
+# - 구형 google.generativeai 제거됨
+# - 404 에러를 해결하기 위해 최신 SDK 문법(client.models.embed_content) 적용
 
 @st.cache_data(show_spinner=False)
 def get_embedding(text):
     """
-    [V244 안정화 패치]
-    - 최신 모델(004)과 구형 라이브러리 간 호환성 문제 해결을 위해
-    - 가장 안정적인 'embedding-001' 모델을 1순위로 사용합니다.
-    - 001 모델은 task_type 파라미터를 지원하지 않으므로 제거했습니다.
+    [V245] 신형 google-genai 라이브러리를 사용한 임베딩 생성
+    - 모델: text-embedding-004 (최신 모델 정상 지원)
+    - 해결: v1beta/404 에러 원천 차단
     """
     cleaned_text = clean_text_for_db(text)
-    
-    # 1. 텍스트가 없으면 API 호출 방지 (비용/에러 절약)
-    if not cleaned_text:
-        return []
+    if not cleaned_text: return []
 
     try:
-        # [변경 1순위] 안정적인 구형 모델 사용 (task_type 옵션 제거 필수)
-        result = genai.embed_content(
-            model="models/embedding-001", 
-            content=cleaned_text
-        )
-        return result['embedding']
-    except Exception as e:
-        # 1차 실패 시 로그 출력
-        print(f"⚠️ 1차 임베딩(001) 실패: {e}")
+        # 1. API 키 로드 (secrets에서 직접 호출)
+        api_key = st.secrets["GEMINI_API_KEY"]
         
-        try:
-            # [변경 2순위] 1차가 안 될 경우에만 최신 모델 시도
-            result = genai.embed_content(
-                model="models/text-embedding-004", 
-                content=cleaned_text,
-                task_type="retrieval_document"
-            )
-            return result['embedding']
-        except Exception as e2:
-            # 최종 실패 시 에러 로그 출력
-            print(f"❌ 모든 임베딩 모델 실패: {e2}")
-            # 화면에도 에러 원인을 표시하여 디버깅 도움
-            st.error(f"AI 임베딩 오류: {e2}")
-            return []
+        # 2. 신형 클라이언트 생성
+        client = genai.Client(api_key=api_key)
+        
+        # 3. 신형 SDK 임베딩 호출
+        # (구형 genai.embed_content 와 문법이 다릅니다)
+        response = client.models.embed_content(
+            model="text-embedding-004",
+            contents=cleaned_text
+        )
+        
+        # 4. 결과 추출
+        # 신형 SDK의 응답 구조: response.embeddings[0].values
+        if response.embeddings:
+            return response.embeddings[0].values
+        return []
+        
+    except Exception as e:
+        print(f"❌ 임베딩 실패: {e}")
+        return []
 
 def semantic_split_v143(text, target_size=1200, min_size=600):
     flat_text = " ".join(text.split())
@@ -72,7 +70,7 @@ def extract_json(text):
     except: return None
 
 # --------------------------------------------------------------------------------
-# [V206] 자동 키워드 태깅(Auto-Tagging) 엔진
+# [V206] 자동 키워드 태깅 (App.py의 어댑터와 호환)
 # --------------------------------------------------------------------------------
 def extract_metadata_ai(ai_model, content):
     try:
@@ -147,7 +145,10 @@ def generate_3line_summary_stream(ai_model, query, results):
         context=json.dumps(full_context, ensure_ascii=False)
     )
     
+    # [V245] 어댑터가 stream 요청도 처리하도록 설계됨
     response = ai_model.generate_content(prompt, stream=True)
+    
+    # 신형 라이브러리의 스트림 응답 처리
     for chunk in response:
         if chunk.text:
             yield chunk.text
@@ -180,14 +181,10 @@ def generate_relevant_summary(ai_model, query, data):
     res = ai_model.generate_content(prompt)
     return res.text
 
-# --------------------------------------------------------------------------------
-# [NEW V246] Graph RAG 관계 추출 엔진 (제조사 관계 추가)
-# --------------------------------------------------------------------------------
 def extract_triples_from_text(ai_model, text):
     """
     텍스트에서 (주어) -> [관계] -> (목적어) 트리플을 추출합니다.
     """
-    # Graph Extraction 전용 프롬프트 (제조사 관계 추가됨)
     graph_prompt = f"""
     You are an expert Data Engineer specializing in Knowledge Graphs.
     Analyze the provided technical text and extract relationships between entities.
@@ -195,22 +192,17 @@ def extract_triples_from_text(ai_model, text):
     Target Entities: Device, Part, Symptom, Cause, Solution, Action, Value, Location, Manufacturer.
     Target Relations: 
     - causes (원인이다)
-    - part_of (의 부품이다: Use for components inside a machine)
+    - part_of (의 부품이다)
     - located_in (에 위치한다)
     - solved_by (로 해결된다)
     - has_status (상태를 가진다)
     - requires (을 필요로 한다)
-    - manufactured_by (이 제조했다: Use when Entity B is the Brand/Maker of Entity A)
+    - manufactured_by (이 제조했다)
 
     IMPORTANT: 
-    - Entities MUST be single nouns or short phrases (under 5 words). 
-    - Do NOT include full sentences as entities.
-    - If a sentence is "Use cable ties for pump replacement", extract: {{"source": "Pump replacement", "relation": "requires", "target": "Cable ties"}}
-    - If "Shimadzu TOC analyzer has an error", extract: {{"source": "TOC analyzer", "relation": "manufactured_by", "target": "Shimadzu"}}
-
-    Return ONLY a JSON array of objects. No markdown, no explanations.
-    Format: [{{"source": "Entity A", "relation": "relation_type", "target": "Entity B"}}]
-
+    - Entities MUST be single nouns or short phrases.
+    - Return ONLY a JSON array of objects.
+    
     Text to Analyze:
     {text[:2500]}
     """
