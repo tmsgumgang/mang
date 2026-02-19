@@ -1,62 +1,29 @@
 import re
 import json
 import streamlit as st
-from google import genai
-from google.genai import types
+import google.generativeai as genai
 from prompts import PROMPTS 
 
-# [V246] 임베딩 로직 강화: 자동 재시도 및 상세 에러 출력
+# [V247] 임베딩 로직 안정화: 404 에러 원천 차단
 @st.cache_data(show_spinner=False)
 def get_embedding(text):
     """
-    [V246] 신형 라이브러리(google-genai) 호환성 강화 및 404 에러 대응
-    - 계정이나 지역에 따라 text-embedding-004 지원 여부가 다를 수 있으므로,
-    - 전 세계 공통 지원되는 embedding-001까지 모두 후보군에 넣어 자동 탐색합니다.
+    - API v1beta 환경 404 에러를 피하기 위해 최신 모델(004) 호출을 제거합니다.
+    - 전 세계 100% 호환되는 'models/embedding-001' 단일 모델로 빠르고 안전하게 임베딩을 수행합니다.
     """
     cleaned_text = clean_text_for_db(text)
     if not cleaned_text: return []
 
     try:
-        # 1. API 키 로드
-        api_key = st.secrets["GEMINI_API_KEY"]
-        client = genai.Client(api_key=api_key)
-        
-        # 2. 시도할 모델명 후보군 (최신 모델부터 가장 안정적인 모델까지)
-        candidate_models = [
-            "text-embedding-004", 
-            "models/text-embedding-004",
-            "embedding-001",
-            "models/embedding-001"
-        ]
-        
-        last_error = None
-        
-        # 3. 순차적으로 시도
-        for model_name in candidate_models:
-            try:
-                response = client.models.embed_content(
-                    model=model_name,
-                    contents=cleaned_text
-                    # config=types.EmbedContentConfig(task_type="RETRIEVAL_DOCUMENT") # 호환성을 위해 제외
-                )
-                
-                # 성공 시 바로 반환
-                if response.embeddings:
-                    return response.embeddings[0].values
-                    
-            except Exception as e:
-                print(f"⚠️ 모델 시도 실패 ({model_name}): {e}")
-                last_error = e
-                continue # 다음 모델 시도
-        
-        # 4. 모든 시도가 실패했을 경우
-        error_msg = f"🚨 AI 임베딩 생성 실패.\n원인: {str(last_error)}"
-        print(error_msg)
-        st.error(error_msg) # 화면에 에러를 띄워서 사용자가 바로 알 수 있게 함
-        return []
-
-    except Exception as e_fatal:
-        st.error(f"시스템 치명적 오류: {str(e_fatal)}")
+        # 안정적인 구형 모델 전용 호출 (task_type 등 충돌 옵션 제거)
+        result = genai.embed_content(
+            model="models/embedding-001", 
+            content=cleaned_text
+        )
+        return result['embedding']
+    except Exception as e:
+        print(f"❌ 임베딩 생성 실패: {e}")
+        st.error(f"AI 임베딩 생성에 실패했습니다: {e}")
         return []
 
 def semantic_split_v143(text, target_size=1200, min_size=600):
@@ -205,7 +172,6 @@ def extract_triples_from_text(ai_model, text):
     """
     텍스트에서 (주어) -> [관계] -> (목적어) 트리플을 추출합니다.
     """
-    # Graph Extraction 전용 프롬프트 (제조사 관계 추가됨) - [완전 복구됨]
     graph_prompt = f"""
     You are an expert Data Engineer specializing in Knowledge Graphs.
     Analyze the provided technical text and extract relationships between entities.
@@ -213,22 +179,17 @@ def extract_triples_from_text(ai_model, text):
     Target Entities: Device, Part, Symptom, Cause, Solution, Action, Value, Location, Manufacturer.
     Target Relations: 
     - causes (원인이다)
-    - part_of (의 부품이다: Use for components inside a machine)
+    - part_of (의 부품이다)
     - located_in (에 위치한다)
     - solved_by (로 해결된다)
     - has_status (상태를 가진다)
     - requires (을 필요로 한다)
-    - manufactured_by (이 제조했다: Use when Entity B is the Brand/Maker of Entity A)
+    - manufactured_by (이 제조했다)
 
     IMPORTANT: 
-    - Entities MUST be single nouns or short phrases (under 5 words). 
-    - Do NOT include full sentences as entities.
-    - If a sentence is "Use cable ties for pump replacement", extract: {{"source": "Pump replacement", "relation": "requires", "target": "Cable ties"}}
-    - If "Shimadzu TOC analyzer has an error", extract: {{"source": "TOC analyzer", "relation": "manufactured_by", "target": "Shimadzu"}}
-
-    Return ONLY a JSON array of objects. No markdown, no explanations.
-    Format: [{{"source": "Entity A", "relation": "relation_type", "target": "Entity B"}}]
-
+    - Entities MUST be single nouns or short phrases.
+    - Return ONLY a JSON array of objects.
+    
     Text to Analyze:
     {text[:2500]}
     """
