@@ -1,235 +1,97 @@
-import re
-import json
 import streamlit as st
 from google import genai
 from google.genai import types
-from prompts import PROMPTS 
+from supabase import create_client
+from db_services import DBManager
+import ui_search
+import ui_admin
+import ui_community
+# [NEW] 재고관리 UI 모듈
+import ui_inventory 
 
-@st.cache_data(show_spinner=False)
-def get_embedding(text):
-    """
-    [V246] 신형 라이브러리(google-genai) 호환성 강화
-    - 여러 모델명 형식을 순차적으로 시도하여 성공률을 높입니다.
-    - 실패 시 화면에 정확한 에러 원인을 출력합니다.
-    """
-    cleaned_text = clean_text_for_db(text)
-    
-    # 1. 텍스트가 없으면 API 호출 방지 (비용/에러 절약)
-    if not cleaned_text:
-        return []
+# --------------------------------------------------------------------------
+# [설정] 환경 변수 로드
+# --------------------------------------------------------------------------
+try:
+    SUPABASE_URL = st.secrets["SUPABASE_URL"]
+    SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
+    GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
+except FileNotFoundError:
+    st.error("secrets.toml 파일을 찾을 수 없습니다.")
+    st.stop()
 
-    try:
-        # 1. API 키 로드
-        api_key = st.secrets["GEMINI_API_KEY"]
-        client = genai.Client(api_key=api_key)
-        
-        # 2. 시도할 모델명 후보군
-        candidate_models = ["text-embedding-004", "models/text-embedding-004"]
-        last_error = None
-        
-        # 3. 순차적으로 시도
-        for model_name in candidate_models:
-            try:
-                response = client.models.embed_content(
-                    model=model_name,
-                    contents=cleaned_text
-                )
-                
-                if response.embeddings:
-                    return response.embeddings[0].values
-                    
-            except Exception as e:
-                print(f"⚠️ 모델 시도 실패 ({model_name}): {e}")
-                last_error = e
-                continue
-        
-        # 4. 모든 시도가 실패했을 경우
-        error_msg = f"🚨 AI 임베딩 생성 실패.\n원인: {str(last_error)}"
-        print(error_msg)
-        st.error(error_msg)
-        return []
+# --------------------------------------------------------------------------
+# [핵심] 신형 라이브러리(google-genai) 호환 어댑터
+# 설명: 기존 UI 코드들이 ai_model.generate_content() 방식으로 호출해도 
+#       신형 라이브러리가 알아듣도록 변환해주는 클래스입니다.
+# --------------------------------------------------------------------------
+class GeminiAdapter:
+    def __init__(self, api_key, model_name='gemini-2.0-flash'):
+        self.client = genai.Client(api_key=api_key)
+        self.model_name = model_name
 
-    except Exception as e_fatal:
-        st.error(f"시스템 치명적 오류: {str(e_fatal)}")
-        return []
+    def generate_content(self, prompt, stream=False):
+        # 신형 SDK 호출 방식
+        # config를 통해 일반 텍스트 모드로 명확히 지정
+        response = self.client.models.generate_content(
+            model=self.model_name,
+            contents=prompt,
+            config=types.GenerateContentConfig(response_mime_type='text/plain')
+        )
+        return response
 
-def semantic_split_v143(text, target_size=1200, min_size=600):
-    flat_text = " ".join(text.split())
-    sentences = re.split(r'(?<=[.!?])\s+', flat_text)
-    chunks, current_chunk = [], ""
-    for sentence in sentences:
-        if len(current_chunk) + len(sentence) <= target_size:
-            current_chunk += " " + sentence
-        else:
-            if current_chunk: chunks.append(current_chunk.strip())
-            current_chunk = sentence
-    if current_chunk:
-        if len(current_chunk) < min_size and chunks:
-            chunks[-1] = chunks[-1] + " " + current_chunk.strip()
-        else: chunks.append(current_chunk.strip())
-    return chunks
+@st.cache_resource
+def init_system():
+    # 1. 신형 어댑터로 AI 모델 초기화 (구형 configure 제거)
+    ai_model = GeminiAdapter(api_key=GEMINI_API_KEY, model_name='gemini-2.0-flash')
+    
+    # 2. Supabase 클라이언트 초기화
+    sb_client = create_client(SUPABASE_URL, SUPABASE_KEY)
+    
+    return ai_model, DBManager(sb_client)
 
-def clean_text_for_db(text):
-    if not text: return ""
-    text = text.replace("\u0000", "")
-    return "".join(ch for ch in text if ch.isprintable() or ch in ['\n', '\r', '\t']).strip()
+ai_model, db = init_system()
 
-def extract_json(text):
-    try:
-        cleaned = re.sub(r'```json\s*|```', '', text).strip()
-        return json.loads(cleaned)
-    except: return None
+# --------------------------------------------------------------------------
+# [UI] 공통 레이아웃 설정
+# --------------------------------------------------------------------------
+st.set_page_config(page_title="금강수계 AI V161", layout="wide", initial_sidebar_state="collapsed")
+st.markdown("""<style>
+    .fixed-header { position: fixed; top: 0; left: 0; width: 100%; background-color: #004a99; color: white; padding: 10px 0; z-index: 999; text-align: center; font-weight: bold; }
+    .main .block-container { padding-top: 5.5rem !important; }
+</style><div class="fixed-header">🌊 금강수계 수질자동측정망 AI V161 (통합 관리 시스템)</div>""", unsafe_allow_html=True)
 
-# --------------------------------------------------------------------------------
-# [V206] 자동 키워드 태깅(Auto-Tagging) 엔진
-# --------------------------------------------------------------------------------
-def extract_metadata_ai(ai_model, content):
-    try:
-        prompt = PROMPTS["extract_metadata"].format(content=content[:2000])
-        res = ai_model.generate_content(prompt)
-        return extract_json(res.text)
-    except: return None
+# --------------------------------------------------------------------------
+# [메뉴] 라우팅 처리
+# --------------------------------------------------------------------------
+_, menu_col, _ = st.columns([1, 2, 1])
+with menu_col:
+    # [NEW] "📦 소모품 재고관리" 메뉴 포함
+    mode = st.selectbox("작업 메뉴 선택", 
+                        ["🔍 통합 지식 검색", 
+                         "👥 현장 지식 커뮤니티", 
+                         "📦 소모품 재고관리", 
+                         "🛠️ 데이터 전체 관리", 
+                         "📝 지식 등록", 
+                         "📄 문서(매뉴얼) 등록"], 
+                        label_visibility="collapsed")
 
-@st.cache_data(ttl=3600, show_spinner=False)
-def analyze_search_intent(_ai_model, query):
-    default_intent = {
-        "target_mfr": "미지정", 
-        "target_model": "미지정", 
-        "target_item": "공통",
-        "target_action": "일반"
-    }
-    try:
-        prompt = PROMPTS["search_intent"].format(query=query)
-        res = _ai_model.generate_content(prompt)
-        intent_res = extract_json(res.text)
-        if intent_res and isinstance(intent_res, dict):
-            return intent_res
-        return default_intent
-    except:
-        return default_intent
+st.divider()
 
-@st.cache_data(ttl=3600, show_spinner=False)
-def quick_rerank_ai(_ai_model, query, results, intent):
-    if not results: return []
-    safe_intent = intent if (intent and isinstance(intent, dict)) else {"target_mfr": "미지정", "target_item": "공통"}
-    
-    candidates = []
-    for r in results[:5]:
-        candidates.append({
-            "id": r.get('id'), 
-            "mfr": r.get('manufacturer'), 
-            "item": r.get('measurement_item'),
-            "content": (r.get('content') or r.get('solution'))[:200]
-        })
+if mode == "🔍 통합 지식 검색":
+    ui_search.show_search_ui(ai_model, db)
 
-    prompt = PROMPTS["rerank_score"].format(
-        query=query, 
-        mfr=safe_intent.get('target_mfr'), 
-        item=safe_intent.get('target_item'), 
-        candidates=json.dumps(candidates, ensure_ascii=False)
-    )
-    
-    try:
-        res = _ai_model.generate_content(prompt)
-        scores = extract_json(res.text)
-        score_map = {item['id']: item['score'] for item in scores}
-        for r in results: r['rerank_score'] = score_map.get(r['id'], 0)
-        return sorted(results, key=lambda x: x['rerank_score'], reverse=True)
-    except: return results
+elif mode == "👥 현장 지식 커뮤니티":
+    ui_community.show_community_ui(ai_model, db)
 
-def generate_3line_summary_stream(ai_model, query, results):
-    if not results:
-        yield "검색 결과가 부족하여 요약을 생성할 수 없습니다."
-        return
+elif mode == "📦 소모품 재고관리":
+    ui_inventory.show_inventory_ui(db)
 
-    top_doc = results[0]
-    top_content = f"★최우선참고자료(Fact Source): {top_doc.get('content') or top_doc.get('solution')}"
-    
-    other_context = []
-    for r in results[1:3]:
-        other_context.append(f"- 보조자료: {r.get('content') or r.get('solution')}")
-    
-    full_context = [top_content] + other_context
-    
-    prompt = PROMPTS["summary_fact_lock"].format(
-        query=query, 
-        context=json.dumps(full_context, ensure_ascii=False)
-    )
-    
-    response = ai_model.generate_content(prompt, stream=True)
-    for chunk in response:
-        if chunk.text:
-            yield chunk.text
+elif mode == "🛠️ 데이터 전체 관리":
+    ui_admin.show_admin_ui(ai_model, db)
 
-@st.cache_data(ttl=3600, show_spinner=False)
-def unified_rerank_and_summary_ai(_ai_model, query, results, intent):
-    if not results: return [], "관련 지식을 찾지 못했습니다."
-    safe_intent = intent if (intent and isinstance(intent, dict)) else {"target_mfr": "미지정", "target_item": "공통"}
-    candidates = [{"id":r['id'],"content":(r.get('content')or r.get('solution'))[:300]} for r in results[:5]]
-    
-    prompt = PROMPTS["unified_rerank"].format(
-        query=query, 
-        safe_intent=safe_intent, 
-        candidates=candidates
-    )
-    
-    try:
-        res = _ai_model.generate_content(prompt)
-        parsed = extract_json(res.text)
-        score_map = {item['id']: item['score'] for item in parsed.get('scores', [])}
-        for r in results: r['rerank_score'] = score_map.get(r['id'], 0)
-        return sorted(results, key=lambda x: x['rerank_score'], reverse=True), parsed.get('summary', "요약 불가")
-    except: return results, "오류 발생"
+elif mode == "📄 문서(매뉴얼) 등록":
+    ui_admin.show_manual_upload_ui(ai_model, db)
 
-def generate_relevant_summary(ai_model, query, data):
-    prompt = PROMPTS["deep_report"].format(
-        query=query, 
-        data=data
-    )
-    res = ai_model.generate_content(prompt)
-    return res.text
-
-# --------------------------------------------------------------------------------
-# [NEW V246] Graph RAG 관계 추출 엔진 (제조사 관계 추가)
-# --------------------------------------------------------------------------------
-def extract_triples_from_text(ai_model, text):
-    """
-    텍스트에서 (주어) -> [관계] -> (목적어) 트리플을 추출합니다.
-    """
-    # Graph Extraction 전용 프롬프트 (제조사 관계 추가됨) - [원상복구 완]
-    graph_prompt = f"""
-    You are an expert Data Engineer specializing in Knowledge Graphs.
-    Analyze the provided technical text and extract relationships between entities.
-    
-    Target Entities: Device, Part, Symptom, Cause, Solution, Action, Value, Location, Manufacturer.
-    Target Relations: 
-    - causes (원인이다)
-    - part_of (의 부품이다: Use for components inside a machine)
-    - located_in (에 위치한다)
-    - solved_by (로 해결된다)
-    - has_status (상태를 가진다)
-    - requires (을 필요로 한다)
-    - manufactured_by (이 제조했다: Use when Entity B is the Brand/Maker of Entity A)
-
-    IMPORTANT: 
-    - Entities MUST be single nouns or short phrases (under 5 words). 
-    - Do NOT include full sentences as entities.
-    - If a sentence is "Use cable ties for pump replacement", extract: {{"source": "Pump replacement", "relation": "requires", "target": "Cable ties"}}
-    - If "Shimadzu TOC analyzer has an error", extract: {{"source": "TOC analyzer", "relation": "manufactured_by", "target": "Shimadzu"}}
-
-    Return ONLY a JSON array of objects. No markdown, no explanations.
-    Format: [{{"source": "Entity A", "relation": "relation_type", "target": "Entity B"}}]
-
-    Text to Analyze:
-    {text[:2500]}
-    """
-    
-    try:
-        res = ai_model.generate_content(graph_prompt)
-        triples = extract_json(res.text)
-        if triples and isinstance(triples, list):
-            return triples
-        return []
-    except Exception as e:
-        print(f"Graph Extraction Error: {e}")
-        return []
+elif mode == "📝 지식 등록":
+    ui_admin.show_knowledge_reg_ui(ai_model, db)
