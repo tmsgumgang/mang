@@ -2,27 +2,37 @@ import re
 import json
 import streamlit as st
 import google.generativeai as genai
-from prompts import PROMPTS
+from prompts import PROMPTS 
 
 @st.cache_data(show_spinner=False)
 def get_embedding(text):
     """
-    [완벽 해결] 진단 결과를 바탕으로, 현재 API 키에 유일하게 허락된 
-    최신 공식 모델 'gemini-embedding-001'을 정확히 호출합니다.
+    [최종본] 정상적인 새 API 키를 바탕으로, 공식 최신 임베딩 모델 단일 호출
+    - Supabase DB(768차원)에 맞게 3072차원 데이터를 768차원으로 자르는 로직 추가
     """
     cleaned_text = clean_text_for_db(text)
     if not cleaned_text: return []
 
     try:
-        # 팩트 체크 완료: 구글이 응답한 정확한 모델명으로만 호출합니다!
+        # 오직 구글 공식 최신 모델만 사용합니다.
         result = genai.embed_content(
             model="models/gemini-embedding-001", 
-            content=cleaned_text
+            content=cleaned_text,
+            task_type="retrieval_document"
         )
-        return result['embedding']
+        
+        # 구글이 반환한 임베딩 벡터 데이터
+        vector = result['embedding']
+        
+        # [핵심] DB 크기가 768이므로, 데이터가 768개를 넘으면 앞에서부터 딱 768개만 자릅니다.
+        if len(vector) > 768:
+            vector = vector[:768]
+            
+        return vector
+        
     except Exception as e:
         print(f"❌ 임베딩 생성 실패: {e}")
-        st.error(f"AI 임베딩 생성 오류: {e}")
+        st.error(f"⚠️ API 키 권한이 없거나 모델 접근이 차단되었습니다. 새 API 키가 적용되었는지 확인해주세요.\n(상세 에러: {e})")
         return []
 
 def semantic_split_v143(text, target_size=1200, min_size=600):
