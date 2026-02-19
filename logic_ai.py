@@ -2,44 +2,56 @@ import re
 import json
 import streamlit as st
 from google import genai
+from google.genai import types
 from prompts import PROMPTS 
 
-# [V245] 신형 라이브러리(google-genai) 적용 완료
-# - 구형 google.generativeai 제거됨
-# - 404 에러를 해결하기 위해 최신 SDK 문법(client.models.embed_content) 적용
-
+# [V246] 임베딩 로직 강화: 자동 재시도 및 상세 에러 출력
 @st.cache_data(show_spinner=False)
 def get_embedding(text):
     """
-    [V245] 신형 google-genai 라이브러리를 사용한 임베딩 생성
-    - 모델: text-embedding-004 (최신 모델 정상 지원)
-    - 해결: v1beta/404 에러 원천 차단
+    [V246] 신형 라이브러리(google-genai) 호환성 강화
+    - 여러 모델명 형식을 순차적으로 시도하여 성공률을 높입니다.
+    - 실패 시 화면에 정확한 에러 원인을 출력합니다.
     """
     cleaned_text = clean_text_for_db(text)
     if not cleaned_text: return []
 
     try:
-        # 1. API 키 로드 (secrets에서 직접 호출)
+        # 1. API 키 로드
         api_key = st.secrets["GEMINI_API_KEY"]
-        
-        # 2. 신형 클라이언트 생성
         client = genai.Client(api_key=api_key)
         
-        # 3. 신형 SDK 임베딩 호출
-        # (구형 genai.embed_content 와 문법이 다릅니다)
-        response = client.models.embed_content(
-            model="text-embedding-004",
-            contents=cleaned_text
-        )
+        # 2. 시도할 모델명 후보군 (환경에 따라 맞는 게 다를 수 있음)
+        candidate_models = ["text-embedding-004", "models/text-embedding-004"]
         
-        # 4. 결과 추출
-        # 신형 SDK의 응답 구조: response.embeddings[0].values
-        if response.embeddings:
-            return response.embeddings[0].values
+        last_error = None
+        
+        # 3. 순차적으로 시도
+        for model_name in candidate_models:
+            try:
+                response = client.models.embed_content(
+                    model=model_name,
+                    contents=cleaned_text,
+                    # config=types.EmbedContentConfig(task_type="RETRIEVAL_DOCUMENT") # 필요시 주석 해제
+                )
+                
+                # 성공 시 바로 반환
+                if response.embeddings:
+                    return response.embeddings[0].values
+                    
+            except Exception as e:
+                print(f"⚠️ 모델 시도 실패 ({model_name}): {e}")
+                last_error = e
+                continue # 다음 모델 시도
+        
+        # 4. 모든 시도가 실패했을 경우
+        error_msg = f"🚨 AI 임베딩 생성 실패.\n원인: {str(last_error)}"
+        print(error_msg)
+        st.error(error_msg) # 화면에 에러를 띄워서 사용자가 바로 알 수 있게 함
         return []
-        
-    except Exception as e:
-        print(f"❌ 임베딩 실패: {e}")
+
+    except Exception as e_fatal:
+        st.error(f"시스템 치명적 오류: {str(e_fatal)}")
         return []
 
 def semantic_split_v143(text, target_size=1200, min_size=600):
