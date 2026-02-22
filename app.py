@@ -25,7 +25,10 @@ except FileNotFoundError:
 @st.cache_resource
 def init_system():
     genai.configure(api_key=GEMINI_API_KEY)
-    ai_model = genai.GenerativeModel('gemini-2.0-flash')
+    
+    # [핵심 수정] 새 API 키 정책에 맞춰 메인 모델을 최신형(2.5-flash)으로 교체!
+    ai_model = genai.GenerativeModel('gemini-2.5-flash')
+    
     sb_client = create_client(SUPABASE_URL, SUPABASE_KEY)
     return ai_model, DBManager(sb_client)
 
