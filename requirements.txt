@@ -8,3 +8,6 @@ pdf2image
 openpyxl
 plotly
 tenacity
+fastapi
+uvicorn[standard]
+python-multipart
