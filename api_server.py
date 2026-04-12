@@ -83,6 +83,15 @@ class ChatRequest(BaseModel):
     threshold: float = 0.5
 
 
+class KnowledgeRequest(BaseModel):
+    issue: str
+    solution: str
+    manufacturer: str
+    model_name: str = ""
+    measurement_item: str = ""
+    author: str = "익명"
+
+
 # ─────────────────────────────────────────────────────────────
 # 엔드포인트
 # ─────────────────────────────────────────────────────────────
@@ -128,6 +137,34 @@ async def chat(request: ChatRequest):
             yield f"\n\n[오류] 답변 생성 중 문제가 발생했습니다: {str(e)}"
 
     return StreamingResponse(generate(), media_type="text/plain; charset=utf-8")
+
+
+@app.post("/knowledge/add")
+async def add_knowledge(request: KnowledgeRequest):
+    """현장 경험 지식을 knowledge_base에 등록"""
+    if not request.issue.strip() or not request.solution.strip() or not request.manufacturer.strip():
+        raise HTTPException(status_code=400, detail="제목, 해결방법, 제조사는 필수 입력 항목입니다.")
+    try:
+        _, db = _get_clients()
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"서버 초기화 오류: {str(e)}")
+    try:
+        success, msg = db.promote_to_knowledge(
+            request.issue.strip(),
+            request.solution.strip(),
+            request.manufacturer.strip(),
+            request.model_name.strip(),
+            request.measurement_item.strip(),
+            request.author.strip() or "익명",
+        )
+        if success:
+            return {"status": "ok", "message": "지식이 성공적으로 등록되었습니다."}
+        else:
+            raise HTTPException(status_code=500, detail=f"등록 실패: {msg}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/chat/inventory")
