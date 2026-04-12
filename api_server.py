@@ -102,8 +102,8 @@ async def chat(request: ChatRequest):
 
     try:
         ai_model, db = _get_clients()
-    except RuntimeError as e:
-        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"서버 초기화 오류: {str(e)}")
 
     logger.info(f"[CHAT] 질문: {query[:80]}")
 
