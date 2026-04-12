@@ -14,8 +14,8 @@ import contextlib
 _st = types.ModuleType("streamlit")
 _st.cache_data = lambda **kwargs: (lambda f: f)
 _st.cache_resource = lambda **kwargs: (lambda f: f)
-_st.error = lambda msg, **kw: logging.error(f"[ST_ERROR] {msg}")
-_st.warning = lambda msg, **kw: logging.warning(f"[ST_WARN] {msg}")
+_st.error = lambda *args, **kw: logging.error(f"[ST_ERROR] {args}")
+_st.warning = lambda *args, **kw: logging.warning(f"[ST_WARN] {args}")
 _st.spinner = lambda msg="": contextlib.nullcontext()
 _st.session_state = {}
 _st.secrets = {}
