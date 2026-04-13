@@ -167,6 +167,61 @@ async def add_knowledge(request: KnowledgeRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/explore/manufacturers")
+async def get_manufacturers():
+    """knowledge_base에 등록된 제조사 목록"""
+    try:
+        _, db = _get_clients()
+        res = db.supabase.table("knowledge_base").select("manufacturer").execute()
+        items = sorted(set(r["manufacturer"] for r in res.data if r.get("manufacturer")))
+        return {"items": items}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/explore/measurement-items")
+async def get_measurement_items():
+    """knowledge_base에 등록된 측정항목 목록"""
+    try:
+        _, db = _get_clients()
+        res = db.supabase.table("knowledge_base").select("measurement_item").execute()
+        items = sorted(set(r["measurement_item"] for r in res.data if r.get("measurement_item")))
+        return {"items": items}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/explore/issues")
+async def get_issues(manufacturer: str = None, item: str = None):
+    """제조사 또는 측정항목으로 이슈 목록 조회"""
+    try:
+        _, db = _get_clients()
+        query = db.supabase.table("knowledge_base").select("id, issue, manufacturer, model_name, measurement_item")
+        if manufacturer:
+            query = query.eq("manufacturer", manufacturer)
+        if item:
+            query = query.eq("measurement_item", item)
+        res = query.execute()
+        return {"items": res.data}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/explore/solution/{issue_id}")
+async def get_solution(issue_id: str):
+    """특정 이슈의 해결방법 상세 조회"""
+    try:
+        _, db = _get_clients()
+        res = db.supabase.table("knowledge_base").select("*").eq("id", issue_id).execute()
+        if not res.data:
+            raise HTTPException(status_code=404, detail="이슈를 찾을 수 없습니다.")
+        return res.data[0]
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/chat/inventory")
 async def chat_inventory(request: ChatRequest):
     """소모품 재고 검색"""
