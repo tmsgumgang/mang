@@ -11,22 +11,9 @@ try:
 except ImportError:
     OCR_AVAILABLE = False
 
-# [V238] extract_triples_from_text 추가 임포트
-from logic_ai import extract_metadata_ai, get_embedding, clean_text_for_db, semantic_split_v143, extract_triples_from_text
+from logic_ai import extract_metadata_ai, get_embedding, clean_text_for_db, semantic_split_v143, extract_triples_from_text, REL_MAP
 
-# =========================================================================
-# [V246] 그래프 관계 매핑 (영어 DB값 -> 직관적인 한국어 UI)
-# =========================================================================
-REL_MAP = {
-    "causes": "원인이다 (A가 B를 유발)",
-    "part_of": "부품이다 (A는 B의 일부)",
-    "solved_by": "해결된다 (A는 B로 해결)",
-    "requires": "필요로 한다 (A는 B가 필요)",
-    "has_status": "상태다 (A는 B라는 증상/상태)",
-    "located_in": "위치한다 (A는 B에 있음)",
-    "related_to": "관련되어 있다 (A와 B 연관)",
-    "manufactured_by": "제품이다 (A는 B가 제조함)" # 👈 [NEW] 제조사 관계 추가
-}
+_CUSTOM_KEY = "__custom__"
 
 def show_admin_ui(ai_model, db):
     st.title("🔧 관리자 및 데이터 엔지니어링")
@@ -223,23 +210,39 @@ def show_admin_ui(ai_model, db):
                         c_mid2.markdown("<div style='text-align: center; margin-top: 10px;'>의</div>", unsafe_allow_html=True)
                         
                         curr_rel = rel['relation']
-                        # 관계 키가 없을 경우를 대비한 안전장치
-                        opts = relation_keys if curr_rel in relation_keys else relation_keys + [curr_rel]
-                        
-                        e_rel = c3.selectbox(
-                            "관계", 
-                            options=opts, 
-                            index=opts.index(curr_rel), 
-                            format_func=lambda x: REL_MAP.get(x, x),
+                        is_custom = curr_rel not in relation_keys
+                        sel_opts = relation_keys + [_CUSTOM_KEY]
+                        sel_index = len(sel_opts) - 1 if is_custom else relation_keys.index(curr_rel)
+
+                        def _fmt(x):
+                            if x == _CUSTOM_KEY: return "✏️ 직접 입력"
+                            return REL_MAP.get(x, x)
+
+                        sel_rel = c3.selectbox(
+                            "관계",
+                            options=sel_opts,
+                            index=sel_index,
+                            format_func=_fmt,
                             label_visibility="collapsed"
                         )
-                        
+
+                        if sel_rel == _CUSTOM_KEY:
+                            e_rel = c3.text_input(
+                                "관계 직접 입력",
+                                value=curr_rel if is_custom else "",
+                                placeholder="예: indicates",
+                                label_visibility="collapsed"
+                            )
+                        else:
+                            e_rel = sel_rel
+
                         bc1, bc2 = c4.columns(2)
                         save_btn = bc1.form_submit_button("💾")
                         del_btn = bc2.form_submit_button("🗑️")
 
                         if save_btn:
-                            if db.update_graph_triple(rid, e_src, e_rel, e_tgt):
+                            final_rel = e_rel.strip() if e_rel else curr_rel
+                            if db.update_graph_triple(rid, e_src, final_rel, e_tgt):
                                 st.success("저장됨"); time.sleep(0.5); st.rerun()
                         
                         if del_btn:

@@ -186,16 +186,8 @@ def perform_unified_search(ai_model, db, user_q, u_threshold):
                 graph_text = "💡 [Graph DB 인과관계 분석결과]\n"
                 for rel in unique_graphs[:7]: # 너무 길어지지 않게 7개 제한
                     rel_type = rel['relation']
-                    # 관계 이름을 한국어로 자연스럽게 매핑 (UI와 통일)
-                    rel_korean = {
-                        "causes": "원인이다",
-                        "part_of": "부품이다",
-                        "solved_by": "해결책이다",
-                        "requires": "필요로 한다",
-                        "has_status": "상태를 보인다",
-                        "located_in": "에 위치한다",
-                        "manufactured_by": "제품이다"
-                    }.get(rel_type, rel_type)
+                    raw_label = REL_MAP.get(rel_type, rel_type)
+                    rel_korean = raw_label.split(" (")[0]  # 괄호 설명 제거, 한국어 핵심만
                     
                     graph_text += f"- [{rel['source']}]는(은) [{rel['target']}]의 '{rel_korean}'.\n"
 

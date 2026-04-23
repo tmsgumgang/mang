@@ -4,6 +4,17 @@ import streamlit as st
 import google.generativeai as genai
 from prompts import PROMPTS
 
+REL_MAP = {
+    "causes":          "원인이다 (A가 B를 유발)",
+    "part_of":         "부품이다 (A는 B의 일부)",
+    "solved_by":       "해결된다 (A는 B로 해결)",
+    "requires":        "필요로 한다 (A는 B가 필요)",
+    "has_status":      "상태다 (A는 B라는 증상/상태)",
+    "located_in":      "위치한다 (A는 B에 있음)",
+    "related_to":      "관련되어 있다 (A와 B 연관)",
+    "manufactured_by": "제품이다 (A는 B가 제조함)",
+}
+
 @st.cache_data(show_spinner=False)
 def get_embedding(text):
     """
