@@ -104,14 +104,23 @@ def filter_candidates_logic(candidates, intent, penalties, strict_mode=True):
                             continue
 
         score = similarity
-        
+
         # 블랙리스트 감점
         score -= (penalties.get(u_key, 0) * 0.1)
         if d.get('is_verified'): score += 0.15
-        
+
         # 타겟 모델 일치 시 가산점
         if is_model_locked and (t_model in d_model or d_model in t_model):
-            score += 10.0 
+            score += 10.0
+
+        # 제조사 매칭 점수 — 제조사가 명시된 경우 일치/불일치 반영
+        is_mfr_specified = t_mfr not in generic_keywords and len(t_mfr) > 1
+        d_mfr_is_specific = d_mfr not in generic_keywords and d_mfr != ""
+        if is_mfr_specified and d_mfr_is_specific:
+            if t_mfr in d_mfr or d_mfr in t_mfr:
+                score += 5.0
+            else:
+                score -= 5.0
 
         # 키워드 가산점
         if is_specific_target and (raw_t_item.lower() in d_item_raw.lower() or raw_t_item.lower() in d_model_raw.lower()):
