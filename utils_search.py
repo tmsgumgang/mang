@@ -293,12 +293,24 @@ def perform_unified_search(ai_model, db, user_q, u_threshold):
 
     # 5. 필터링 및 리랭킹
     raw_candidates = filter_candidates_logic(all_docs, intent, penalties, strict_mode=True)
-    
+
     if not raw_candidates:
         fallback_candidates = filter_candidates_logic(all_docs, intent, penalties, strict_mode=False)
         raw_candidates = [d for d in fallback_candidates if d['final_score'] > 0.65]
 
+    # 제조사 지정 시: 일치 문서가 존재하면 불일치 문서를 결과에서 제거
+    t_mfr_final = normalize_model_name(intent.get('target_mfr') or '미지정')
+    generic_kws = ['공통', '미지정', '알수없음', 'none', 'general', '기타']
+    if t_mfr_final not in generic_kws and len(t_mfr_final) > 1:
+        mfr_matched = [
+            d for d in raw_candidates
+            if t_mfr_final in normalize_model_name(d.get('manufacturer') or '')
+            or normalize_model_name(d.get('manufacturer') or '') in t_mfr_final
+        ]
+        if mfr_matched:
+            raw_candidates = mfr_matched
+
     # 최종 순위 결정 (LLM Rerank)
     final_results = quick_rerank_ai(ai_model, user_q, raw_candidates, intent)
-    
+
     return final_results, intent, q_vec
