@@ -236,9 +236,8 @@ def show_admin_ui(ai_model, db):
                         else:
                             e_rel = sel_rel
 
-                        bc1, bc2 = c4.columns(2)
-                        save_btn = bc1.form_submit_button("💾")
-                        del_btn = bc2.form_submit_button("🗑️")
+                        save_btn = c4.form_submit_button("💾", use_container_width=True)
+                        del_btn = c4.form_submit_button("🗑️", use_container_width=True)
 
                         if save_btn:
                             final_rel = e_rel.strip() if e_rel else curr_rel

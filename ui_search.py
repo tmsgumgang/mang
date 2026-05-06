@@ -239,9 +239,8 @@ def show_search_ui(ai_model, db):
                                                    format_func=lambda x: REL_MAP.get(x, x), label_visibility="collapsed")
                                 
                                 # 버튼
-                                bc1, bc2 = c4.columns(2)
-                                save = bc1.form_submit_button("💾")
-                                delete = bc2.form_submit_button("🗑️")
+                                save = c4.form_submit_button("💾", use_container_width=True)
+                                delete = c4.form_submit_button("🗑️", use_container_width=True)
 
                                 if save:
                                     if db.update_graph_triple(rid, e_src, e_rel, e_tgt):
