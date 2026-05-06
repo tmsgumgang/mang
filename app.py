@@ -9,6 +9,11 @@ import ui_community
 import ui_inventory
 
 # --------------------------------------------------------------------------
+# [UI] set_page_config은 반드시 가장 먼저 호출해야 함
+# --------------------------------------------------------------------------
+st.set_page_config(page_title="금강수계 AI V161", layout="wide", initial_sidebar_state="collapsed")
+
+# --------------------------------------------------------------------------
 # [설정] 환경 변수 로드
 # --------------------------------------------------------------------------
 try:
@@ -25,19 +30,11 @@ except FileNotFoundError:
 @st.cache_resource
 def init_system():
     genai.configure(api_key=GEMINI_API_KEY)
-    
-    # [핵심 수정] 새 API 키 정책에 맞춰 메인 모델을 최신형(2.5-flash)으로 교체!
     ai_model = genai.GenerativeModel('gemini-2.5-flash')
-    
     sb_client = create_client(SUPABASE_URL, SUPABASE_KEY)
     return ai_model, DBManager(sb_client)
 
 ai_model, db = init_system()
-
-# --------------------------------------------------------------------------
-# [UI] 공통 레이아웃 설정
-# --------------------------------------------------------------------------
-st.set_page_config(page_title="금강수계 AI V161", layout="wide", initial_sidebar_state="collapsed")
 st.markdown("""<style>
     .fixed-header { position: fixed; top: 0; left: 0; width: 100%; background-color: #004a99; color: white; padding: 10px 0; z-index: 999; text-align: center; font-weight: bold; }
     .main .block-container { padding-top: 5.5rem !important; }
